@@ -4,25 +4,16 @@
 set -e
 
 # --- Configuration ---
-DEVICE_WAIT=4   # seconds to wait for USB to populate, for cm4 flashing
-TEMPLATE_FILE="firstrun.sh.template"  # these template files are the device setup scripts to be written/modified
+TEMPLATE_FILE="firstrun.sh.template"
 ROCK3A_TEMPLATE="rock3a-provision.sh.template"
 TEMP_SCRIPT_FILE=$(mktemp)
-
-# Armbian imgage source, does need to be updated from time to time as it ages out
+# Full mirror, fast connection
 ARMBIAN_IMAGE_URL="https://fi.mirror.armbian.de/dl/rock-3a/archive/Armbian_26.2.1_Rock-3a_trixie_vendor_6.1.115_minimal.img.xz"
-ARMBIAN_IMAGE_FILENAME="Armbian_26.2.1_Rock-3a_trixie_vendor_6.1.115_minimal.img"
+ARMBIAN_IMAGE_FILENAME="Armbian_25.11.1_Rock-3a_trixie_vendor_6.1.115_minimal.img"
 ARMBIAN_IMAGE=""  # Will be set by acquire_armbian_image function
-CONFIG_DIR=".mesh-configs"  # configs are stored locally in this subdirectory
-
-# RPI OS image URL. rpi-imager will download and cache this.
+CONFIG_DIR=".mesh-configs"
+# Hardcode the OS image URL. rpi-imager will download and cache this.
 PI_OS_IMAGE_URL="https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2025-10-02/2025-10-01-raspios-trixie-arm64-lite.img.xz"
-
-if ! command -v ipcalc &> /dev/null; then
-	echo "ERROR: 'ipcalc' command not found. Needed for subnet math."
-    echo "Please install it (e.g., 'sudo apt install ipcalc')."
-    exit 1
-fi
 
 # --- Helper Functions ---
 # Function to validate regulatory domain
@@ -50,7 +41,6 @@ validate_regulatory_domain() {
     return 1
 }
 
-# This pair of functions are for setting "eu" as the reg domain for only halow config files
 uses_eu_halow_region() {
     local domain
     domain=$(echo "$1" | tr '[:lower:]' '[:upper:]')
@@ -81,7 +71,7 @@ halow_regulatory_domain_for_wifi_domain() {
     fi
 }
 
-# Function to calculate network capacity (number of nodes per CIDR range)
+# Function to calculate network capacity
 calculate_capacity() {
         local cidr=$1
         local max_euds=$2
@@ -111,6 +101,8 @@ calculate_capacity() {
         local RESERVED_SERVICES=5
 
         # Calculate based on max EUDs
+        # We need to reserve enough for reasonable number of nodes
+        # Start with assumption and iterate
         local AVAILABLE_FOR_NODES=$((TOTAL_USABLE - RESERVED_SERVICES))
 
         if [ "$max_euds" -gt 0 ]; then
@@ -200,7 +192,7 @@ ask_lan_cidr() {
                         done
                 fi
 
-                # Show capacity calculation if EUDs are configured (which is typical)
+                # Show capacity calculation if EUDs are configured
                 if [ "$max_euds" -gt 0 ]; then
                         echo ""
                         echo "=== Network Capacity Analysis ==="
@@ -214,7 +206,7 @@ ask_lan_cidr() {
                         echo "=================================="
                         echo ""
 
-                        if [ "$NODES" -lt 5 ]; then
+                        if [ "$NODES" -lt 3 ]; then
                                echo "WARNING: This configuration only supports $NODES mesh nodes."
                                echo "Consider using a larger network or reducing max EUDs per node."
                         fi
@@ -311,11 +303,10 @@ ask_questions() {
 
         # If Wireless or Auto, ask for LAN AP configuration
         if [ "$EUD_CONNECTION" = "wireless" ] || [ "$EUD_CONNECTION" = "auto" ]; then
-        		echo "EUD wifi network name.  This name will have the last 4 of the ethernet MAC address appended to it for node identification"
-                read -p "Enter EUD access point SSID name: " LAN_AP_SSID
+                read -p "Enter LAN AP SSID Name: " LAN_AP_SSID
 
                 while true; do
-                        read -p "Enter EUD AP WPA2 Key (8-63 chars) [or press Enter to generate]: " LAN_AP_KEY
+                        read -p "Enter LAN AP WPA2 Key (8-63 chars) [or press Enter to generate]: " LAN_AP_KEY
                         echo
                         if [ -z "$LAN_AP_KEY" ]; then
                                LAN_AP_KEY=$(openssl rand -base64 45  | tr -d '\n')
@@ -346,10 +337,10 @@ ask_questions() {
         if [ "$INSTALL_MUMBLE" = "y" ] || [ "$INSTALL_MUMBLE" = "Y" ]; then INSTALL_MUMBLE="y"; else INSTALL_MUMBLE="n"; fi
 
         # Mesh Configuration
-        read -p "Enter global MESH SSID Name: " MESH_SSID
+        read -p "Enter MESH SSID Name: " MESH_SSID
 
         while true; do
-                read -p "Enter MESH SAE Key (WPA3 password, 8-63 chars) [or press Enter to generate, which is recommended]: " MESH_SAE_KEY
+                read -p "Enter MESH SAE Key (WPA3 password, 8-63 chars) [or press Enter to generate]: " MESH_SAE_KEY
                 echo
                 if [ -z "$MESH_SAE_KEY" ]; then
                         MESH_SAE_KEY=$(openssl rand -base64 45  | tr -d '\n')
@@ -383,7 +374,7 @@ ask_questions() {
             echo "Please enter a valid 2-letter ISO country code (e.g., US, GB, DE, FR, JP)"
             echo "Common codes: US (United States), GB (UK), DE (Germany), FR (France), JP (Japan)"
             echo "              CA (Canada), AU (Australia), NZ (New Zealand), CN (China)"
-			echo "NOTE: EU is not a country code, use your actual country"
+		echo "NOTE: EU is not a country code, use your actual country"
         fi
     done
 
@@ -399,7 +390,7 @@ ask_questions() {
 
         # Network administrator password
         echo ""
-        echo "The network administrator password is used to access the mesh admin interface to modify a working mesh."
+        echo "The network administrator password is used to access the mesh admin interface."
         read -p "Enter admin password [or press Enter to generate 10-char random]: " ADMIN_PW
         echo
         if [ -z "$ADMIN_PW" ]; then
@@ -424,7 +415,7 @@ ask_questions() {
         # Ask for max EUDs before CIDR selection
         if [ "$EUD_CONNECTION" = "wireless" ] || [ "$EUD_CONNECTION" = "auto" ]; then
                 while true; do
-                        read -p "Maximum EUDs per radio (via wifi) (1-20): " MAX_EUDS_PER_NODE
+                        read -p "Maximum EUDs per node's AP (1-20): " MAX_EUDS_PER_NODE
                         if [[ "$MAX_EUDS_PER_NODE" =~ ^[0-9]+$ ]] && [ "$MAX_EUDS_PER_NODE" -ge 1 ] && [ "$MAX_EUDS_PER_NODE" -le 20 ]; then
                                break
                         else
@@ -774,16 +765,24 @@ select_target_device() {
                 read -p "Press Enter to run 'sudo rpiboot' and mount the eMMC..."
                 echo
                 sudo rpiboot
-                echo "'rpiboot' finished. Waiting $DEVICE_WAIT seconds for device to settle..."
-                sleep $DEVICE_WAIT
-
+                echo "'rpiboot' finished. Waiting up to 60s for device to appear..."
+                local NEW_DISK=""
                 local DISKS_AFTER
-                DISKS_AFTER=$(lsblk -d -n -o NAME)
-                local NEW_DISK
-                NEW_DISK=$(comm -13 <(echo "$DISKS_BEFORE" | sort) <(echo "$DISKS_AFTER" | sort))
+                for i in $(seq 1 60); do
+                        sleep 1
+                        DISKS_AFTER=$(lsblk -d -n -o NAME)
+                        NEW_DISK=$(comm -13 <(echo "$DISKS_BEFORE" | sort) <(echo "$DISKS_AFTER" | sort))
+                        if [ -n "$NEW_DISK" ]; then
+                                echo "Device appeared after ${i}s."
+                                sleep 2
+                                break
+                        fi
+                        printf "."
+                done
+                echo
 
                 if [ -z "$NEW_DISK" ]; then
-                        echo "ERROR: No new disk detected after rpiboot."
+                        echo "ERROR: No new disk detected after 60s."
                         echo "Please check connections and try again."
                         exit 1
                 fi
@@ -877,27 +876,11 @@ flash_r3a() {
         LOOP_DEV=$(sudo losetup -fP --show "$TEMP_IMAGE")
         echo "Mounted image as: $LOOP_DEV"
 
-        # Find the ext4 rootfs partition — auto-detects single or split layout
-        local ROOT_PART=""
-        for part in "${LOOP_DEV}p"*; do
-                local fstype
-                fstype=$(sudo blkid -s TYPE -o value "$part" 2>/dev/null)
-                if [ "$fstype" = "ext4" ]; then
-                        ROOT_PART="$part"
-                        break
-                fi
-        done
-        if [ -z "$ROOT_PART" ]; then
-                echo "ERROR: No ext4 partition found in $TEMP_IMAGE"
-                sudo losetup -d "$LOOP_DEV"
-                rm -f "$TEMP_IMAGE"
-                exit 1
-        fi
-        echo "Found rootfs partition: $ROOT_PART"
-
+        # Mount root partition (partition 2 on Armbian - partition 1 is /boot)
         local ROOT_MOUNT="/tmp/armbian-root"
         sudo mkdir -p "$ROOT_MOUNT"
-        sudo mount "$ROOT_PART" "$ROOT_MOUNT"
+        echo "Mounting ${LOOP_DEV}p2 to $ROOT_MOUNT"
+        sudo mount "${LOOP_DEV}p2" "$ROOT_MOUNT"
 
         # Write mesh configuration to /etc/mesh.conf
         echo "Writing /etc/mesh.conf..."
@@ -908,6 +891,8 @@ hardware_model=${HARDWARE_MODEL}
 eud=${EUD_CONNECTION}
 lan_ap_ssid=${LAN_AP_SSID}
 lan_ap_key=${LAN_AP_KEY}
+lan_ap_channel=100
+lan_ap_bw=80
 max_euds_per_node=${MAX_EUDS_PER_NODE}
 mtx=${INSTALL_MEDIAMTX}
 mumble=${INSTALL_MUMBLE}
@@ -1084,7 +1069,7 @@ flash_rpi() {
             -e "s|__HALOW_REGULATORY_DOMAIN__|${HALOW_REGULATORY_DOMAIN}|g" \
             -e "s|__ADMIN_PW__|${ADMIN_PW}|g" \
             -e "s|__AUTO_UPDATE__|${AUTO_UPDATE}|g" \
-            "$TEMPLATE_FILE" | tr -d '\r' > "$TEMP_SCRIPT_FILE"
+            "$TEMPLATE_FILE" > "$TEMP_SCRIPT_FILE"
 
         sudo rpi-imager --cli "$PI_OS_IMAGE_URL" "$target" --first-run-script "$TEMP_SCRIPT_FILE"
 

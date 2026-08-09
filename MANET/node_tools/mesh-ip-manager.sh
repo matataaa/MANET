@@ -48,20 +48,6 @@ if [ -f /etc/mesh.conf ]; then
 fi
 EUD_MODE=${EUD_MODE:-"none"}
 
-# Calculate service VIPs from ipv4_network — same formula as election scripts
-# MTX VIP = HostMin+1, Mumble VIP = HostMin+2
-MTX_VIP=""
-MUMBLE_VIP=""
-_calc_service_vips() {
-    local calc host_min
-    calc=$(manet-ipcalc.sh "$IPV4_NETWORK" 2>/dev/null) || return 0
-    host_min=$(echo "$calc" | awk '/HostMin/ {print $2}')
-    [ -n "$host_min" ] || return 0
-    MTX_VIP="${host_min%.*}.$((${host_min##*.} + 1))"
-    MUMBLE_VIP="${host_min%.*}.$((${host_min##*.} + 2))"
-}
-_calc_service_vips
-
 # If any EUD mode is active, we need at least 1 EUD IP
 if [[ "$EUD_MODE" != "none" && "$MAX_EUDS" -lt 1 ]]; then
 #    log "EUD mode is '$EUD_MODE' but max_euds=$MAX_EUDS. Forcing max_euds=1."
@@ -121,7 +107,7 @@ int_to_ip() {
 # Calculate chunk IPs given a chunk number
 get_chunk_ips() {
     local chunk_num=$1
-    local CALC_OUTPUT=$(manet-ipcalc.sh "$IPV4_NETWORK" 2>/dev/null)
+    local CALC_OUTPUT=$(ipcalc "$IPV4_NETWORK" 2>/dev/null)
 
     if [ -z "$CALC_OUTPUT" ]; then
         return 1
@@ -155,7 +141,7 @@ ip_in_cidr() {
         return 1
     fi
 
-    local CALC_OUTPUT=$(manet-ipcalc.sh "$cidr" 2>/dev/null)
+    local CALC_OUTPUT=$(ipcalc "$cidr" 2>/dev/null)
     if [ -z "$CALC_OUTPUT" ]; then
         return 1
     fi
@@ -186,7 +172,7 @@ is_service_reserved_ip() {
     local ip="$1"
     local CALC_OUTPUT HOST_MIN MIN_INT IP_INT offset
 
-    CALC_OUTPUT=$(manet-ipcalc.sh "$IPV4_NETWORK" 2>/dev/null)
+    CALC_OUTPUT=$(ipcalc "$IPV4_NETWORK" 2>/dev/null)
     [ -n "$CALC_OUTPUT" ] || return 1
 
     HOST_MIN=$(echo "$CALC_OUTPUT" | awk '/HostMin/ {print $2}')
@@ -200,7 +186,7 @@ is_service_reserved_ip() {
 
 # Get a random available chunk
 get_random_chunk() {
-    local CALC_OUTPUT=$(manet-ipcalc.sh "$IPV4_NETWORK" 2>/dev/null)
+    local CALC_OUTPUT=$(ipcalc "$IPV4_NETWORK" 2>/dev/null)
     
     if [ -z "$CALC_OUTPUT" ]; then
         log "Error: ipcalc failed for CIDR: $IPV4_NETWORK"
@@ -387,10 +373,6 @@ configure_dnsmasq() {
     local dhcp_end=$4
     local old_gateway=""
     local old_primary=""
-    local _MUMBLE_VIP_LINE=""
-    local _MTX_VIP_LINE=""
-    [ -n "$MUMBLE_VIP" ] && _MUMBLE_VIP_LINE="address=/mumble.local/$MUMBLE_VIP"
-    [ -n "$MTX_VIP" ]    && _MTX_VIP_LINE="address=/mtx.local/$MTX_VIP"
 
     if [ -f /etc/dnsmasq.d/mesh-eud.conf ]; then
         old_gateway=$(awk -F, '$1 == "dhcp-option=3" {print $2; exit}' /etc/dnsmasq.d/mesh-eud.conf)
@@ -402,9 +384,6 @@ configure_dnsmasq() {
     fi
 
     log "Configuring dnsmasq: pool=$dhcp_start-$dhcp_end, gateway=$br0_secondary"
-    # Pool/gateway changes invalidate old EUD leases. Keeping them can make the
-    # dashboard or downstream clients try stale EUD IPs such as old ATAK peers.
-    rm -f /var/lib/misc/dnsmasq.leases /run/dnsmasq.leases /tmp/dnsmasq.leases 2>/dev/null || true
 
     cat > /etc/dnsmasq.d/mesh-eud.conf <<- EOF
 # Listen only on br0 bridge
@@ -417,33 +396,34 @@ dhcp-range=$dhcp_start,$dhcp_end,4m
 # Gateway is this node's br0 secondary address
 dhcp-option=3,$br0_secondary
 
-# DNS configuration
+# DNS configuration — upstream servers come from the systemd-resolved
+# uplink file (auto-updates on DHCP lease changes) plus upstream-dns.conf
 dhcp-option=6,$br0_secondary
 domain=mesh.local
 local=/mesh.local/
+resolv-file=/run/systemd/resolve/resolv.conf
 
 # manet.local and perf.local resolve to this node's IP so EUD clients can reach the admin panels
 address=/manet.local/$br0_secondary
 address=/perf.local/$br0_secondary
 
-# Service VIPs — stable across the mesh regardless of which node is leader
-${_MUMBLE_VIP_LINE}
-${_MTX_VIP_LINE}
-
-# Upstream DNS for EUD internet access through Ethernet
-server=1.1.1.1
-server=8.8.8.8
-
 # Log for debugging
 log-dhcp
 EOF
 
-    # Ensure dnsmasq is unmasked, enabled, and running.
-    # unmask triggers a full systemd daemon-reload even when nothing is
-    # masked — only call it when the unit is actually masked.
-    if [ "$(systemctl is-enabled dnsmasq.service 2>/dev/null)" = "masked" ]; then
-        systemctl unmask dnsmasq.service 2>/dev/null
-    fi
+    # Public resolvers as fallback in case the DHCP-provided servers
+    # (from resolv-file) are unreachable or the uplink file is missing.
+    cat > /etc/dnsmasq.d/upstream-dns.conf <<- DNSEOF
+server=1.1.1.1
+server=8.8.8.8
+DNSEOF
+
+    # Publish perf.local/manet.local plus dynamic service aliases via mDNS.
+    # Avahi is restricted to the AP-facing interface and reflector remains off.
+    /usr/local/bin/mesh-mdns-update.sh || true
+
+    # Ensure dnsmasq is unmasked, enabled, and running
+    systemctl unmask dnsmasq.service 2>/dev/null
 #    systemctl enable dnsmasq.service 2>/dev/null
 
     if systemctl is-active --quiet dnsmasq.service; then
@@ -669,8 +649,6 @@ case $IPV4_STATE in
                 elif grep -q "^no-resolv" "$DNSMASQ_CONF" 2>/dev/null; then
                     NEEDS_DNSMASQ_UPDATE=true
                 elif ! grep -q "^server=" "$DNSMASQ_CONF" 2>/dev/null; then
-                    NEEDS_DNSMASQ_UPDATE=true
-                elif ! grep -q "^address=/mumble.local/" "$DNSMASQ_CONF" 2>/dev/null; then
                     NEEDS_DNSMASQ_UPDATE=true
                 fi
 
