@@ -378,6 +378,14 @@ ask_questions() {
         fi
     done
 
+    read -p "Enter node hostname [or press Enter for auto]: " NODE_HOSTNAME
+    NODE_HOSTNAME=${NODE_HOSTNAME:-}
+    if [ -n "$NODE_HOSTNAME" ]; then
+        echo "Hostname will be: ${NODE_HOSTNAME}-${MESH_SSID}-<mac>"
+    else
+        echo "Hostname will be: ${MESH_SSID}-<mac>"
+    fi
+
         echo "The device will have a user called radio, for ssh access."
         read -p "Enter a password for the radio user [or press Enter to default to 'radio']: " RADIO_PW
         echo
@@ -471,6 +479,7 @@ AUTO_CHANNEL="$AUTO_CHANNEL"
 RADIO_PW="$RADIO_PW"
 ADMIN_PW="$ADMIN_PW"
 AUTO_UPDATE="$AUTO_UPDATE"
+NODE_HOSTNAME="$NODE_HOSTNAME"
 EOF
 
                 echo "Configuration saved to $CONFIG_FILE"
@@ -505,6 +514,7 @@ load_config() {
         echo "  User password: $RADIO_PW"
         echo "  Admin password: ${ADMIN_PW:-(not set)}"
         echo "  Auto Update: ${AUTO_UPDATE:-n}"
+        echo "  Node Hostname: ${NODE_HOSTNAME:-(auto)}"
         echo "----------------------------"
 }
 
@@ -973,6 +983,7 @@ EOF
         sed -i "s|__HALOW_REGULATORY_DOMAIN__|${HALOW_REGULATORY_DOMAIN}|g" "$TEMP_PROVISION_SCRIPT"
         sed -i "s|__ADMIN_PW__|${ADMIN_PW}|g" "$TEMP_PROVISION_SCRIPT"
         sed -i "s|__AUTO_UPDATE__|${AUTO_UPDATE}|g" "$TEMP_PROVISION_SCRIPT"
+        sed -i "s|__NODE_HOSTNAME__|${NODE_HOSTNAME}|g" "$TEMP_PROVISION_SCRIPT"
 
         echo "Installing provisioning script to /usr/local/bin/provision-mesh.sh..."
         sudo cp "$TEMP_PROVISION_SCRIPT" "$ROOT_MOUNT/usr/local/bin/provision-mesh.sh"
@@ -1069,6 +1080,7 @@ flash_rpi() {
             -e "s|__HALOW_REGULATORY_DOMAIN__|${HALOW_REGULATORY_DOMAIN}|g" \
             -e "s|__ADMIN_PW__|${ADMIN_PW}|g" \
             -e "s|__AUTO_UPDATE__|${AUTO_UPDATE}|g" \
+            -e "s|__NODE_HOSTNAME__|${NODE_HOSTNAME}|g" \
             "$TEMPLATE_FILE" > "$TEMP_SCRIPT_FILE"
 
         sudo rpi-imager --cli "$PI_OS_IMAGE_URL" "$target" --first-run-script "$TEMP_SCRIPT_FILE"

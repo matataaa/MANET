@@ -199,6 +199,7 @@ KbdInteractiveAuthentication no
 PubkeyAuthentication yes
 UsePAM yes
 PermitRootLogin prohibit-password
+UseDNS no
 EOF
 systemctl enable ssh 2>/dev/null || true
 systemctl restart ssh 2>/dev/null || true
@@ -826,7 +827,7 @@ cat <<-EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf
 ctrl_interface=/var/run/wpa_supplicant
 country=$CFG80211_REGDOM
 update_config=1
-sae_pwe=1
+sae_pwe=2
 ap_scan=2
 network={
     ssid="$MESH_NAME"
@@ -849,7 +850,7 @@ MACAddress=$(ip a | grep -A1 "$(phys_iface $WLAN)" | awk '/ether/ {print $2}')
 
 [Link]
 RequiredForOnline=no
-MTUBytes=1532
+MTUBytes=1432
 EOF
 
     echo " > Enabling $WLAN for mesh use ..."
@@ -1057,7 +1058,7 @@ MACAddress=$(ip a | grep -A1 "$(phys_iface $WLAN)" | awk '/ether/ {print $2}')
 
 [Link]
 RequiredForOnline=no
-MTUBytes=1532
+MTUBytes=1432
 EOF
 
     rm -f /etc/wpa_supplicant/*${WLAN}* 2>/dev/null
@@ -1066,7 +1067,7 @@ EOF
 cat << EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-s1g.conf
 country="US"
 ctrl_interface=/var/run/wpa_supplicant_s1g
-sae_pwe=1
+sae_pwe=2
 max_peer_links=10
 mesh_fwding=0
 network={
@@ -1100,7 +1101,7 @@ EOF
 cat << EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-s1g.conf
 country="$HALOW_REGULATORY_DOMAIN"
 ctrl_interface=/var/run/wpa_supplicant_s1g
-sae_pwe=1
+sae_pwe=2
 max_peer_links=10
 mesh_fwding=0
 network={
@@ -1534,7 +1535,14 @@ systemctl enable mesh-hosts-update.timer
 HOST_MAC=$(ip a | grep -A1 $(networkctl | grep -v bat | awk '/ether/ {print $2}' | head -1) \
    | awk '/ether/ {print $2}' | cut -d':' -f 5-6 | sed 's/://g')
 
-set_mesh_hostname "mesh-${HOST_MAC}"
+NODE_HOSTNAME=$(grep '^node_hostname=' /etc/mesh.conf 2>/dev/null | cut -d= -f2)
+MESH_NAME=$(grep '^mesh_ssid=' /etc/mesh.conf 2>/dev/null | cut -d= -f2)
+MESH_NAME="${MESH_NAME:-mesh}"
+if [ -n "$NODE_HOSTNAME" ]; then
+    set_mesh_hostname "${NODE_HOSTNAME}-${MESH_NAME}-${HOST_MAC}"
+else
+    set_mesh_hostname "${MESH_NAME}-${HOST_MAC}"
+fi
 
 # ============================================================================
 # === Web Status / config ===
