@@ -1,0 +1,31 @@
+.mesh-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+.mesh-wide { grid-column: 1 / -1; }
+.mesh-kv { padding: 10px 14px; }
+.mesh-kv-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 0; border-bottom: 1px solid var(--border2);
+}
+.mesh-kv-row:last-child { border-bottom: none; }
+.mesh-kv-label { font-size: 11px; color: var(--muted); }
+.mesh-kv-value { font-size: 12px; font-weight: 700; }
+.mesh-table { width: 100%; border-collapse: collapse; }
+.mesh-table th {
+  font-size: 10px; color: var(--muted); text-align: left;
+  padding: 8px 12px; letter-spacing: .4px; text-transform: uppercase;
+  border-bottom: 1px solid var(--border2);
+}
+.mesh-table td {
+  font-size: 12px; padding: 6px 12px;
+  border-bottom: 1px solid var(--border2);
+}
+.mesh-table .mono { font-family: monospace; font-size: 11px; }
+.mesh-empty {
+  padding: 16px; color: var(--muted); font-size: 12px; text-align: center;
+}
+
+@media (max-width: 768px) {
+  .mesh-grid { grid-template-columns: 1fr; }
+}

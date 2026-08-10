@@ -1,9 +1,11 @@
 <?xml version="1.0" standalone='no'?>
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <service-group>
-  <name>MANET Perf Dashboard (%h)</name>
+  <name>MANET Perf Dashboard</name>
+  <host-name>perf.local</host-name>
   <service>
     <type>_http._tcp</type>
-    <port>8081</port>
+    <port>80</port>
+    <txt-record>path=/perf</txt-record>
   </service>
 </service-group>

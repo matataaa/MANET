@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MANET Node</title>
+<link rel="stylesheet" href="/css/common.css">
+<link rel="stylesheet" href="/css/dashboard.css">
+<link rel="stylesheet" href="/css/nodes.css">
+<link rel="stylesheet" href="/css/config.css">
+<link rel="stylesheet" href="/css/voice.css">
+<link rel="stylesheet" href="/css/perf.css">
+<link rel="stylesheet" href="/css/services.css">
+<link rel="stylesheet" href="/css/mesh.css">
+<link rel="stylesheet" href="/css/terminal.css">
+<link rel="stylesheet" href="/vendor/xterm.css">
+</head>
+<body>
+<div id="app">
+  <header id="header">
+    <div class="hdr-brand">
+      <div class="fer-lockup" title="Frost Technologies" aria-label="Frost Technologies">
+        <img class="fer-logo-img" src="/assets/frost-logo.png" alt="Frost Technologies">
+      </div>
+      <div class="hdr-slash"></div>
+      <div class="hdr-logo">MANET<span>//</span>CTRL</div>
+    </div>
+    <nav id="tab-nav">
+      <a href="#dashboard" class="tab active" data-tab="dashboard">Dashboard</a>
+      <a href="#nodes" class="tab" data-tab="nodes">Nodes</a>
+      <a href="#config" class="tab" data-tab="config">Config</a>
+      <a href="#voice" class="tab" data-tab="voice">Voice</a>
+      <a href="#perf" class="tab" data-tab="perf">Perf</a>
+      <a href="#services" class="tab" data-tab="services">Services</a>
+      <a href="#mesh" class="tab" data-tab="mesh">Mesh</a>
+      <a href="#terminal" class="tab" data-tab="terminal">Terminal</a>
+    </nav>
+    <div id="hdr-right">
+      <div id="hdr-health" class="health-loading">
+        <div id="hdr-health-dot"></div>
+        <span id="hdr-health-label">--</span>
+      </div>
+      <div class="meta" id="hdr-hostname">--</div>
+      <div class="meta" id="hdr-ip">--</div>
+      <div class="meta" id="hdr-nodes">--</div>
+      <div class="meta" id="hdr-time">--</div>
+      <button id="theme-toggle" class="theme-toggle" type="button">Dark</button>
+    </div>
+  </header>
+  <main id="content">
+    <div id="boot-loader" style="display:flex;align-items:center;justify-content:center;height:60vh;flex-direction:column;gap:14px">
+      <img src="/assets/frost-logo.png" alt="" style="height:48px;filter:brightness(0) invert(.5)">
+      <div style="color:#6b7280;font-size:13px;font-weight:700">Connecting to node...</div>
+    </div>
+    <section id="tab-dashboard" class="tab-panel active"></section>
+    <section id="tab-nodes" class="tab-panel"></section>
+    <section id="tab-config" class="tab-panel"></section>
+    <section id="tab-voice" class="tab-panel"></section>
+    <section id="tab-perf" class="tab-panel"></section>
+    <section id="tab-services" class="tab-panel"></section>
+    <section id="tab-mesh" class="tab-panel"></section>
+    <section id="tab-terminal" class="tab-panel"></section>
+  </main>
+</div>
+<script src="/vendor/d3.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/app.js"></script>
+<script src="/js/topology.js"></script>
+<script src="/js/dashboard.js"></script>
+<script src="/js/nodes.js"></script>
+<script src="/js/config.js"></script>
+<script src="/js/voice.js"></script>
+<script src="/js/perf.js"></script>
+<script src="/js/services.js"></script>
+<script src="/js/mesh.js"></script>
+<script src="/vendor/xterm.min.js"></script>
+<script src="/vendor/xterm-addon-fit.min.js"></script>
+<script src="/js/terminal.js"></script>
+</body>
+</html>

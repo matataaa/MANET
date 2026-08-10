@@ -1,0 +1,65 @@
+.perf-tabs {
+  display: flex; gap: 2px; margin-bottom: 16px;
+}
+.perf-tab {
+  padding: 8px 14px; border-radius: 8px;
+  font-size: 12px; font-weight: 800;
+  color: var(--muted); cursor: pointer; border: none;
+  background: transparent; font-family: var(--font);
+}
+.perf-tab:hover { background: rgba(0,146,143,.08); color: var(--text); }
+.perf-tab.active {
+  background: rgba(0,146,143,.14); color: var(--text);
+  border: 1px solid rgba(0,146,143,.30);
+}
+.perf-section { display: none; }
+.perf-section.active { display: block; }
+
+/* Measurement controls */
+.measure-form {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  padding: 14px;
+}
+.measure-form label {
+  font-size: 11px; color: var(--muted); display: block; margin-bottom: 4px;
+}
+.measure-form input, .measure-form select {
+  width: 100%; padding: 6px 8px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface); color: var(--text);
+  font-family: var(--font); font-size: 12px;
+}
+.measure-form input[type="checkbox"] {
+  width: auto; accent-color: var(--teal);
+}
+.measure-form .checkbox-row {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 6px;
+}
+.measure-form input:focus, .measure-form select:focus {
+  outline: none; border-color: var(--accent2);
+}
+.measure-actions { padding: 0 14px 14px; }
+.measure-results {
+  padding: 14px; border-top: 1px solid var(--border2);
+  font-size: 12px;
+}
+.measure-results pre {
+  background: var(--panel); border: 1px solid var(--border2);
+  border-radius: 8px; padding: 10px; font-size: 11px;
+  overflow-x: auto; max-height: 300px;
+}
+
+/* Radio control */
+.radio-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px;
+  padding: 14px;
+}
+.radio-iface-card {
+  border: 1px solid var(--border2); border-radius: 12px;
+  padding: 12px; background: var(--panel);
+}
+.radio-iface-name { font-size: 13px; font-weight: 800; margin-bottom: 8px; }
+.radio-iface-detail { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+
+@media (max-width: 768px) {
+  .measure-form { grid-template-columns: 1fr; }
+}

@@ -1,0 +1,89 @@
+.svc-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+.svc-category-title {
+  grid-column: 1 / -1;
+  font-size: 11px; font-weight: 800; color: var(--muted);
+  letter-spacing: .4px; text-transform: uppercase;
+  padding: 8px 0 2px;
+}
+.svc-category-title:first-child { padding-top: 0; }
+.svc-card {
+  background: var(--surface); border: 1px solid var(--border2);
+  border-radius: 12px; padding: 14px;
+  display: flex; flex-direction: column; gap: 8px;
+  transition: border-color .15s;
+}
+.svc-card:hover { border-color: var(--border); }
+.svc-card.not-installed { opacity: .45; }
+.svc-card-head {
+  display: flex; align-items: center; gap: 8px;
+}
+.svc-dot {
+  width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+}
+.svc-dot-running  { background: var(--good); box-shadow: 0 0 6px rgba(34,197,94,.4); }
+.svc-dot-stopped  { background: var(--muted); }
+.svc-dot-failed   { background: var(--bad); box-shadow: 0 0 6px rgba(239,68,68,.4); }
+.svc-dot-unknown  { background: var(--muted); opacity: .4; }
+.svc-name {
+  font-size: 13px; font-weight: 800; flex: 1;
+}
+.svc-status-pill {
+  font-size: 10px; font-weight: 700; padding: 2px 8px;
+  border-radius: 999px;
+}
+.svc-status-running { background: rgba(34,197,94,.1); color: var(--good); border: 1px solid rgba(34,197,94,.25); }
+.svc-status-stopped { background: var(--panel); color: var(--muted); border: 1px solid var(--border); }
+.svc-status-failed  { background: rgba(239,68,68,.08); color: var(--bad); border: 1px solid rgba(239,68,68,.25); }
+.svc-status-unknown { background: var(--panel); color: var(--muted); border: 1px solid var(--border); }
+.svc-desc {
+  font-size: 11px; color: var(--muted); line-height: 1.4;
+}
+.svc-meta {
+  font-size: 10px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap;
+}
+.svc-actions {
+  display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px;
+}
+.svc-btn {
+  padding: 4px 12px; border-radius: 6px;
+  font-family: var(--font); font-size: 11px; font-weight: 700;
+  cursor: pointer; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text);
+  transition: all .15s;
+}
+.svc-btn:hover { background: var(--panel); border-color: var(--accent2); }
+.svc-btn:disabled { opacity: .35; cursor: not-allowed; }
+.svc-btn-restart { border-color: rgba(0,146,143,.4); color: var(--teal); }
+.svc-btn-restart:hover { background: rgba(0,146,143,.08); }
+.svc-btn-stop { border-color: rgba(239,68,68,.3); color: var(--bad); }
+.svc-btn-stop:hover { background: rgba(239,68,68,.06); }
+.svc-btn-start { border-color: rgba(34,197,94,.3); color: var(--good); }
+.svc-btn-start:hover { background: rgba(34,197,94,.06); }
+.svc-refresh-bar {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+}
+.svc-refresh-btn {
+  padding: 6px 14px; border-radius: 6px;
+  font-family: var(--font); font-size: 11px; font-weight: 700;
+  cursor: pointer; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text);
+}
+.svc-refresh-btn:hover { border-color: var(--accent2); }
+.svc-count {
+  font-size: 11px; color: var(--muted); flex: 1;
+}
+.svc-reboot-btn {
+  padding: 6px 14px; border-radius: 6px;
+  font-family: var(--font); font-size: 11px; font-weight: 700;
+  cursor: pointer; border: 1px solid rgba(239,68,68,.4);
+  background: transparent; color: var(--bad);
+  margin-left: auto;
+}
+.svc-reboot-btn:hover { background: var(--bad); color: #fff; border-color: var(--bad); }
+
+@media (max-width: 768px) {
+  .svc-grid { grid-template-columns: 1fr; }
+}

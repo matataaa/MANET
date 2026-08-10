@@ -1,0 +1,114 @@
+// SPA tab router and shared state
+const POLL_INTERVAL_MS = 15000;
+let DATA = null;
+let LOCAL_DATA = null;
+let activeTab = 'dashboard';
+let pollTimer = null;
+let booted = false;
+
+// Tab routing
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('#tab-nav .tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.tab === tab);
+  });
+  document.querySelectorAll('.tab-panel').forEach(el => {
+    el.classList.toggle('active', el.id === 'tab-' + tab);
+  });
+  onTabActivated(tab);
+}
+
+function onTabActivated(tab) {
+  if (tab === 'dashboard') dashboardActivate();
+  else if (tab === 'nodes') nodesActivate();
+  else if (tab === 'config') configActivate();
+  else if (tab === 'voice') voiceActivate();
+  else if (tab === 'perf') perfActivate();
+  else if (tab === 'services') servicesActivate();
+  else if (tab === 'mesh') meshActivate();
+  else if (tab === 'terminal') terminalActivate();
+}
+
+// Hash routing
+function routeFromHash() {
+  if (!booted) return;
+  const hash = window.location.hash.replace('#', '') || 'dashboard';
+  const valid = ['dashboard', 'nodes', 'config', 'voice', 'perf', 'services', 'mesh', 'terminal'];
+  switchTab(valid.includes(hash) ? hash : 'dashboard');
+}
+
+window.addEventListener('hashchange', routeFromHash);
+
+document.querySelectorAll('#tab-nav .tab').forEach(el => {
+  el.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.location.hash = el.dataset.tab;
+  });
+});
+
+// Data polling
+async function fetchData() {
+  try {
+    const [dataResp, localResp] = await Promise.all([
+      fetch('/api/data'),
+      fetch('/api/local')
+    ]);
+    DATA = await dataResp.json();
+    LOCAL_DATA = await localResp.json();
+    updateHeader();
+    onDataUpdated();
+  } catch(e) {
+    console.error('Fetch error:', e);
+  }
+}
+
+function onDataUpdated() {
+  if (activeTab === 'dashboard') dashboardUpdate();
+  else if (activeTab === 'nodes') nodesUpdate();
+}
+
+function updateHeader() {
+  if (!DATA || !LOCAL_DATA) return;
+
+  document.getElementById('hdr-hostname').textContent = LOCAL_DATA.hostname || '--';
+  document.getElementById('hdr-ip').textContent = LOCAL_DATA.ip || '--';
+  document.getElementById('hdr-nodes').textContent = (DATA.nodes ? DATA.nodes.length : 0) + ' nodes';
+  document.getElementById('hdr-time').textContent = DATA.timestamp ? ts(DATA.timestamp) : '--';
+
+  // Health
+  const hdr = document.getElementById('hdr-health');
+  const dot = document.getElementById('hdr-health-dot');
+  const label = document.getElementById('hdr-health-label');
+  if (LOCAL_DATA.interfaces) {
+    const faults = LOCAL_DATA.interfaces.filter(i => i.health === 'fault');
+    const warns = LOCAL_DATA.interfaces.filter(i => i.health === 'warn');
+    let cls, dotColor, text;
+    if (faults.length > 0) {
+      cls = 'health-fault';
+      dotColor = 'var(--bad)';
+      text = faults.length === 1 ? '⚠ ' + faults[0].name + ' FAULT' : '⚠ ' + faults.length + ' FAULTS';
+    } else if (warns.length > 0) {
+      cls = 'health-warn';
+      dotColor = 'var(--warn)';
+      text = warns.length === 1 ? '⚠ ' + warns[0].name + ' WARN' : '⚠ ' + warns.length + ' WARNS';
+    } else {
+      cls = 'health-ok';
+      dotColor = 'var(--good)';
+      text = 'ALL OK';
+    }
+    hdr.className = cls;
+    dot.style.background = dotColor;
+    label.textContent = text;
+    label.style.color = dotColor;
+  }
+}
+
+// Boot — fetch data before routing so tabs have data on first render
+(async () => {
+  await fetchData();
+  booted = true;
+  const loader = document.getElementById('boot-loader');
+  if (loader) loader.remove();
+  routeFromHash();
+  pollTimer = setInterval(fetchData, POLL_INTERVAL_MS);
+})();

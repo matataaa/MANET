@@ -1,0 +1,76 @@
+#tab-dashboard {
+  display: none;
+}
+#tab-dashboard.active {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+/* Topology panel */
+.topo-panel {
+  position: relative; min-height: 520px;
+  background:
+    radial-gradient(circle at 14% 18%, rgba(0,146,143,.24), transparent 18%),
+    radial-gradient(circle at 84% 12%, rgba(2,0,13,.10), transparent 20%),
+    radial-gradient(circle at 50% 120%, rgba(0,146,143,.12), transparent 28%),
+    var(--panel);
+  border: 1px solid var(--border2);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow:
+    inset 0 0 0 1px rgba(2,0,13,.04),
+    inset 0 0 80px rgba(0,146,143,.08),
+    0 22px 52px rgba(2,0,13,.08);
+}
+.topo-panel svg { width: 100%; height: 100%; display: block; }
+.topo-loading {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 13px; font-weight: 700;
+}
+
+/* Topology tooltip */
+.topo-tooltip {
+  position: absolute; pointer-events: none;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 12px;
+  box-shadow: 0 12px 30px rgba(2,0,13,.12);
+  font-size: 11px; z-index: 10;
+  max-width: 240px; opacity: 0; transition: opacity .15s;
+}
+.topo-tooltip.visible { opacity: 1; }
+.topo-tooltip .tt-host { font-weight: 800; font-size: 12px; margin-bottom: 4px; }
+.topo-tooltip .tt-row { display: flex; gap: 6px; margin-top: 2px; }
+.topo-tooltip .tt-label { color: var(--muted); min-width: 40px; }
+
+/* Side panel node list */
+.dash-side {
+  width: 100%;
+  border: 1px solid var(--border2); border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 18px 44px rgba(2,0,13,.06);
+  overflow: hidden;
+}
+.node-row {
+  padding: 10px 12px; border-bottom: 1px solid var(--border2);
+  cursor: pointer; transition: background .18s;
+}
+.node-row:hover { background: rgba(0,146,143,.08); }
+.node-row.is-me { border-left: 2px solid var(--self); }
+.node-row.is-gw { border-left: 2px solid var(--gw); }
+.node-row.selected { background: rgba(0,146,143,.12); outline: 1px solid rgba(0,146,143,.36); outline-offset: -1px; }
+.node-name { font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 5px; margin-bottom: 2px; }
+.node-ip { color: var(--muted); font-size: 10px; margin-bottom: 2px; }
+.node-meta { display: flex; gap: 5px; flex-wrap: wrap; }
+.tq-bar-wrap { margin-top: 6px; height: 5px; background: var(--border2); border-radius: 999px; overflow: hidden; }
+.tq-bar { height: 100%; border-radius: 2px; transition: width .5s; }
+
+@media (max-width: 768px) {
+  #tab-dashboard.active {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .topo-panel { min-height: 300px; }
+}

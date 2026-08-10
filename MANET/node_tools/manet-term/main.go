@@ -1,0 +1,293 @@
+package main
+
+import (
+	"bufio"
+	"encoding/binary"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+
+	"github.com/creack/pty"
+	"github.com/gorilla/websocket"
+)
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  16384,
+	WriteBufferSize: 16384,
+	CheckOrigin:     func(r *http.Request) bool { return true },
+}
+
+func handleTerminal(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("upgrade: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	q := r.URL.Query()
+	target := q.Get("target")
+	user := q.Get("user")
+	if user == "" {
+		user = "root"
+	}
+	password := q.Get("password")
+
+	var cmd *exec.Cmd
+	if target != "" {
+		sshArgs := []string{"-tt",
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "ConnectTimeout=5",
+			fmt.Sprintf("%s@%s", user, target),
+		}
+		if password != "" {
+			cmd = exec.Command("sshpass", append([]string{"-p", password, "ssh"}, sshArgs...)...)
+		} else {
+			cmd = exec.Command("ssh", sshArgs...)
+		}
+	} else {
+		cmd = exec.Command("bash", "-l")
+	}
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "LANG=en_US.UTF-8")
+
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		log.Printf("pty: %v", err)
+		return
+	}
+
+	pid := cmd.Process.Pid
+	log.Printf("terminal pid=%d target=%q", pid, target)
+
+	var wmu sync.Mutex
+
+	go func() {
+		buf := make([]byte, 16384)
+		for {
+			n, err := ptmx.Read(buf)
+			if err != nil {
+				conn.Close()
+				return
+			}
+			wmu.Lock()
+			err = conn.WriteMessage(websocket.BinaryMessage, buf[:n])
+			wmu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	for {
+		msgType, msg, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		switch msgType {
+		case websocket.TextMessage:
+			ptmx.Write(msg)
+		case websocket.BinaryMessage:
+			if len(msg) >= 5 && msg[0] == 1 {
+				cols := binary.BigEndian.Uint16(msg[1:3])
+				rows := binary.BigEndian.Uint16(msg[3:5])
+				pty.Setsize(ptmx, &pty.Winsize{Cols: cols, Rows: rows})
+			}
+		}
+	}
+
+	ptmx.Close()
+	cmd.Process.Signal(syscall.SIGTERM)
+	cmd.Wait()
+	log.Printf("terminal ended pid=%d", pid)
+}
+
+func handleLogs(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("upgrade: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	q := r.URL.Query()
+	unit := q.Get("unit")
+	file := q.Get("file")
+	lines := q.Get("lines")
+	if lines == "" {
+		lines = "200"
+	}
+
+	var cmd *exec.Cmd
+	if file != "" {
+		cmd = exec.Command("tail", "-f", "-n", lines, file)
+	} else if unit != "" {
+		cmd = exec.Command("journalctl", "-u", unit, "-f", "-n", lines, "--no-pager", "-o", "short-iso")
+	} else {
+		cmd = exec.Command("journalctl", "-f", "-n", lines, "--no-pager", "-o", "short-iso")
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Printf("pipe: %v", err)
+		return
+	}
+	cmd.Stderr = cmd.Stdout
+
+	if err := cmd.Start(); err != nil {
+		log.Printf("start: %v", err)
+		return
+	}
+	log.Printf("logs pid=%d unit=%q file=%q", cmd.Process.Pid, unit, file)
+
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 64*1024), 64*1024)
+		for scanner.Scan() {
+			line := scanner.Text() + "\r\n"
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(line)); err != nil {
+				return
+			}
+		}
+		conn.Close()
+	}()
+
+	for {
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+	}
+
+	cmd.Process.Signal(syscall.SIGTERM)
+	cmd.Wait()
+	log.Printf("logs ended pid=%d", cmd.Process.Pid)
+}
+
+var mimeTypes = map[string]string{
+	".html": "text/html; charset=utf-8",
+	".css":  "text/css; charset=utf-8",
+	".js":   "application/javascript; charset=utf-8",
+	".json": "application/json; charset=utf-8",
+	".svg":  "image/svg+xml",
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".ico":  "image/x-icon",
+	".woff": "font/woff",
+	".woff2": "font/woff2",
+	".ttf":  "font/ttf",
+}
+
+func serveStatic(webRoot string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "/" {
+			path = "/index.html"
+		}
+
+		clean := filepath.Clean(path)
+		if strings.Contains(clean, "..") {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+
+		filePath := filepath.Join(webRoot, clean)
+		info, err := os.Stat(filePath)
+		if err != nil || info.IsDir() {
+			// SPA fallback
+			filePath = filepath.Join(webRoot, "index.html")
+			info, err = os.Stat(filePath)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+		}
+
+		ext := filepath.Ext(filePath)
+		if ct, ok := mimeTypes[ext]; ok {
+			w.Header().Set("Content-Type", ct)
+		}
+
+		http.ServeFile(w, r, filePath)
+	}
+}
+
+func main() {
+	port := flag.String("port", "80", "listen port")
+	webRoot := flag.String("webroot", "/usr/local/share/manet/www", "static files directory")
+	flag.Parse()
+
+	mux := http.NewServeMux()
+
+	// WebSocket
+	mux.HandleFunc("/ws/terminal", handleTerminal)
+	mux.HandleFunc("/ws/logs", handleLogs)
+
+	// Status APIs
+	mux.HandleFunc("/api/data", apiData)
+	mux.HandleFunc("/api/local", apiLocal)
+	mux.HandleFunc("/api/peer/", apiPeer)
+	mux.HandleFunc("/api/voice", apiVoice)
+	mux.HandleFunc("/api/admin/status", apiAdminStatus)
+	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			apiServiceAction(w, r)
+		} else {
+			apiServices(w, r)
+		}
+	})
+	mux.HandleFunc("/api/services/", apiServiceAction)
+	mux.HandleFunc("/api/mesh", apiMesh)
+
+	// Control APIs
+	mux.HandleFunc("/api/control/interface", apiControlInterface)
+	mux.HandleFunc("/api/control/txpower", apiControlTxPower)
+	mux.HandleFunc("/api/control/halow_channel", apiControlHalowChannel)
+	mux.HandleFunc("/api/control/wifi_channel", apiControlWifiChannel)
+	mux.HandleFunc("/api/control/hostname", apiControlHostname)
+
+	// Admin APIs
+	mux.HandleFunc("/api/admin/save", apiAdminSave)
+	mux.HandleFunc("/api/admin/stage", apiAdminStage)
+	mux.HandleFunc("/api/admin/activate", apiAdminActivate)
+	mux.HandleFunc("/api/admin/cancel", apiAdminCancel)
+
+	// Perf APIs
+	mux.HandleFunc("/api/iperf/server/start", apiIperfServerStart)
+	mux.HandleFunc("/api/iperf/server/stop", apiIperfServerStop)
+	mux.HandleFunc("/api/iperf/client/run", apiIperfClientRun)
+	mux.HandleFunc("/api/iperf/client/stream", apiIperfClientStream)
+	mux.HandleFunc("/api/iperf/stop", apiIperfStop)
+	mux.HandleFunc("/api/ping/run", apiPingRun)
+	mux.HandleFunc("/api/ping/stream", apiPingStream)
+	mux.HandleFunc("/api/ping/stop", apiPingStop)
+
+	// Terminal HTTP fallback
+	mux.HandleFunc("/api/terminal/exec", apiTerminalExec)
+	mux.HandleFunc("/api/terminal/complete", apiTerminalComplete)
+	mux.HandleFunc("/api/terminal/reboot", apiTerminalReboot)
+
+	// Auth
+	mux.HandleFunc("/api/perf-auth", apiPerfAuth)
+
+	// Static files (SPA fallback)
+	mux.HandleFunc("/", serveStatic(*webRoot))
+
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
+		log.Println("shutting down")
+		os.Exit(0)
+	}()
+
+	log.Printf("manet-ctrl listening on :%s webroot=%s", *port, *webRoot)
+	log.Fatal(http.ListenAndServe(":"+*port, mux))
+}

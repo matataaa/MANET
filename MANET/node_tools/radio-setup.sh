@@ -1555,11 +1555,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/mesh-status.py 80
+WorkingDirectory=/usr/local/bin
+ExecStart=/usr/bin/python3 -m manet_web 80
 Restart=on-failure
 RestartSec=5
 User=root
-# Allows reading /etc/mesh.conf (contains credentials) and calling batctl
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 
 [Install]

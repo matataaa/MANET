@@ -1,12 +1,12 @@
+# DEPRECATED: perf dashboard is now served by mesh-status (manet_web) on port 80.
+# This unit is kept as a no-op so existing nodes don't fail on upgrade.
 [Unit]
-Description=MANET Performance Dashboard
-After=network.target
+Description=MANET Performance Dashboard (deprecated — merged into mesh-status)
 
 [Service]
-ExecStart=/usr/bin/python3 /usr/local/bin/perf-dashboard.py
-Restart=always
-RestartSec=5
-User=root
+Type=oneshot
+ExecStart=/bin/true
+RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target

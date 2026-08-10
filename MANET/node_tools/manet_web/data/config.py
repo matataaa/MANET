@@ -67,6 +67,35 @@ def get_provisioned_manage_password(conf=None):
     return ''
 
 
+def save_kv_file(path, updates):
+    """Update specific keys in a key=value file, preserving order and comments."""
+    lines = []
+    seen = set()
+    try:
+        with open(path) as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        pass
+
+    out = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#') and '=' in stripped:
+            k = stripped.split('=', 1)[0].strip()
+            if k in updates:
+                out.append(f"{k}={updates[k]}\n")
+                seen.add(k)
+                continue
+        out.append(line)
+
+    for k, v in updates.items():
+        if k not in seen:
+            out.append(f"{k}={v}\n")
+
+    with open(path, 'w') as f:
+        f.writelines(out)
+
+
 def get_perf_auth_token():
     conf = load_kv_file(MESH_CONF_FILE)
     manage_password = get_provisioned_manage_password(conf)

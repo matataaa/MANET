@@ -1,0 +1,16 @@
+[Unit]
+Description=MANET Node Controller (web + terminal + API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/usr/local/bin/manet-ctrl --port 80 --webroot /usr/local/share/manet/www
+Restart=on-failure
+RestartSec=3
+User=root
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target
