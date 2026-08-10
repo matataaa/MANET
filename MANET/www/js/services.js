@@ -32,6 +32,7 @@ function svcRender() {
   const categories = [
     { id: 'core', label: 'Core Mesh' },
     { id: 'network', label: 'Network' },
+    { id: 'radio', label: 'Radio' },
     { id: 'application', label: 'Applications' },
     { id: 'system', label: 'System' },
   ];

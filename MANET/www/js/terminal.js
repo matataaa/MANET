@@ -93,6 +93,7 @@ function terminalActivate() {
     document.getElementById('term-mode-logs').addEventListener('click', function() { termSetMode('logs'); });
 
     document.getElementById('term-log-unit').addEventListener('change', function() {
+      localStorage.setItem('termLogUnit', this.value);
       termConnectLogs();
     });
 
@@ -129,7 +130,7 @@ function termSetMode(mode) {
 
 function termPopulateLogUnits() {
   var sel = document.getElementById('term-log-unit');
-  var current = sel.value;
+  var current = sel.value || localStorage.getItem('termLogUnit') || '';
   sel.innerHTML = '<option value="">All Logs</option>';
   var units = [
     'manet-ctrl', 'node-manager', 'alfred',

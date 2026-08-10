@@ -45,7 +45,7 @@ for subdir in core elections radio network system; do
     install_tree "$REPO_ROOT/MANET/scripts/$subdir" "$STAGE/usr/local/bin"
 done
 chmod -R a+rX "$STAGE/usr/local/bin"
-find "$STAGE/usr/local/bin" -type f \( -name '*.sh' -o -name '*.py' -o -name 'morse_cli' -o -name 'chronyc' \) -exec chmod 0755 {} +
+find "$STAGE/usr/local/bin" -type f \( -name '*.sh' -o -name '*.py' -o -name 'morse_cli' -o -name 'chronyc' -o -name 'mesh' \) -exec chmod 0755 {} +
 
 # Go binary + service
 install_file 0755 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl" "$STAGE/usr/local/bin/manet-ctrl"

@@ -48,9 +48,9 @@ function hwRenderRadios() {
 
   el.innerHTML = radios.map(function(r) {
     var dot = r.health === 'ok' ? 'dot-ok' : r.health === 'fault' ? 'dot-bad' : r.health === 'warn' ? 'dot-warn' : 'dot-info';
-    var badge = r.state === 'UP' ? '<span class="svc-badge svc-badge-running">UP</span>' :
-                r.state === 'DOWN' ? '<span class="svc-badge svc-badge-stopped">DOWN</span>' :
-                '<span class="svc-badge svc-badge-unknown">' + escHtml(r.state || '?') + '</span>';
+    var badge = r.state === 'UP' ? '<span class="hw-badge hw-badge-up">UP</span>' :
+                r.state === 'DOWN' ? '<span class="hw-badge hw-badge-down">DOWN</span>' :
+                '<span class="hw-badge hw-badge-unknown">' + escHtml(r.state || '?') + '</span>';
 
     var busType = r.driver === 'morse_spi' ? 'SPI (HaLow 802.11ah)' :
                   r.driver === 'brcmfmac' ? 'Onboard WiFi (SDIO)' :
@@ -83,8 +83,9 @@ function hwRenderIfaces() {
 
   el.innerHTML = ifaces.map(function(i) {
     var dot = i.health === 'ok' ? 'dot-ok' : i.health === 'fault' ? 'dot-bad' : i.health === 'warn' ? 'dot-warn' : 'dot-info';
-    var badge = i.state === 'UP' || i.state === 'UNKNOWN' ? '<span class="svc-badge svc-badge-running">' + i.state + '</span>' :
-                '<span class="svc-badge svc-badge-stopped">' + escHtml(i.state || '?') + '</span>';
+    var stateUp = i.state === 'UP' || i.state === 'UNKNOWN';
+    var badge = stateUp ? '<span class="hw-badge hw-badge-up">' + escHtml(i.state) + '</span>' :
+                '<span class="hw-badge hw-badge-down">' + escHtml(i.state || '?') + '</span>';
     var rows = hwRow('Role', hwRoleLabel(i.role));
     if (i.addrs && i.addrs.length) rows += hwRow('Addresses', i.addrs.map(escHtml).join('<br>'));
 

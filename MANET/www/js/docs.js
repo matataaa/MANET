@@ -118,6 +118,12 @@ var DOCS_CONTENT = [
 '<tr><td>SAE Watchdog</td><td><code>sae-watchdog</code></td><td>Monitors mesh authentication failures and restarts wpa_supplicant when needed.</td></tr>',
 '</tbody></table>',
 
+'<h3>Radio</h3>',
+'<table class="docs-table"><thead><tr><th>Service</th><th>Unit</th><th>Description</th></tr></thead><tbody>',
+'<tr><td>TX Power Manager</td><td><code>manet-txpower</code></td><td>Manages radio transmit power levels.</td></tr>',
+'<tr><td>Boot Lobby</td><td><code>mesh-boot-lobby</code></td><td>Coordinates mesh network bring-up during boot.</td></tr>',
+'</tbody></table>',
+
 '<h3>System</h3>',
 '<table class="docs-table"><thead><tr><th>Service</th><th>Unit</th><th>Description</th></tr></thead><tbody>',
 '<tr><td>Chrony NTP</td><td><code>chronyd</code></td><td>Network time synchronisation across the mesh.</td></tr>',
@@ -126,10 +132,10 @@ var DOCS_CONTENT = [
 '<tr><td>CoT Emitter</td><td><code>cot-emitter</code></td><td>Sends Cursor on Target messages for TAK integration.</td></tr>',
 '</tbody></table>',
 
-'<h2 id="doc-cli">MESH CLI (Planned)</h2>',
-'<p>The <code>mesh</code> CLI tool will provide command-line access to all node functions. It runs directly on the node and talks to the local API or reads system state directly.</p>',
+'<h2 id="doc-cli">MESH CLI</h2>',
+'<p>The <code>mesh</code> CLI tool provides command-line access to all node functions. It is installed at <code>/usr/local/bin/mesh</code> and talks to the local manet-ctrl API. Use it from the terminal tab or over SSH.</p>',
 
-'<h3>Planned Commands</h3>',
+'<h3>Commands</h3>',
 '<table class="docs-table"><thead><tr><th>Command</th><th>Description</th></tr></thead><tbody>',
 '<tr><td><code>mesh status</code></td><td>This node\'s status summary (hostname, IP, uptime, radios, battery)</td></tr>',
 '<tr><td><code>mesh nodes</code></td><td>All mesh nodes table (hostname, IP, DNS, TQ, hops, last seen)</td></tr>',
