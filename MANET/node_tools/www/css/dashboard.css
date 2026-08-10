@@ -24,7 +24,7 @@
     inset 0 0 80px rgba(0,146,143,.08),
     0 22px 52px rgba(2,0,13,.08);
 }
-.topo-panel svg { width: 100%; height: 100%; display: block; }
+.topo-panel svg { width: 100%; min-height: 520px; display: block; }
 .topo-loading {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
@@ -62,7 +62,9 @@
 .node-row.is-gw { border-left: 2px solid var(--gw); }
 .node-row.selected { background: rgba(0,146,143,.12); outline: 1px solid rgba(0,146,143,.36); outline-offset: -1px; }
 .node-name { font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 5px; margin-bottom: 2px; }
-.node-ip { color: var(--muted); font-size: 10px; margin-bottom: 2px; }
+.node-ip { color: var(--muted); font-size: 10px; margin-bottom: 2px; display: flex; gap: 4px; align-items: center; }
+.node-ip-addr { color: var(--text); font-weight: 600; font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; }
+.node-uptime { color: var(--muted); font-size: 10px; }
 .node-meta { display: flex; gap: 5px; flex-wrap: wrap; }
 .tq-bar-wrap { margin-top: 6px; height: 5px; background: var(--border2); border-radius: 999px; overflow: hidden; }
 .tq-bar { height: 100%; border-radius: 2px; transition: width .5s; }

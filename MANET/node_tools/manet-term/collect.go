@@ -750,9 +750,9 @@ type serviceEntry struct {
 }
 
 var serviceRegistry = []serviceEntry{
-	{"mesh-status", "MANET Web Server", []string{"mesh-status"}, "core", []string{"restart"}, "This web interface"},
+	{"manet-ctrl", "MANET Controller", []string{"manet-ctrl"}, "core", []string{"restart"}, "Web UI, API, and terminal"},
 	{"alfred", "Alfred", []string{"alfred"}, "core", []string{"start", "stop", "restart"}, "Mesh data distribution daemon"},
-	{"batadv", "batman-adv", []string{"batman-adv"}, "core", []string{"restart"}, "L2 mesh routing"},
+	{"node-manager", "Node Manager", []string{"node-manager"}, "core", []string{"restart"}, "Status publisher and IP coordination"},
 	{"wpa-supplicant", "WPA Supplicant", []string{"wpa_supplicant"}, "network", []string{"start", "stop", "restart"}, "Mesh WiFi authentication"},
 	{"hostapd", "hostapd", []string{"hostapd"}, "network", []string{"start", "stop", "restart"}, "Access point daemon"},
 	{"dnsmasq", "dnsmasq", []string{"dnsmasq"}, "network", []string{"start", "stop", "restart", "reload"}, "DHCP and DNS for EUDs"},
@@ -762,7 +762,8 @@ var serviceRegistry = []serviceEntry{
 	{"mediamtx", "MediaMTX", []string{"mediamtx"}, "application", []string{"start", "stop", "restart"}, "RTSP/WebRTC media server"},
 	{"chronyd", "Chrony NTP", []string{"chronyd", "chrony"}, "system", []string{"start", "stop", "restart"}, "Network time synchronisation"},
 	{"syncthing", "Syncthing", []string{"syncthing"}, "application", []string{"start", "stop", "restart"}, "File synchronisation"},
-	{"manet-term", "Terminal Server", []string{"manet-web"}, "core", []string{"restart"}, "Go WebSocket terminal + API"},
+	{"gps-reader", "GPS Reader", []string{"gps-reader"}, "system", []string{"start", "stop", "restart"}, "GPS position tracking"},
+	{"gateway-route", "Gateway Route Manager", []string{"gateway-route-manager"}, "network", []string{"restart"}, "Mesh gateway routing"},
 }
 
 func unitStatus(unit string) map[string]string {

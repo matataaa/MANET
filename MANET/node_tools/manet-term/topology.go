@@ -232,6 +232,7 @@ func assembleStatusData() StatusData {
 	}
 
 	// Fallback: build nodes from batctl when registry is empty
+	nowStr := fmt.Sprintf("%d", time.Now().Unix())
 	if len(registry) == 0 {
 		seen := make(map[string]bool)
 		for mac, orig := range origMap {
@@ -248,10 +249,9 @@ func assembleStatusData() StatusData {
 				IsDirect: neighborMACs[mac],
 				AllMACs:  []string{mac},
 				BestLink: map[string]interface{}{"iface": orig.Iface, "nexthop": orig.Nexthop, "tq": orig.TQ},
+				LastSeen: nowStr,
 			}
-			for _, m := range []string{mac} {
-				macToNodeID[m] = mac
-			}
+			macToNodeID[mac] = mac
 			nodes = append(nodes, node)
 			nodeByID[mac] = &nodes[len(nodes)-1]
 		}
@@ -269,6 +269,7 @@ func assembleStatusData() StatusData {
 				IsDirect: true,
 				AllMACs:  []string{n.MAC},
 				BestLink: make(map[string]interface{}),
+				LastSeen: nowStr,
 			}
 			macToNodeID[n.MAC] = n.MAC
 			nodes = append(nodes, node)
@@ -278,15 +279,18 @@ func assembleStatusData() StatusData {
 
 	// Inject self if not in registry
 	if !foundSelf {
+		selfUptime := getUptime()
 		selfNode := Node{
-			ID:       "self",
+			ID:       myMAC,
 			Hostname: myHostname,
 			MAC:      myMAC,
 			IP:       myIP,
 			IsMe:     true,
 			Battery:  myBattery,
+			Uptime:   selfUptime,
 			AllMACs:  []string{myMAC},
 			BestLink: make(map[string]interface{}),
+			LastSeen: nowStr,
 		}
 		nodes = append([]Node{selfNode}, nodes...)
 	}

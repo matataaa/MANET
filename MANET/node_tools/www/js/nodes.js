@@ -98,7 +98,7 @@ function nodesRender() {
   const tbody = document.getElementById('nodes-tbody');
   if (!tbody) return;
   tbody.innerHTML = nodes.map(n => {
-    const stale = !n.is_me && DATA.timestamp && (DATA.timestamp - parseInt(n.last_seen || 0)) > 300;
+    const stale = !n.is_me && n.last_seen && DATA.timestamp && (DATA.timestamp - parseInt(n.last_seen)) > 300;
     const svcs = [];
     if (n.is_gateway) svcs.push('<span class="badge badge-gw">GW</span>');
     if (n.mumble) svcs.push('<span class="badge badge-svc">MUMBLE</span>');
@@ -111,7 +111,9 @@ function nodesRender() {
       '<span class="' + tqClass(n.tq) + '" style="padding:2px 6px;border-radius:4px;font-size:11px">' + (n.tq != null ? n.tq : '?') + '</span>');
 
     const battCell = n.battery ? n.battery.percentage + '%' : '--';
-    const lastSeen = stale ? '<span style="color:var(--bad)">' + fmtAge(n.last_seen, DATA.timestamp) + '</span>' : fmtAge(n.last_seen, DATA.timestamp);
+    const lastSeen = n.is_me ? '<span style="color:var(--good)">now</span>' :
+      stale ? '<span style="color:var(--bad)">' + fmtAge(n.last_seen, DATA.timestamp) + '</span>' :
+      (n.last_seen ? '<span style="color:var(--good)">' + fmtAge(n.last_seen, DATA.timestamp) + '</span>' : '--');
 
     return '<tr>' +
       '<td class="col-host">' + escHtml(n.hostname || n.id) + '</td>' +

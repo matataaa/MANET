@@ -59,7 +59,9 @@ function tqPct(tq) {
 }
 
 function fmtAge(ts, refTime) {
-  const secs = (refTime || Math.floor(Date.now() / 1000)) - parseInt(ts || 0);
+  if (!ts) return '--';
+  const secs = (refTime || Math.floor(Date.now() / 1000)) - parseInt(ts);
+  if (secs < 10)    return 'now';
   if (secs < 60)    return secs + 's ago';
   if (secs < 3600)  return Math.floor(secs/60) + 'm ago';
   if (secs < 86400) return Math.floor(secs/3600) + 'h ago';

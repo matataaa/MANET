@@ -24,13 +24,13 @@ function topoInit(container) {
   svg.call(topoZoom);
 
   topoSim = d3.forceSimulation()
-    .force('charge', d3.forceManyBody().strength(-180))
+    .force('charge', d3.forceManyBody().strength(-400))
     .force('link', d3.forceLink().id(d => d.id).distance(d => {
       const tq = d.tq != null ? d.tq : 128;
-      return 60 + ((255 - tq) / 255) * 160;
+      return 120 + ((255 - tq) / 255) * 200;
     }))
     .force('center', d3.forceCenter())
-    .force('collision', d3.forceCollide(24))
+    .force('collision', d3.forceCollide(50))
     .alphaDecay(0.03);
 }
 

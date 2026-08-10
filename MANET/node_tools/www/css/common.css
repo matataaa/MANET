@@ -175,6 +175,7 @@ body {
 .badge-gw       { background: rgba(0,146,143,.14); color: var(--accent); }
 .badge-direct   { background: #ecfdf3; color: #136c36; }
 .badge-limp     { background: rgba(239,68,68,.08); color: var(--bad); border:1px solid rgba(239,68,68,.28); }
+.badge-hop      { background: rgba(100,116,139,.08); color: var(--muted); border:1px solid rgba(100,116,139,.22); }
 .self-node-badge {
   display: inline-flex; align-items: center; padding: 4px 10px;
   border-radius: 999px; font-size: 10px; font-weight: 700;

@@ -359,7 +359,7 @@ func apiControlHostname(w http.ResponseWriter, r *http.Request) {
 	}
 
 	saveKVFile(MeshConfFile, map[string]string{"node_hostname": prefix})
-	runCmd(5*time.Second, "hostnamectl", "set-hostname", full)
+	setHostname(full)
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "hostname": full})
 }
@@ -406,8 +406,10 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	applied := make(map[string]interface{})
+	conf := loadKVFile(MeshConfFile)
+
+	// Apply hostname
 	if updates["node_hostname"] != "" || updates["mesh_ssid"] != "" {
-		conf := loadKVFile(MeshConfFile)
 		prefix := confGet(conf, "node_hostname", "node")
 		meshSSID := conf["mesh_ssid"]
 		macSuffix := getMACsuffix()
@@ -418,8 +420,20 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		if macSuffix != "" {
 			full += "-" + macSuffix
 		}
-		runCmd(5*time.Second, "hostnamectl", "set-hostname", full)
+		setHostname(full)
 		applied["hostname"] = full
+	}
+
+	// Apply AP settings
+	if updates["lan_ap_ssid"] != "" || updates["lan_ap_key"] != "" {
+		runCmd(10*time.Second, "systemctl", "restart", "hostapd")
+		applied["ap_restarted"] = true
+	}
+
+	// Apply mesh key/SSID changes to wpa_supplicant configs
+	if updates["mesh_ssid"] != "" || updates["mesh_key"] != "" {
+		applyWPAConfig(conf)
+		applied["mesh_updated"] = true
 	}
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "saved": saved, "applied": applied})
@@ -876,6 +890,70 @@ func apiPerfAuth(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode,
 	})
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
+func setHostname(name string) {
+	if _, err := runCmd(5*time.Second, "hostnamectl", "set-hostname", name); err == nil {
+		return
+	}
+	os.WriteFile("/etc/hostname", []byte(name+"\n"), 0644)
+
+	if data, err := os.ReadFile("/etc/hosts"); err == nil {
+		text := string(data)
+		hostRE := regexp.MustCompile(`(?m)^127\.0\.1\.1\s+.*$`)
+		if hostRE.MatchString(text) {
+			text = hostRE.ReplaceAllString(text, "127.0.1.1\t"+name)
+		} else {
+			text += "\n127.0.1.1\t" + name
+		}
+		os.WriteFile("/etc/hosts", []byte(text), 0644)
+	}
+
+	if _, err := runCmd(3*time.Second, "hostname", name); err != nil {
+		runCmd(3*time.Second, "hostnamectl", "--transient", "set-hostname", name)
+	}
+}
+
+func applyWPAConfig(conf map[string]string) {
+	ssid := conf["mesh_ssid"]
+	key := conf["mesh_key"]
+	if ssid == "" {
+		return
+	}
+
+	wpaDir := "/etc/wpa_supplicant"
+	entries, err := os.ReadDir(wpaDir)
+	if err != nil {
+		return
+	}
+
+	ssidRE := regexp.MustCompile(`ssid="[^"]*"`)
+	pskRE := regexp.MustCompile(`psk="[^"]*"`)
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "wpa_supplicant-wlan") || !strings.HasSuffix(name, ".conf") {
+			continue
+		}
+		if strings.Contains(name, "s1g") {
+			continue
+		}
+
+		path := wpaDir + "/" + name
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		text := string(data)
+		text = ssidRE.ReplaceAllString(text, fmt.Sprintf(`ssid="%s"`, ssid))
+		if key != "" {
+			text = pskRE.ReplaceAllString(text, fmt.Sprintf(`psk="%s"`, key))
+		}
+		os.WriteFile(path, []byte(text), 0644)
+	}
+
+	// Restart mesh wpa_supplicant instances
+	runCmd(10*time.Second, "bash", "-c", "systemctl restart 'wpa_supplicant@wlan*.service' 2>/dev/null || true")
 }
 
 func shellQuote(s string) string {
