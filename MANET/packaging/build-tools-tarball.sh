@@ -3,9 +3,9 @@ set -euo pipefail
 
 # build-tools-tarball.sh — assemble a tools-only update tarball.
 #
-# Contains node_tools scripts, systemd units, networkd configs, udev rules,
-# and etc files. Does NOT include the SBC overlay (kernel/modules/firmware)
-# or pre-built binaries (alfred, batctl, wpa_supplicant_s1g).
+# Contains scripts, Go binary, web frontend, systemd units, and etc files.
+# Does NOT include the SBC overlay (kernel/modules/firmware) or pre-built
+# binaries (alfred, batctl, wpa_supplicant_s1g).
 #
 # Usage:
 #   build-tools-tarball.sh [output.tar.gz]
@@ -33,11 +33,21 @@ install_file() {
 
 mkdir -p "$STAGE/usr/local/bin" "$STAGE/etc"
 
-install_tree "$REPO_ROOT/MANET/node_tools" "$STAGE/usr/local/bin"
+# Scripts — all subdirs flatten into /usr/local/bin on the node
+for subdir in core elections radio network system; do
+    install_tree "$REPO_ROOT/MANET/scripts/$subdir" "$STAGE/usr/local/bin"
+done
 chmod -R a+rX "$STAGE/usr/local/bin"
 find "$STAGE/usr/local/bin" -type f \
     \( -name '*.sh' -o -name '*.py' -o -name 'morse_cli' -o -name 'chronyc' \) \
     -exec chmod 0755 {} +
+
+# Go binary + service
+install_file 0755 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl" "$STAGE/usr/local/bin/manet-ctrl"
+install_file 0644 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl.service" "$STAGE/etc/systemd/system/manet-ctrl.service"
+
+# Web frontend
+install_tree "$REPO_ROOT/MANET/www" "$STAGE/usr/local/share/manet/www"
 
 install_file 0644 "$REPO_ROOT/MANET/etc/manet_version.txt" "$STAGE/etc/manet_version.txt"
 

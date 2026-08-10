@@ -418,10 +418,6 @@ server=1.1.1.1
 server=8.8.8.8
 DNSEOF
 
-    # Publish perf.local/manet.local plus dynamic service aliases via mDNS.
-    # Avahi is restricted to the AP-facing interface and reflector remains off.
-    /usr/local/bin/mesh-mdns-update.sh || true
-
     # Ensure dnsmasq is unmasked, enabled, and running
     systemctl unmask dnsmasq.service 2>/dev/null
 #    systemctl enable dnsmasq.service 2>/dev/null

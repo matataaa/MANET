@@ -4,7 +4,8 @@ var termWs = null;
 var termFit = null;
 var termSessions = {};
 var termCurrentTarget = '';
-var termMode = 'terminal';
+var termMode = localStorage.getItem('termMode') || 'terminal';
+var termReconnectTimer = null;
 var TERM_PORT = location.port || (location.protocol === 'https:' ? '443' : '80');
 
 function terminalActivate() {
@@ -97,7 +98,7 @@ function terminalActivate() {
 
     termInitialized = true;
     termPopulateTargets();
-    termConnectWs();
+    termSetMode(termMode);
   } else {
     termPopulateTargets();
     termFit.fit();
@@ -107,6 +108,8 @@ function terminalActivate() {
 
 function termSetMode(mode) {
   termMode = mode;
+  localStorage.setItem('termMode', mode);
+  if (termReconnectTimer) { clearTimeout(termReconnectTimer); termReconnectTimer = null; }
   document.getElementById('term-mode-shell').classList.toggle('active', mode === 'terminal');
   document.getElementById('term-mode-logs').classList.toggle('active', mode === 'logs');
   document.getElementById('term-target').style.display = mode === 'terminal' ? '' : 'none';
@@ -129,10 +132,13 @@ function termPopulateLogUnits() {
   var current = sel.value;
   sel.innerHTML = '<option value="">All Logs</option>';
   var units = [
-    'manet-ctrl', 'node-manager', 'gateway-route-manager',
-    'gps-reader', 'sae-watchdog', 'manet-txpower',
-    'mesh-boot-lobby', 'mesh-voice',
-    'sshd', 'wpa_supplicant', 'systemd-networkd'
+    'manet-ctrl', 'node-manager', 'alfred',
+    'gateway-route-manager', 'mesh-boot-lobby',
+    'sae-watchdog', 'manet-txpower',
+    'hostapd', 'wpa_supplicant', 'dnsmasq', 'avahi-daemon',
+    'mesh-voice', 'mumble-server', 'mediamtx', 'syncthing',
+    'gps-reader', 'battery-reader', 'cot-emitter', 'chronyd',
+    'sshd', 'systemd-networkd'
   ];
   units.forEach(function(u) {
     var opt = document.createElement('option');
@@ -258,11 +264,14 @@ function termConnectWs(target, session) {
   };
 
   termWs.onclose = function() {
-    term.writeln('\r\n\x1b[31m[Connection closed]\x1b[0m');
-    statusEl.textContent = 'Disconnected';
+    term.writeln('\r\n\x1b[31m[Connection closed — reconnecting in 3s...]\x1b[0m');
+    statusEl.textContent = 'Reconnecting...';
     statusEl.className = 'term-status term-status-off';
     reconnBtn.style.display = '';
     termWs = null;
+    termReconnectTimer = setTimeout(function() {
+      if (termMode === 'terminal') termConnectWs(target, session);
+    }, 3000);
   };
 
   termWs.onerror = function() {
@@ -304,11 +313,14 @@ function termConnectLogs() {
   };
 
   termWs.onclose = function() {
-    term.writeln('\r\n\x1b[31m[Stream ended]\x1b[0m');
-    statusEl.textContent = 'Disconnected';
+    term.writeln('\r\n\x1b[31m[Stream ended — reconnecting in 3s...]\x1b[0m');
+    statusEl.textContent = 'Reconnecting...';
     statusEl.className = 'term-status term-status-off';
     reconnBtn.style.display = '';
     termWs = null;
+    termReconnectTimer = setTimeout(function() {
+      if (termMode === 'logs') termConnectLogs();
+    }, 3000);
   };
 
   termWs.onerror = function() {

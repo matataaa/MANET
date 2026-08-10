@@ -1,0 +1,7 @@
+.hw-wrap { padding: 16px; }
+.hw-details { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.hw-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; padding: 3px 0; border-bottom: 1px solid var(--border2); }
+.hw-row:last-child { border-bottom: none; }
+.hw-label { font-weight: 700; color: var(--fg2); min-width: 100px; flex-shrink: 0; }
+.hw-value { color: var(--fg); text-align: right; word-break: break-all; }
+.svc-card-wide { grid-column: 1 / -1; }

@@ -3,6 +3,8 @@ let topoSvg = null;
 let topoSim = null;
 let topoZoom = null;
 let topoTooltip = null;
+let topoNodeMap = {};
+let topoInitialized = false;
 
 function topoInit(container) {
   container.innerHTML = '';
@@ -24,14 +26,17 @@ function topoInit(container) {
   svg.call(topoZoom);
 
   topoSim = d3.forceSimulation()
-    .force('charge', d3.forceManyBody().strength(-400))
+    .force('charge', d3.forceManyBody().strength(-800))
     .force('link', d3.forceLink().id(d => d.id).distance(d => {
       const tq = d.tq != null ? d.tq : 128;
-      return 120 + ((255 - tq) / 255) * 200;
+      return 200 + ((255 - tq) / 255) * 250;
     }))
     .force('center', d3.forceCenter())
-    .force('collision', d3.forceCollide(50))
-    .alphaDecay(0.03);
+    .force('collision', d3.forceCollide(70))
+    .alphaDecay(0.05);
+
+  topoNodeMap = {};
+  topoInitialized = false;
 }
 
 function topoUpdate(data) {
@@ -45,10 +50,31 @@ function topoUpdate(data) {
 
   topoSim.force('center').x(W / 2).y(H / 2);
 
-  const nodes = data.nodes.map(n => ({
-    ...n,
-    r: n.is_me ? 16 : (n.is_gateway ? 13 : 10)
-  }));
+  // Preserve positions from previous frame
+  const nodes = data.nodes.map(n => {
+    const old = topoNodeMap[n.id];
+    const r = n.is_me ? 18 : (n.is_gateway ? 14 : 11);
+    const obj = { ...n, r: r };
+    if (old) {
+      obj.x = old.x;
+      obj.y = old.y;
+      obj.vx = old.vx;
+      obj.vy = old.vy;
+      if (old.fx != null) obj.fx = old.fx;
+      if (old.fy != null) obj.fy = old.fy;
+    }
+    if (n.is_me) { obj.fx = W / 2; obj.fy = H / 2; }
+    return obj;
+  });
+
+  // Track whether node set changed
+  const oldIds = Object.keys(topoNodeMap).sort().join(',');
+  const newIds = nodes.map(n => n.id).sort().join(',');
+  const setChanged = oldIds !== newIds;
+
+  // Update map for next round
+  topoNodeMap = {};
+  nodes.forEach(n => { topoNodeMap[n.id] = n; });
 
   const links = (data.edges || []).map(e => ({
     source: e.source,
@@ -62,7 +88,7 @@ function topoUpdate(data) {
   // Links
   const linkSel = g.select('.links')
     .selectAll('line')
-    .data(links, d => d.source + '-' + d.target);
+    .data(links, d => (d.source.id || d.source) + '-' + (d.target.id || d.target));
 
   linkSel.exit().remove();
 
@@ -70,7 +96,7 @@ function topoUpdate(data) {
 
   const linkAll = linkEnter.merge(linkSel)
     .attr('stroke', d => tqColor(d.tq))
-    .attr('stroke-width', d => d.type === 'direct' ? 2 : 1)
+    .attr('stroke-width', d => d.type === 'direct' ? 3 : 1.5)
     .attr('stroke-dasharray', d => {
       if (d.type === 'inferred') return '3,5';
       if (d.type === 'multihop') return '6,3';
@@ -97,8 +123,7 @@ function topoUpdate(data) {
 
   nodeEnter.append('text')
     .attr('text-anchor', 'middle')
-    .attr('dy', d => d.r + 14)
-    .style('font-size', '10px')
+    .style('font-size', '11px')
     .style('font-weight', '800')
     .style('font-family', 'Lato, Arial, sans-serif')
     .style('pointer-events', 'none');
@@ -108,7 +133,7 @@ function topoUpdate(data) {
   nodeAll.select('circle')
     .attr('r', d => d.r)
     .attr('fill', d => {
-      if (d.is_me) return isDarkTheme() ? '#00928f' : '#00928f';
+      if (d.is_me) return '#00928f';
       if (d.limp) return '#ef4444';
       if (d.state === 'SHUTTING_DOWN') return '#9aa4b2';
       return tqColor(d.tq);
@@ -121,6 +146,7 @@ function topoUpdate(data) {
 
   nodeAll.select('text')
     .text(d => d.hostname || d.id)
+    .attr('dy', d => d.r + 16)
     .attr('fill', () => isDarkTheme() ? '#f8f6ef' : '#02000d');
 
   // Tooltip
@@ -162,14 +188,18 @@ function topoUpdate(data) {
     })
   );
 
-  // Pin self node to center
-  nodes.forEach(n => {
-    if (n.is_me) { n.fx = W / 2; n.fy = H / 2; }
-  });
-
   topoSim.nodes(nodes);
   topoSim.force('link').links(links);
-  topoSim.alpha(0.6).restart();
+
+  // First render: full simulation. Updates: gentle reheat only if topology changed.
+  if (!topoInitialized) {
+    topoSim.alpha(0.8).restart();
+    topoInitialized = true;
+  } else if (setChanged) {
+    topoSim.alpha(0.3).restart();
+  } else {
+    topoSim.alpha(0.05).restart();
+  }
 
   topoSim.on('tick', () => {
     linkAll
@@ -185,4 +215,6 @@ function topoDestroy() {
   if (topoSim) { topoSim.stop(); topoSim = null; }
   topoSvg = null;
   topoTooltip = null;
+  topoNodeMap = {};
+  topoInitialized = false;
 }

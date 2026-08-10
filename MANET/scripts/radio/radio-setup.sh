@@ -666,6 +666,29 @@ cleanup_iface_service() {
 cleanup_iface_service 'wpa_supplicant@wlan*.service' "$current_mesh"
 cleanup_iface_service 'wpa_supplicant-s1g-wlan*.service' "$current_halow"
 cleanup_iface_service 'halow-txpower-wlan*.service' "$current_halow"
+cleanup_iface_service 'mesh-interface-setup@wlan*.service' "$current_mesh"
+
+# Remove orphan wpa_supplicant configs for interfaces no longer in any role
+all_active="$current_mesh $current_halow $(cat /var/lib/no_mesh_if 2>/dev/null | tr '\n' ' ')"
+for conf in /etc/wpa_supplicant/wpa_supplicant-wlan*.conf; do
+    [ -f "$conf" ] || continue
+    iface="$(basename "$conf" | sed -E 's/wpa_supplicant-(wlan[0-9]+).*/\1/')"
+    if ! echo " $all_active " | grep -q " $iface "; then
+        echo " > Removing orphan wpa config: $conf"
+        rm -f "$conf"
+        rm -f "${conf%.conf}-lobby.conf"
+    fi
+done
+
+# Remove orphan .link files for interfaces that don't exist
+for linkf in /etc/systemd/network/10-wlan*.link; do
+    [ -f "$linkf" ] || continue
+    iface="$(basename "$linkf" | sed -E 's/10-(wlan[0-9]+)\.link/\1/')"
+    if ! echo " $all_active " | grep -q " $iface "; then
+        echo " > Removing orphan link file: $linkf"
+        rm -f "$linkf"
+    fi
+done
 
 # Remove stale per-interface wpa_supplicant config files for interfaces that
 # don't currently hold a wireless role. mesh-boot-lobby.service blindly copies

@@ -1,19 +1,20 @@
-# RPi5 packaging
+# Packaging
 
-The source repository should keep universal MANET runtime files, while RPi5
-board-specific files are supplied as an external overlay during CI.
+The source repository keeps universal MANET runtime files, while board-specific
+files (kernel, modules, firmware) are supplied as an external overlay during CI.
 
 ## Inputs
 
 Universal files come from this repository:
 
-- `MANET/node_tools` -> `/usr/local/bin`
-- `MANET/binaries_arm64` -> `/usr/sbin`
+- `MANET/scripts/{core,elections,radio,network,system}` -> `/usr/local/bin`
+- `MANET/cmd/manet-ctrl/manet-ctrl` -> `/usr/local/bin/manet-ctrl`
+- `MANET/www` -> `/usr/local/share/manet/www`
+- `MANET/binaries_arm64` -> `/usr/sbin` + `/usr/local/bin`
 - `MANET/systemd` -> `/etc/systemd/system`
 - `MANET/systemd-network` -> `/etc/systemd/network`
 - `MANET/udev/rules.d` -> `/etc/udev/rules.d`
 - `MANET/networkd-dispatcher` -> dispatcher hook locations
-- `MANET/share/manet` -> `/usr/local/share/manet`
 - `MANET/etc` -> `/etc`
 - `MANET/root/regulatory.db` -> `/root/regulatory.db`
 
@@ -36,8 +37,8 @@ such as:
 - `usr/lib/modules/6.6.78-manet+/extra/morse/morse.ko`
 - `usr/lib/firmware/morse/bcf_*.bin`
 
-It should not contain universal scripts from `MANET/node_tools`, systemd units,
-network dispatcher hooks, dashboard files, or generated config from a live node.
+It should not contain universal scripts, systemd units, network dispatcher
+hooks, dashboard files, or generated config from a live node.
 
 ## Output
 

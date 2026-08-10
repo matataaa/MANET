@@ -330,7 +330,7 @@ func getInterfaces() []Iface {
 			iface.TxPowerDBM = iw.TxPower
 		}
 
-		// Classify role
+		// Classify role — AP check must precede batSlaves so no_mesh_if wins
 		switch {
 		case name == "bat0":
 			iface.Role = "bat"
@@ -344,6 +344,22 @@ func getInterfaces() []Iface {
 			iface.Role = "bridge"
 			iface.Health = "info"
 			iface.Detail = "Network bridge"
+		case noMeshIfaces[name]:
+			iface.Role = "ap"
+			iface.Detail = "Access point"
+			hostapdUp := isUnitActive("hostapd")
+			if state == "DOWN" || state == "UNKNOWN" {
+				if hostapdUp {
+					iface.Health = "warn"
+					iface.Faults = append(iface.Faults, "DOWN but hostapd running")
+				} else {
+					iface.Health = "info"
+					iface.Detail = "Access point (inactive)"
+				}
+			} else if !hostapdUp {
+				iface.Health = "warn"
+				iface.Faults = append(iface.Faults, "hostapd not running")
+			}
 		case batSlaves[name] != "":
 			iface.Role = "mesh"
 			iface.Detail = "Mesh radio"
@@ -358,9 +374,6 @@ func getInterfaces() []Iface {
 				iface.Health = "warn"
 				iface.Faults = append(iface.Faults, "No wpa_supplicant")
 			}
-		case noMeshIfaces[name]:
-			iface.Role = "ap"
-			iface.Detail = "Access point"
 		case strings.HasPrefix(name, "end") || strings.HasPrefix(name, "eth") ||
 			strings.HasPrefix(name, "enp") || strings.HasPrefix(name, "ens"):
 			hasDefault := false
@@ -405,6 +418,11 @@ func getInterfaces() []Iface {
 
 	sortIfaces(ifaces)
 	return ifaces
+}
+
+func isUnitActive(unit string) bool {
+	err := exec.Command("systemctl", "is-active", "--quiet", unit).Run()
+	return err == nil
 }
 
 func parseIWDev() map[string]iwDev {
@@ -764,6 +782,11 @@ var serviceRegistry = []serviceEntry{
 	{"syncthing", "Syncthing", []string{"syncthing"}, "application", []string{"start", "stop", "restart"}, "File synchronisation"},
 	{"gps-reader", "GPS Reader", []string{"gps-reader"}, "system", []string{"start", "stop", "restart"}, "GPS position tracking"},
 	{"gateway-route", "Gateway Route Manager", []string{"gateway-route-manager"}, "network", []string{"restart"}, "Mesh gateway routing"},
+	{"sae-watchdog", "SAE Watchdog", []string{"sae-watchdog"}, "network", []string{"start", "stop", "restart"}, "Mesh auth health monitor"},
+	{"battery-reader", "Battery Reader", []string{"battery-reader"}, "system", []string{"start", "stop", "restart"}, "Battery level monitor"},
+	{"cot-emitter", "CoT Emitter", []string{"cot-emitter"}, "system", []string{"start", "stop", "restart"}, "Cursor-on-Target position broadcast"},
+	{"manet-txpower", "TX Power Manager", []string{"manet-txpower"}, "radio", []string{"start", "stop", "restart"}, "Transmit power management"},
+	{"mesh-boot-lobby", "Boot Lobby", []string{"mesh-boot-lobby"}, "core", []string{"start", "stop", "restart"}, "Mesh boot coordination"},
 }
 
 func unitStatus(unit string) map[string]string {

@@ -12,7 +12,9 @@
 <link rel="stylesheet" href="/css/perf.css">
 <link rel="stylesheet" href="/css/services.css">
 <link rel="stylesheet" href="/css/mesh.css">
+<link rel="stylesheet" href="/css/hardware.css">
 <link rel="stylesheet" href="/css/terminal.css">
+<link rel="stylesheet" href="/css/docs.css">
 <link rel="stylesheet" href="/vendor/xterm.css">
 </head>
 <body>
@@ -29,11 +31,13 @@
       <a href="#dashboard" class="tab active" data-tab="dashboard">Dashboard</a>
       <a href="#nodes" class="tab" data-tab="nodes">Nodes</a>
       <a href="#config" class="tab" data-tab="config">Config</a>
+      <a href="#hardware" class="tab" data-tab="hardware">Hardware</a>
       <a href="#voice" class="tab" data-tab="voice">Voice</a>
       <a href="#perf" class="tab" data-tab="perf">Perf</a>
       <a href="#services" class="tab" data-tab="services">Services</a>
       <a href="#mesh" class="tab" data-tab="mesh">Mesh</a>
       <a href="#terminal" class="tab" data-tab="terminal">Terminal</a>
+      <a href="#docs" class="tab" data-tab="docs">Docs</a>
     </nav>
     <div id="hdr-right">
       <div id="hdr-health" class="health-loading">
@@ -55,11 +59,13 @@
     <section id="tab-dashboard" class="tab-panel active"></section>
     <section id="tab-nodes" class="tab-panel"></section>
     <section id="tab-config" class="tab-panel"></section>
+    <section id="tab-hardware" class="tab-panel"></section>
     <section id="tab-voice" class="tab-panel"></section>
     <section id="tab-perf" class="tab-panel"></section>
     <section id="tab-services" class="tab-panel"></section>
     <section id="tab-mesh" class="tab-panel"></section>
     <section id="tab-terminal" class="tab-panel"></section>
+    <section id="tab-docs" class="tab-panel"></section>
   </main>
 </div>
 <script src="/vendor/d3.min.js"></script>
@@ -71,8 +77,10 @@
 <script src="/js/config.js"></script>
 <script src="/js/voice.js"></script>
 <script src="/js/perf.js"></script>
+<script src="/js/hardware.js"></script>
 <script src="/js/services.js"></script>
 <script src="/js/mesh.js"></script>
+<script src="/js/docs.js"></script>
 <script src="/vendor/xterm.min.js"></script>
 <script src="/vendor/xterm-addon-fit.min.js"></script>
 <script src="/js/terminal.js"></script>

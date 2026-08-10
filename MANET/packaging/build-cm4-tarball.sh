@@ -62,21 +62,34 @@ install_file() {
 
 mkdir -p "$STAGE/usr/local/bin" "$STAGE/usr/sbin" "$STAGE/etc/systemd/system"
 
-install_tree "$REPO_ROOT/MANET/node_tools"      "$STAGE/usr/local/bin"
+# Scripts — all subdirs flatten into /usr/local/bin on the node
+for subdir in core elections radio network system; do
+    install_tree "$REPO_ROOT/MANET/scripts/$subdir" "$STAGE/usr/local/bin"
+done
 chmod -R a+rX "$STAGE/usr/local/bin"
 find "$STAGE/usr/local/bin" -type f \
     \( -name '*.sh' -o -name '*.py' -o -name 'morse_cli' -o -name 'chronyc' \) \
     -exec chmod 0755 {} +
 
+# Go binary + service
+install_file 0755 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl" "$STAGE/usr/local/bin/manet-ctrl"
+install_file 0644 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl.service" "$STAGE/etc/systemd/system/manet-ctrl.service"
+
+# Pre-built arm64 binaries
 install_file 0755 "$REPO_ROOT/MANET/binaries_arm64/alfred"             "$STAGE/usr/sbin/alfred"
 install_file 0755 "$REPO_ROOT/MANET/binaries_arm64/batctl"             "$STAGE/usr/sbin/batctl"
 install_file 0755 "$REPO_ROOT/MANET/binaries_arm64/wpa_cli_s1g"        "$STAGE/usr/sbin/wpa_cli_s1g"
 install_file 0755 "$REPO_ROOT/MANET/binaries_arm64/wpa_supplicant_s1g" "$STAGE/usr/sbin/wpa_supplicant_s1g"
+install_file 0755 "$REPO_ROOT/MANET/binaries_arm64/morse_cli"          "$STAGE/usr/local/bin/morse_cli"
+install_file 0755 "$REPO_ROOT/MANET/binaries_arm64/chronyc"            "$STAGE/usr/local/bin/chronyc"
 
+# Web frontend
+install_tree "$REPO_ROOT/MANET/www"             "$STAGE/usr/local/share/manet/www"
+
+# System config
 install_tree "$REPO_ROOT/MANET/systemd"         "$STAGE/etc/systemd/system"
 install_tree "$REPO_ROOT/MANET/systemd-network" "$STAGE/etc/systemd/network"
 install_tree "$REPO_ROOT/MANET/udev/rules.d"    "$STAGE/etc/udev/rules.d"
-install_tree "$REPO_ROOT/MANET/share/manet"     "$STAGE/usr/local/share/manet"
 install_tree "$REPO_ROOT/MANET/etc"             "$STAGE/etc"
 
 install_file 0644 "$REPO_ROOT/MANET/root/regulatory.db" "$STAGE/root/regulatory.db"

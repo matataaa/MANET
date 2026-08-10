@@ -22,18 +22,20 @@ function onTabActivated(tab) {
   if (tab === 'dashboard') dashboardActivate();
   else if (tab === 'nodes') nodesActivate();
   else if (tab === 'config') configActivate();
+  else if (tab === 'hardware') hardwareActivate();
   else if (tab === 'voice') voiceActivate();
   else if (tab === 'perf') perfActivate();
   else if (tab === 'services') servicesActivate();
   else if (tab === 'mesh') meshActivate();
   else if (tab === 'terminal') terminalActivate();
+  else if (tab === 'docs') docsActivate();
 }
 
 // Hash routing
 function routeFromHash() {
   if (!booted) return;
   const hash = window.location.hash.replace('#', '') || 'dashboard';
-  const valid = ['dashboard', 'nodes', 'config', 'voice', 'perf', 'services', 'mesh', 'terminal'];
+  const valid = ['dashboard', 'nodes', 'config', 'hardware', 'voice', 'perf', 'services', 'mesh', 'terminal', 'docs'];
   switchTab(valid.includes(hash) ? hash : 'dashboard');
 }
 
@@ -100,6 +102,11 @@ function updateHeader() {
     dot.style.background = dotColor;
     label.textContent = text;
     label.style.color = dotColor;
+    hdr.style.cursor = (faults.length || warns.length) ? 'pointer' : '';
+    hdr.title = (faults.length || warns.length)
+      ? faults.concat(warns).map(i => i.name + ': ' + (i.faults||[]).join(', ')).join('\n')
+      : '';
+    hdr.onclick = (faults.length || warns.length) ? function() { location.hash = '#mesh'; } : null;
   }
 }
 
