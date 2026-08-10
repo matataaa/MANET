@@ -7,13 +7,13 @@ function hardwareActivate() {
     panel.innerHTML =
       '<div class="hw-wrap">' +
         '<div class="svc-bar"><button class="cfg-btn" id="hw-refresh">Refresh</button></div>' +
-        '<h3 class="svc-cat-title">RADIOS</h3>' +
+        '<h3 class="hw-section-title">RADIOS</h3>' +
         '<div id="hw-radios" class="svc-grid"></div>' +
-        '<h3 class="svc-cat-title">NETWORK INTERFACES</h3>' +
+        '<h3 class="hw-section-title">NETWORK INTERFACES</h3>' +
         '<div id="hw-ifaces" class="svc-grid"></div>' +
-        '<h3 class="svc-cat-title">GPS</h3>' +
+        '<h3 class="hw-section-title">GPS</h3>' +
         '<div id="hw-gps" class="svc-grid"></div>' +
-        '<h3 class="svc-cat-title">SYSTEM</h3>' +
+        '<h3 class="hw-section-title">SYSTEM</h3>' +
         '<div id="hw-system" class="svc-grid"></div>' +
       '</div>';
     document.getElementById('hw-refresh').addEventListener('click', hardwareUpdate);
@@ -83,8 +83,8 @@ function hwRenderIfaces() {
 
   el.innerHTML = ifaces.map(function(i) {
     var dot = i.health === 'ok' ? 'dot-ok' : i.health === 'fault' ? 'dot-bad' : i.health === 'warn' ? 'dot-warn' : 'dot-info';
-    var stateUp = i.state === 'UP' || i.state === 'UNKNOWN';
-    var badge = stateUp ? '<span class="hw-badge hw-badge-up">' + escHtml(i.state) + '</span>' :
+    var badge = i.state === 'UP' ? '<span class="hw-badge hw-badge-up">UP</span>' :
+                i.state === 'UNKNOWN' ? '<span class="hw-badge hw-badge-unknown">UNKNOWN</span>' :
                 '<span class="hw-badge hw-badge-down">' + escHtml(i.state || '?') + '</span>';
     var rows = hwRow('Role', hwRoleLabel(i.role));
     if (i.addrs && i.addrs.length) rows += hwRow('Addresses', i.addrs.map(escHtml).join('<br>'));
@@ -101,7 +101,7 @@ function hwRenderGPS() {
   var gps = LOCAL_DATA.gps;
   var hasFix = gps && gps.available;
   var dot = hasFix ? 'dot-ok' : 'dot-warn';
-  var badge = hasFix ? '<span class="svc-badge svc-badge-running">FIX</span>' : '<span class="svc-badge svc-badge-stopped">NO FIX</span>';
+  var badge = hasFix ? '<span class="hw-badge hw-badge-up">FIX</span>' : '<span class="hw-badge hw-badge-down">NO FIX</span>';
 
   var rows = '';
   if (hasFix) {

@@ -76,7 +76,8 @@ function topoUpdate(data) {
   topoNodeMap = {};
   nodes.forEach(n => { topoNodeMap[n.id] = n; });
 
-  const links = (data.edges || []).map(e => ({
+  const nodeIds = new Set(nodes.map(n => n.id));
+  const links = (data.edges || []).filter(e => nodeIds.has(e.source) && nodeIds.has(e.target)).map(e => ({
     source: e.source,
     target: e.target,
     type: e.type,
