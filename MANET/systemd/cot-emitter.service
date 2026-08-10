@@ -1,0 +1,16 @@
+[Unit]
+Description=CoT SA emitter — GPS to ATAK EUDs
+After=gps-reader.service
+Wants=gps-reader.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/cot-emitter.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cot-emitter
+
+[Install]
+WantedBy=multi-user.target

@@ -7,6 +7,7 @@ export PATH="/usr/sbin:/sbin:/usr/bin:/bin:${PATH:-}"
 
 NETDIR=/etc/systemd/network
 declare -A mac_to_target=()
+declare -A pre_rename_mac=()
 
 read_mac() {
     tr '[:upper:]' '[:lower:]' <"/sys/class/net/$1/address" 2>/dev/null
@@ -127,12 +128,15 @@ remap_lines_by_mac() {
     [[ -f "$f" ]] || return 0
     while read -r line; do
         [[ -z "${line//[$'\t\r\n ']}" ]] && continue
-        if [[ ! -e "/sys/class/net/$line" ]]; then
+        if [[ -e "/sys/class/net/$line" ]]; then
+            m=$(read_mac "$line")
+        elif [[ -n "${pre_rename_mac[$line]:-}" ]]; then
+            m="${pre_rename_mac[$line]}"
+        else
             lines+=("$line")
             continue
         fi
-        m=$(read_mac "$line")
-        new=$(iface_for_mac "$m") || return 1
+        new=$(iface_for_mac "$m") || { lines+=("$line"); continue; }
         lines+=("$new")
     done <"$f"
     [[ ${#lines[@]} -eq 0 ]] && return 0
@@ -144,8 +148,13 @@ remap_single_line() {
     [[ -f "$f" ]] || return 0
     line=$(head -1 "$f" | tr -d '\r')
     [[ -z "${line// }" ]] && return 0
-    [[ -e "/sys/class/net/$line" ]] || return 0
-    m=$(read_mac "$line")
+    if [[ -e "/sys/class/net/$line" ]]; then
+        m=$(read_mac "$line")
+    elif [[ -n "${pre_rename_mac[$line]:-}" ]]; then
+        m="${pre_rename_mac[$line]}"
+    else
+        return 0
+    fi
     new=$(iface_for_mac "$m") || return 1
     printf '%s\n' "$new" >"${f}.manet-new" && mv "${f}.manet-new" "$f"
 }
@@ -153,18 +162,24 @@ remap_single_line() {
 remap_iface_map() {
     local f=/var/lib/iface_map
     [[ -f "$f" ]] || return 0
-    local out=() left right nl nr
+    local out=() left right nl nr m
     while IFS= read -r line; do
         [[ -z "${line// }" ]] && continue
         left="${line%%:*}"
         right="${line#*:}"
         if [[ -e "/sys/class/net/$left" ]]; then
             nl=$(iface_for_mac "$(read_mac "$left")") || return 1
+        elif [[ -n "${pre_rename_mac[$left]:-}" ]]; then
+            m="${pre_rename_mac[$left]}"
+            nl=$(iface_for_mac "$m") || nl="$left"
         else
             nl="$left"
         fi
         if [[ -e "/sys/class/net/$right" ]]; then
             nr=$(iface_for_mac "$(read_mac "$right")") || return 1
+        elif [[ -n "${pre_rename_mac[$right]:-}" ]]; then
+            m="${pre_rename_mac[$right]}"
+            nr=$(iface_for_mac "$m") || nr="$right"
         else
             nr="$right"
         fi
@@ -191,6 +206,14 @@ if [[ ${#mac_to_target[@]} -eq 0 ]]; then
 fi
 
 wait_for_macs
+
+# Snapshot name→MAC before renaming so remap functions can resolve old names
+for _d in /sys/class/net/wlan[0-9]*; do
+    [[ -d "$_d" ]] || continue
+    _dev=$(basename "$_d")
+    pre_rename_mac["$_dev"]=$(read_mac "$_dev")
+done
+
 apply_renames || exit 1
 
 remap_lines_by_mac /var/lib/mesh_if || exit 1
