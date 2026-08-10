@@ -850,7 +850,7 @@ cat <<-EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf
 ctrl_interface=/var/run/wpa_supplicant
 country=$CFG80211_REGDOM
 update_config=1
-sae_pwe=2
+sae_pwe=0
 ap_scan=2
 network={
     ssid="$MESH_NAME"
@@ -1090,7 +1090,7 @@ EOF
 cat << EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-s1g.conf
 country="US"
 ctrl_interface=/var/run/wpa_supplicant_s1g
-sae_pwe=2
+sae_pwe=0
 max_peer_links=10
 mesh_fwding=0
 network={
@@ -1124,7 +1124,7 @@ EOF
 cat << EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-s1g.conf
 country="$HALOW_REGULATORY_DOMAIN"
 ctrl_interface=/var/run/wpa_supplicant_s1g
-sae_pwe=2
+sae_pwe=0
 max_peer_links=10
 mesh_fwding=0
 network={
