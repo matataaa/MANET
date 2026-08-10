@@ -55,6 +55,7 @@ func assembleLocalData() LocalData {
 	}
 
 	gps := getGPS(myReg)
+	throttle := getThrottle()
 
 	return LocalData{
 		Hostname:   hostname,
@@ -69,6 +70,7 @@ func assembleLocalData() LocalData {
 		EUDMode:    confGet(conf, "eud", "wired"),
 		APSSID:     conf["lan_ap_ssid"],
 		MeshSSID:   conf["mesh_ssid"],
+		Throttle:   throttle,
 	}
 }
 

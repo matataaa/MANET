@@ -69,6 +69,11 @@
 .tq-bar-wrap { margin-top: 6px; height: 5px; background: var(--border2); border-radius: 999px; overflow: hidden; }
 .tq-bar { height: 100%; border-radius: 2px; transition: width .5s; }
 
+/* Throttle/undervoltage banner */
+.throttle-banner { grid-column: 1 / -1; padding: 10px 16px; border-radius: 10px; font-size: 12px; font-weight: 700; display: flex; flex-direction: column; gap: 2px; }
+.throttle-active { background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.3); color: var(--bad); }
+.throttle-past { background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.25); color: var(--warn); }
+
 @media (max-width: 768px) {
   #tab-dashboard.active {
     grid-template-columns: 1fr;

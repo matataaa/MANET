@@ -168,6 +168,33 @@ func getBattery() *BatteryInfo {
 	return nil
 }
 
+func getThrottle() *ThrottleInfo {
+	out, err := runCmdStdout(3*time.Second, "vcgencmd", "get_throttled")
+	if err != nil {
+		return nil
+	}
+	parts := strings.SplitN(strings.TrimSpace(out), "=", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	raw := strings.TrimSpace(parts[1])
+	val, err := strconv.ParseUint(strings.TrimPrefix(raw, "0x"), 16, 64)
+	if err != nil {
+		return nil
+	}
+	return &ThrottleInfo{
+		Raw:           raw,
+		Undervoltage:  val&0x1 != 0,
+		FreqCapped:    val&0x2 != 0,
+		Throttled:     val&0x4 != 0,
+		SoftTempLimit: val&0x8 != 0,
+		WasUndervolt:  val&0x10000 != 0,
+		WasFreqCapped: val&0x20000 != 0,
+		WasThrottled:  val&0x40000 != 0,
+		WasSoftTemp:   val&0x80000 != 0,
+	}
+}
+
 func getUptime() string {
 	data, err := os.ReadFile("/proc/uptime")
 	if err != nil {

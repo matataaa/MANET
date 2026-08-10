@@ -24,6 +24,32 @@ function dashboardUpdate() {
   if (el) el.style.display = 'none';
   topoUpdate(DATA);
   renderDashNodeList(DATA.nodes);
+  renderThrottleWarning();
+}
+
+function renderThrottleWarning() {
+  var existing = document.getElementById('dash-throttle');
+  if (existing) existing.remove();
+  if (!LOCAL_DATA || !LOCAL_DATA.throttle) return;
+  var t = LOCAL_DATA.throttle;
+  var warnings = [];
+  if (t.undervoltage) warnings.push('UNDERVOLTAGE DETECTED — power supply insufficient');
+  else if (t.was_undervoltage) warnings.push('Undervoltage occurred since boot — check power supply');
+  if (t.throttled) warnings.push('CPU THROTTLED — reduce load or improve cooling/power');
+  else if (t.was_throttled) warnings.push('CPU was throttled since boot');
+  if (t.freq_capped) warnings.push('CPU frequency capped — thermal or power limit');
+  else if (t.was_freq_capped) warnings.push('CPU frequency was capped since boot');
+  if (t.soft_temp_limit) warnings.push('Soft temperature limit active');
+  else if (t.was_soft_temp_limit) warnings.push('Soft temperature limit occurred since boot');
+  if (!warnings.length) return;
+  var active = t.undervoltage || t.throttled || t.freq_capped || t.soft_temp_limit;
+  var cls = active ? 'throttle-banner throttle-active' : 'throttle-banner throttle-past';
+  var panel = document.getElementById('tab-dashboard');
+  var banner = document.createElement('div');
+  banner.id = 'dash-throttle';
+  banner.className = cls;
+  banner.innerHTML = warnings.map(function(w) { return '<div>' + escHtml(w) + '</div>'; }).join('');
+  panel.insertBefore(banner, panel.firstChild);
 }
 
 function renderDashNodeList(nodes) {

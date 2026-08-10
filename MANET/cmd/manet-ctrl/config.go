@@ -126,6 +126,18 @@ type StatusData struct {
 	Timestamp    int64             `json:"timestamp"`
 }
 
+type ThrottleInfo struct {
+	Raw            string `json:"raw"`
+	Undervoltage   bool   `json:"undervoltage"`
+	FreqCapped     bool   `json:"freq_capped"`
+	Throttled      bool   `json:"throttled"`
+	SoftTempLimit  bool   `json:"soft_temp_limit"`
+	WasUndervolt   bool   `json:"was_undervoltage"`
+	WasFreqCapped  bool   `json:"was_freq_capped"`
+	WasThrottled   bool   `json:"was_throttled"`
+	WasSoftTemp    bool   `json:"was_soft_temp_limit"`
+}
+
 type LocalData struct {
 	Hostname   string            `json:"hostname"`
 	IP         string            `json:"ip"`
@@ -139,6 +151,7 @@ type LocalData struct {
 	EUDMode    string            `json:"eud_mode"`
 	APSSID     string            `json:"ap_ssid"`
 	MeshSSID   string            `json:"mesh_ssid"`
+	Throttle   *ThrottleInfo     `json:"throttle,omitempty"`
 }
 
 type BatOriginator struct {

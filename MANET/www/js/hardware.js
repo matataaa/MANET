@@ -136,7 +136,27 @@ function hwRenderSystem() {
     rows += hwRow('Battery', 'Not detected');
   }
 
+  var t = LOCAL_DATA.throttle;
+  if (t) {
+    var flags = [];
+    if (t.undervoltage) flags.push('<span style="color:var(--bad);font-weight:700">UNDERVOLTAGE NOW</span>');
+    else if (t.was_undervoltage) flags.push('<span style="color:var(--warn)">Undervoltage since boot</span>');
+    if (t.throttled) flags.push('<span style="color:var(--bad);font-weight:700">THROTTLED NOW</span>');
+    else if (t.was_throttled) flags.push('<span style="color:var(--warn)">Throttled since boot</span>');
+    if (t.freq_capped) flags.push('<span style="color:var(--bad)">Freq capped</span>');
+    else if (t.was_freq_capped) flags.push('<span style="color:var(--warn)">Freq was capped</span>');
+    if (t.soft_temp_limit) flags.push('<span style="color:var(--warn)">Soft temp limit</span>');
+    else if (t.was_soft_temp_limit) flags.push('<span style="color:var(--muted)">Soft temp limit occurred</span>');
+    if (flags.length) {
+      rows += hwRow('Power/Thermal', flags.join(', '));
+    } else {
+      rows += hwRow('Power/Thermal', '<span style="color:var(--good)">OK</span>');
+    }
+    rows += hwRow('Throttle Raw', '<span style="font-family:monospace">' + escHtml(t.raw) + '</span>');
+  }
+
+  var sysDot = (t && (t.undervoltage || t.throttled)) ? 'dot-bad' : (t && (t.was_undervoltage || t.was_throttled)) ? 'dot-warn' : 'dot-ok';
   el.innerHTML = '<div class="svc-card svc-card-wide">' +
-    '<div class="svc-header"><span class="dot-ok"></span><span class="svc-name">Node Info</span></div>' +
+    '<div class="svc-header"><span class="' + sysDot + '"></span><span class="svc-name">Node Info</span></div>' +
     '<div class="hw-details">' + rows + '</div></div>';
 }
