@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -23,6 +25,11 @@ const (
 	systemdDir    = "/etc/systemd/system"
 	maxUploadSize = 50 << 20 // 50 MB
 )
+
+type appletDNSRecord struct {
+	Name  string `json:"name"`
+	Scope string `json:"scope"`
+}
 
 type appletManifest struct {
 	Name        string `json:"name"`
@@ -44,6 +51,39 @@ type appletManifest struct {
 		Page string `json:"page"`
 		File string `json:"file"`
 	} `json:"config"`
+	DNS []appletDNSRecord `json:"dns,omitempty"`
+}
+
+func collectAppletDNS(myIP, myHostname string) []map[string]interface{} {
+	var records []map[string]interface{}
+	entries, err := os.ReadDir(appletsDir)
+	if err != nil {
+		return records
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		m := loadManifest(e.Name())
+		if m == nil || len(m.DNS) == 0 {
+			continue
+		}
+		svc := m.Backend.Service
+		if svc == "" {
+			svc = m.Name + ".service"
+		}
+		running := exec.Command("systemctl", "is-active", "--quiet", svc).Run() == nil
+		for _, d := range m.DNS {
+			records = append(records, map[string]interface{}{
+				"name":   d.Name,
+				"ip":     myIP,
+				"type":   d.Scope,
+				"source": m.Label,
+				"stale":  !running,
+			})
+		}
+	}
+	return records
 }
 
 func loadManifest(name string) *appletManifest {
@@ -403,6 +443,7 @@ func apiAppletUninstall(w http.ResponseWriter, r *http.Request, name string) {
 	os.Remove(filepath.Join(systemdDir, svc))
 	os.RemoveAll(filepath.Join(appletsDir, name))
 	exec.Command("systemctl", "daemon-reload").Run()
+	go refreshMeshDNS()
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "removed": name})
 }
 
@@ -501,6 +542,7 @@ func apiAppletInstall(w http.ResponseWriter, r *http.Request) {
 	exec.Command("systemctl", "daemon-reload").Run()
 	systemctl("enable", svc)
 	systemctl("start", svc)
+	go refreshMeshDNS()
 
 	writeJSON(w, 200, map[string]interface{}{
 		"ok":        true,
@@ -668,4 +710,56 @@ func copyFile(src, dst string) error {
 		os.Chmod(dst, info.Mode())
 	}
 	return nil
+}
+
+func refreshMeshDNS() {
+	exec.Command("systemctl", "restart", "mesh-manager").Run()
+}
+
+func appletHostRedirect(next http.Handler) http.Handler {
+	var mu sync.Mutex
+	var dnsMap map[string]string
+	var lastLoad time.Time
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := strings.Split(r.Host, ":")[0]
+
+		if strings.HasSuffix(host, ".mesh") && r.URL.Path == "/" {
+			mu.Lock()
+			if dnsMap == nil || time.Since(lastLoad) > 30*time.Second {
+				dnsMap = appletDNSMap()
+				lastLoad = time.Now()
+			}
+			applet := dnsMap[host]
+			mu.Unlock()
+
+			if applet != "" {
+				http.Redirect(w, r, "/applets/"+applet+"/frontend/", http.StatusFound)
+				return
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func appletDNSMap() map[string]string {
+	m := make(map[string]string)
+	entries, err := os.ReadDir(appletsDir)
+	if err != nil {
+		return m
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		manifest := loadManifest(e.Name())
+		if manifest == nil || len(manifest.DNS) == 0 {
+			continue
+		}
+		for _, d := range manifest.DNS {
+			m[d.Name] = e.Name()
+		}
+	}
+	return m
 }

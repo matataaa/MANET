@@ -25,6 +25,13 @@
 .mesh-empty {
   padding: 16px; color: var(--muted); font-size: 12px; text-align: center;
 }
+.mesh-node-sub {
+  font-size: 10px; color: var(--muted); font-family: monospace;
+  margin-top: 1px;
+}
+.mesh-seen-ok { font-size: 10px; color: var(--good); }
+.mesh-seen-warn { font-size: 10px; color: var(--warn); }
+.mesh-seen-stale { font-size: 10px; color: var(--bad); }
 
 @media (max-width: 768px) {
   .mesh-grid { grid-template-columns: 1fr; }

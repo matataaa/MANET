@@ -7,7 +7,7 @@ Wants=gpsd.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/gps-reader.py
+ExecStart=/usr/local/bin/gps-reader
 Restart=always
 RestartSec=10
 StandardOutput=journal

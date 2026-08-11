@@ -290,6 +290,8 @@ func main() {
 	// Static files (SPA fallback)
 	mux.HandleFunc("/", serveStatic(*webRoot))
 
+	handler := appletHostRedirect(mux)
+
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -304,7 +306,7 @@ func main() {
 		go func() {
 			tlsSrv := &http.Server{
 				Addr:    ":" + *tlsPort,
-				Handler: mux,
+				Handler: handler,
 				TLSConfig: &tls.Config{
 					MinVersion: tls.VersionTLS12,
 				},
@@ -317,5 +319,5 @@ func main() {
 	}
 
 	log.Printf("manet-ctrl listening on :%s webroot=%s", *port, *webRoot)
-	log.Fatal(http.ListenAndServe(":"+*port, mux))
+	log.Fatal(http.ListenAndServe(":"+*port, handler))
 }

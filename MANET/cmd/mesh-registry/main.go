@@ -49,6 +49,15 @@ type NodeInfo struct {
 	IsLimp       string `json:"is_limp"`
 	Timestamp    string `json:"timestamp"`
 	Applets      string `json:"applets,omitempty"`
+	HalowTxMCS   string `json:"halow_tx_mcs,omitempty"`
+	HalowRxMCS   string `json:"halow_rx_mcs,omitempty"`
+	HalowMCSPeer string `json:"halow_mcs_peer,omitempty"`
+	Wifi24TxMCS  string `json:"wifi_24_tx_mcs,omitempty"`
+	Wifi24RxMCS  string `json:"wifi_24_rx_mcs,omitempty"`
+	Wifi5TxMCS   string `json:"wifi_5_tx_mcs,omitempty"`
+	Wifi5RxMCS   string `json:"wifi_5_rx_mcs,omitempty"`
+	TQAverage    string `json:"tq_average,omitempty"`
+	SyncthingID  string `json:"syncthing_id,omitempty"`
 }
 
 func main() {
@@ -91,6 +100,8 @@ func collectLocal() NodeInfo {
 	isGW, gwIface := getGatewayInfo()
 	gpsLat, gpsLon, gpsAlt := getGPS()
 
+	mcs := collectMCS()
+
 	return NodeInfo{
 		Hostname:     hostname,
 		MAC:          mac,
@@ -112,6 +123,14 @@ func collectLocal() NodeInfo {
 		IsLimp:       boolStr(fileExists("/var/run/mesh_limp_mode")),
 		Timestamp:    fmt.Sprintf("%d", time.Now().Unix()),
 		Applets:      scanApplets(),
+		HalowTxMCS:   mcs["WLAN2_TX_MCS"],
+		HalowRxMCS:   mcs["WLAN2_RX_MCS"],
+		HalowMCSPeer: mcs["WLAN2_MCS_PEER"],
+		Wifi24TxMCS:  mcs["WLAN0_TX_MCS"],
+		Wifi24RxMCS:  mcs["WLAN0_RX_MCS"],
+		Wifi5TxMCS:   mcs["WLAN1_TX_MCS"],
+		Wifi5RxMCS:   mcs["WLAN1_RX_MCS"],
+		TQAverage:    getTQAverage(),
 	}
 }
 
@@ -206,6 +225,15 @@ func writeNode(b *strings.Builder, n NodeInfo) {
 	w("LAST_SEEN_TIMESTAMP", n.Timestamp)
 	w("NODE_STATE", "ACTIVE")
 	w("APPLETS", n.Applets)
+	w("HALOW_TX_MCS", n.HalowTxMCS)
+	w("HALOW_RX_MCS", n.HalowRxMCS)
+	w("HALOW_MCS_PEER", n.HalowMCSPeer)
+	w("WIFI_24_TX_MCS", n.Wifi24TxMCS)
+	w("WIFI_24_RX_MCS", n.Wifi24RxMCS)
+	w("WIFI_5_TX_MCS", n.Wifi5TxMCS)
+	w("WIFI_5_RX_MCS", n.Wifi5RxMCS)
+	w("TQ_AVERAGE", n.TQAverage)
+	w("SYNCTHING_ID", n.SyncthingID)
 	fmt.Fprintln(b)
 }
 
@@ -402,6 +430,46 @@ func boolStr(b bool) string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func collectMCS() map[string]string {
+	result := make(map[string]string)
+	for _, iface := range []string{"wlan0", "wlan1", "wlan2"} {
+		if !fileExists("/sys/class/net/" + iface) {
+			continue
+		}
+		out, err := exec.Command("/usr/local/bin/halow-mcs-summary", "--iface", iface, "--shell").Output()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			if k, v, ok := strings.Cut(line, "="); ok {
+				result[k] = strings.Trim(v, "'")
+			}
+		}
+	}
+	return result
+}
+
+func getTQAverage() string {
+	out, err := exec.Command("/usr/sbin/batctl", "o").Output()
+	if err != nil {
+		return "0"
+	}
+	var sum, count float64
+	for _, line := range strings.Split(string(out), "\n")[1:] {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 {
+			if v, err := strconv.ParseFloat(strings.Trim(fields[2], "()"), 64); err == nil {
+				sum += v
+				count++
+			}
+		}
+	}
+	if count > 0 {
+		return fmt.Sprintf("%.2f", sum/count)
+	}
+	return "0"
 }
 
 func loadKV(path string) map[string]string {

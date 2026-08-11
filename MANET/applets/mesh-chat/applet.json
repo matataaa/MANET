@@ -17,5 +17,8 @@
   "config": {
     "page": "config.html",
     "file": "/etc/mesh-chat.conf"
-  }
+  },
+  "dns": [
+    {"name": "chat.mesh", "scope": "local"}
+  ]
 }

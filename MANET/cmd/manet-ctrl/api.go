@@ -253,11 +253,34 @@ func apiServices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"services": getAllServices()})
 }
 
+func meshMACLookup() map[string]map[string]string {
+	lookup := make(map[string]map[string]string)
+	reg := parseRegistry()
+	for _, node := range reg {
+		info := map[string]string{
+			"hostname":  node["HOSTNAME"],
+			"ip":        node["IPV4_ADDRESS"],
+			"last_seen": node["LAST_SEEN_TIMESTAMP"],
+		}
+		if mac := normMAC(node["MAC_ADDRESS"]); mac != "" {
+			lookup[mac] = info
+		}
+		for _, mac := range strings.Split(node["MAC_ADDRESSES"], ",") {
+			mac = normMAC(mac)
+			if mac != "" {
+				lookup[mac] = info
+			}
+		}
+	}
+	return lookup
+}
+
 func apiMesh(w http.ResponseWriter, r *http.Request) {
 	_, origMap := runBatctlOriginators()
 	neighbors := runBatctlNeighbors()
 	gateways := runBatctlGateways()
 	conf := loadKVFile(MeshConfFile)
+	macInfo := meshMACLookup()
 
 	bat0 := map[string]string{"state": "unknown", "algo": "", "gw_mode": ""}
 	var bat0Addrs []string
@@ -282,11 +305,74 @@ func apiMesh(w http.ResponseWriter, r *http.Request) {
 		bat0["gw_mode"] = strings.TrimSpace(out)
 	}
 
+	enrichMAC := func(mac string) map[string]interface{} {
+		m := map[string]interface{}{"mac": mac}
+		if info, ok := macInfo[mac]; ok {
+			m["hostname"] = info["hostname"]
+			m["ip"] = info["ip"]
+			m["last_seen"] = info["last_seen"]
+		}
+		return m
+	}
+
 	var origList []map[string]interface{}
 	for mac, o := range origMap {
-		origList = append(origList, map[string]interface{}{
-			"mac": mac, "tq": o.TQ, "nexthop": o.Nexthop, "iface": o.Iface,
+		entry := enrichMAC(mac)
+		entry["tq"] = o.TQ
+		entry["nexthop"] = o.Nexthop
+		entry["iface"] = o.Iface
+		if nhInfo, ok := macInfo[o.Nexthop]; ok {
+			entry["nexthop_hostname"] = nhInfo["hostname"]
+		}
+		origList = append(origList, entry)
+	}
+
+	var neighList []map[string]interface{}
+	for _, n := range neighbors {
+		entry := enrichMAC(n.MAC)
+		entry["tq"] = n.TQ
+		entry["iface"] = n.Iface
+		neighList = append(neighList, entry)
+	}
+
+	var gwList []map[string]interface{}
+	for _, gw := range gateways {
+		entry := enrichMAC(gw.MAC)
+		entry["tq"] = gw.TQ
+		entry["selected"] = gw.Selected
+		gwList = append(gwList, entry)
+	}
+
+	myHostname, _ := os.Hostname()
+	state := loadKVFile(MeshStateFile)
+	myIP := stateIP(state)
+
+	var dnsRecords []map[string]interface{}
+	now := time.Now().Unix()
+	reg := parseRegistry()
+	for _, node := range reg {
+		h := node["HOSTNAME"]
+		ip := node["IPV4_ADDRESS"]
+		if h == "" || ip == "" {
+			continue
+		}
+		stale := false
+		if ts := node["LAST_SEEN_TIMESTAMP"]; ts != "" {
+			if seen, err := strconv.ParseInt(ts, 10, 64); err == nil {
+				stale = (now - seen) > 300
+			}
+		}
+		dnsRecords = append(dnsRecords, map[string]interface{}{
+			"name": h + ".mesh", "ip": ip, "type": "node",
+			"source": h, "stale": stale,
 		})
+	}
+	dnsRecords = append(dnsRecords, map[string]interface{}{
+		"name": "radio.mesh", "ip": myIP, "type": "local",
+		"source": myHostname, "stale": false,
+	})
+	for _, rec := range collectAppletDNS(myIP, myHostname) {
+		dnsRecords = append(dnsRecords, rec)
 	}
 
 	writeJSON(w, 200, map[string]interface{}{
@@ -296,14 +382,16 @@ func apiMesh(w http.ResponseWriter, r *http.Request) {
 			"algo":    bat0["algo"],
 			"gw_mode": bat0["gw_mode"],
 		},
-		"mesh_ssid":        conf["mesh_ssid"],
-		"network":          confGet(conf, "ipv4_network", "10.30.2.0/24"),
-		"originators":      origList,
-		"neighbors":        neighbors,
-		"gateways":         gateways,
-		"originator_count": len(origMap),
-		"neighbor_count":   len(neighbors),
-		"gateway_count":    len(gateways),
+		"hostname":          myHostname,
+		"mesh_ssid":         conf["mesh_ssid"],
+		"network":           confGet(conf, "ipv4_network", "10.30.2.0/24"),
+		"originators":       origList,
+		"neighbors":         neighList,
+		"gateways":          gwList,
+		"originator_count":  len(origMap),
+		"neighbor_count":    len(neighbors),
+		"gateway_count":     len(gateways),
+		"dns_records":       dnsRecords,
 	})
 }
 
@@ -511,7 +599,7 @@ var saveableKeys = map[string]bool{
 	"max_euds_per_node": true, "mesh_ssid": true, "mesh_key": true,
 	"ipv4_network": true, "regulatory_domain": true, "halow_bw": true,
 	"acs": true, "mtx": true,
-	"mumble": true, "auto_update": true, "admin_password": true,
+	"mumble": true, "battery_monitor": true, "auto_update": true, "admin_password": true,
 	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
 }
 

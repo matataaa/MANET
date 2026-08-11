@@ -5,7 +5,7 @@ Wants=gps-reader.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/cot-emitter.py
+ExecStart=/usr/local/bin/cot-emitter
 Restart=always
 RestartSec=10
 StandardOutput=journal

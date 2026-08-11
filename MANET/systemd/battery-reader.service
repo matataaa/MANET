@@ -6,7 +6,7 @@ Wants=multi-user.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/battery-reader.py
+ExecStart=/usr/local/bin/battery-reader
 Restart=on-failure
 RestartSec=30
 StandardOutput=journal
