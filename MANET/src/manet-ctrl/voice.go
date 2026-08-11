@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/gorilla/websocket"
 )
@@ -54,6 +55,11 @@ func handleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer txConn.Close()
+	if rc, err := txConn.SyscallConn(); err == nil {
+		rc.Control(func(fd uintptr) {
+			syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_TOS, 0xB8)
+		})
+	}
 
 	rxConn, err := net.ListenMulticastUDP("udp4", iface, &net.UDPAddr{IP: mcastIP, Port: voiceMcastPort})
 	if err != nil {

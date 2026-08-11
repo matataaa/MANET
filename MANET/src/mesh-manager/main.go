@@ -824,6 +824,51 @@ func defaultRouteFix() {
 }
 
 // ============================================================
+// Voice QoS (tc + DSCP prioritization)
+// ============================================================
+
+func setupVoiceQoS() {
+	ifaces := []string{"br0"}
+	if data, err := os.ReadFile("/var/lib/mesh_if"); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if f := strings.TrimSpace(line); f != "" {
+				ifaces = append(ifaces, f)
+			}
+		}
+	}
+
+	for _, iface := range ifaces {
+		exec.Command("tc", "qdisc", "del", "dev", iface, "root").Run()
+
+		if out, err := run(5*time.Second, "tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "prio",
+			"bands", "3", "priomap",
+			"1", "2", "2", "2", "1", "2", "0", "0",
+			"1", "1", "1", "1", "1", "1", "1", "1"); err != nil {
+			log.Printf("QoS: tc qdisc on %s failed: %s %v", iface, out, err)
+			continue
+		}
+
+		// DSCP EF (0xb8) → band 0 (highest priority)
+		if out, err := run(5*time.Second, "tc", "filter", "add", "dev", iface, "parent", "1:0",
+			"protocol", "ip", "prio", "1", "u32",
+			"match", "ip", "tos", "0xb8", "0xfc",
+			"flowid", "1:1"); err != nil {
+			log.Printf("QoS: tc filter EF on %s failed: %s %v", iface, out, err)
+		}
+
+		// Voice multicast port 4370 → band 0 (catch unmarked voice too)
+		if out, err := run(5*time.Second, "tc", "filter", "add", "dev", iface, "parent", "1:0",
+			"protocol", "ip", "prio", "2", "u32",
+			"match", "ip", "dport", "4370", "0xffff",
+			"flowid", "1:1"); err != nil {
+			log.Printf("QoS: tc filter port on %s failed: %s %v", iface, out, err)
+		}
+
+		log.Printf("QoS: voice priority active on %s", iface)
+	}
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -848,9 +893,10 @@ func main() {
 	// Initial IP allocation
 	im.run()
 
-	// Initial hosts + DNS update
+	// Initial hosts + DNS + QoS
 	updateHosts()
 	updateMeshDNS()
+	setupVoiceQoS()
 
 	// One-shot default route fix
 	go defaultRouteFix()

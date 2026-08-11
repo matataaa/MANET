@@ -91,6 +91,13 @@ func run(ctx context.Context, cfg Config) error {
 	}
 	defer txConn.Close()
 
+	// DSCP EF (Expedited Forwarding) → WMM AC_VO on 802.11
+	if rc, err := txConn.SyscallConn(); err == nil {
+		rc.Control(func(fd uintptr) {
+			syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_TOS, 0xB8)
+		})
+	}
+
 	// Multicast RX socket
 	rxConn, err := net.ListenMulticastUDP("udp4", iface, &net.UDPAddr{IP: mcastIP, Port: cfg.McastPort})
 	if err != nil {
