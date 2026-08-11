@@ -742,6 +742,12 @@ EOF
 [ "${#nonmesh_ifaces[@]}" -gt 0 ] && write_link_file wlan3 "$(iface_mac "${nonmesh_ifaces[0]}")"
 echo "MESH_NAME=\"$MESH_NAME\"" > /etc/default/mesh
 
+# Mask all wpa_supplicant@ template instances — we use dedicated service names
+# (wpa_supplicant-s1g-wlan2, hostapd for wlan3) so the generic template is unused.
+for _i in 0 1 2 3; do
+    systemctl mask "wpa_supplicant@wlan${_i}.service" 2>/dev/null || true
+done
+
 
 # Detect if the .link files we just wrote disagree with current runtime names.
 # If they do, the next boot will rename interfaces and the role files we wrote

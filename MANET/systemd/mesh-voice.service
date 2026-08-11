@@ -8,6 +8,7 @@ Type=simple
 ExecStart=/usr/local/bin/mesh-voice -iface br0 -ptt openvlm
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=5
 
 [Install]
 WantedBy=multi-user.target

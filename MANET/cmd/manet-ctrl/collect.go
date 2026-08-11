@@ -421,7 +421,7 @@ func getInterfaces() []Iface {
 			if _, inBat := batSlaves[name]; inBat {
 				iface.Role = "mesh"
 			} else {
-				iface.Role = "other"
+				continue
 			}
 			iface.Detail = "Wireless"
 		default:

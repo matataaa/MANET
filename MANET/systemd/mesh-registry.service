@@ -1,0 +1,14 @@
+[Unit]
+Description=Mesh Node Registry Service
+After=network.target alfred.service batman-enslave.service
+Wants=alfred.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mesh-registry
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

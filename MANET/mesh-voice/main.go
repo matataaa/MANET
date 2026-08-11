@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/gen2brain/malgo"
 	"github.com/hraban/opus"
@@ -282,6 +283,12 @@ func run(ctx context.Context, cfg Config) error {
 	}
 	defer playbackDevice.Stop()
 
+	go func() {
+		<-ctx.Done()
+		rxConn.Close()
+		txConn.Close()
+	}()
+
 	// RX loop
 	wg.Add(1)
 	go func() {
@@ -290,18 +297,9 @@ func run(ctx context.Context, cfg Config) error {
 		pcmOut := make([]int16, frameSize)
 
 		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
 			n, _, err := rxConn.ReadFromUDP(rxBuf)
 			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				continue
+				return
 			}
 
 			if n < 12 {
@@ -341,22 +339,16 @@ func run(ctx context.Context, cfg Config) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			default:
+			case <-ticker.C:
+				remoteActive.Store(false)
+				pttState.setRX(false)
 			}
-			// Simple approach: clear after each RX check cycle
-			// A proper jitter-buffer-based approach would be better
-			remoteActive.Store(false)
-			pttState.setRX(false)
-			select {
-			case <-ctx.Done():
-				return
-			case <-timerChan(200):
-			}
-		}
 	}()
 
 	log.Printf("mesh-voice running on %s → %s:%d", cfg.Iface, cfg.McastAddr, cfg.McastPort)
@@ -366,17 +358,6 @@ func run(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-func timerChan(ms int) <-chan struct{} {
-	ch := make(chan struct{})
-	go func() {
-		syscall.Select(0, nil, nil, nil, &syscall.Timeval{
-			Sec:  int64(ms / 1000),
-			Usec: int64((ms % 1000) * 1000),
-		})
-		close(ch)
-	}()
-	return ch
-}
 
 // buildRTPPacket creates a minimal RTP packet (version 2, no extensions).
 func buildRTPPacket(seq uint16, ssrc uint32, payload []byte) []byte {

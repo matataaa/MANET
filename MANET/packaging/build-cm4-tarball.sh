@@ -82,6 +82,11 @@ install_file 0755 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl" "$STAGE/usr/local
 install_file 0644 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl.service" "$STAGE/etc/systemd/system/manet-ctrl.service"
 install_file 0755 "$REPO_ROOT/MANET/mesh-voice/bin/mesh-voice-linux-arm64" "$STAGE/usr/local/bin/mesh-voice"
 
+echo "Building mesh-registry for linux/arm64..."
+(cd "$REPO_ROOT/MANET/cmd/mesh-registry" && \
+    GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o mesh-registry .)
+install_file 0755 "$REPO_ROOT/MANET/cmd/mesh-registry/mesh-registry" "$STAGE/usr/local/bin/mesh-registry"
+
 # Pre-built arm64 binaries
 install_file 0755 "$REPO_ROOT/MANET/binaries_arm64/alfred"             "$STAGE/usr/sbin/alfred"
 install_file 0755 "$REPO_ROOT/MANET/binaries_arm64/batctl"             "$STAGE/usr/sbin/batctl"
@@ -150,6 +155,7 @@ for unit in \
     ebtables-restore.service \
     batman-enslave-watch.service \
     manet-ctrl.service \
+    mesh-registry.service \
     node-manager.service
 do
     if [ -f "$STAGE/etc/systemd/system/$unit" ]; then

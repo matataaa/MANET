@@ -43,6 +43,11 @@ echo "Building manet-ctrl for linux/amd64..."
 install_file 0755 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl" "$STAGE/usr/local/bin/manet-ctrl"
 install_file 0644 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl.service" "$STAGE/etc/systemd/system/manet-ctrl.service"
 
+echo "Building mesh-registry for linux/amd64..."
+(cd "$REPO_ROOT/MANET/cmd/mesh-registry" && \
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o mesh-registry .)
+install_file 0755 "$REPO_ROOT/MANET/cmd/mesh-registry/mesh-registry" "$STAGE/usr/local/bin/mesh-registry"
+
 if [ -f "$REPO_ROOT/MANET/mesh-voice/bin/mesh-voice-linux-amd64" ]; then
     install_file 0755 "$REPO_ROOT/MANET/mesh-voice/bin/mesh-voice-linux-amd64" "$STAGE/usr/local/bin/mesh-voice"
 fi
@@ -100,6 +105,10 @@ LinkLocalAddressing=ipv6
 IPv6AcceptRA=yes
 MulticastDNS=yes
 
+[Route]
+Destination=224.0.0.0/4
+Type=multicast
+
 [Link]
 RequiredForOnline=no
 MTUBytes=1400
@@ -155,7 +164,8 @@ for unit in \
     node-manager.service \
     gateway-route-manager.service \
     sae-watchdog.service \
-    manet-ctrl.service
+    manet-ctrl.service \
+    mesh-registry.service
 do
     if [ -f "$STAGE/etc/systemd/system/$unit" ]; then
         ln -s "../$unit" "$STAGE/etc/systemd/system/multi-user.target.wants/$unit"

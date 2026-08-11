@@ -83,7 +83,7 @@
   text-transform: uppercase;
   border: 2px solid var(--border2);
   border-radius: 12px;
-  background: var(--card-bg, #1a1a2e);
+  background: var(--bg);
   color: var(--text);
   cursor: pointer;
   user-select: none; -webkit-user-select: none;
