@@ -533,6 +533,31 @@ func parseWPAActive() map[string]bool {
 	return active
 }
 
+func enrichIfacesWithHalow(ifaces []Iface) []Iface {
+	for i, iface := range ifaces {
+		if iface.Driver != "morse_spi" {
+			continue
+		}
+		info := getHalowDriverInfo(iface.Name)
+		if bw, ok := info["halow_bw"]; ok {
+			ifaces[i].HalowBW = bw
+		}
+		if src, ok := info["halow_source"]; ok {
+			ifaces[i].HalowSource = src
+		}
+		if ch, ok := info["channel"]; ok && ifaces[i].Channel == "" {
+			ifaces[i].Channel = ch
+		}
+		if freq, ok := info["freq_mhz"]; ok && ifaces[i].FreqMHz == "" {
+			ifaces[i].FreqMHz = freq
+		}
+		if cap, ok := HalowBWTxPowerCapDBM[ifaces[i].HalowBW]; ok {
+			ifaces[i].TxPowerCapDBM = cap
+		}
+	}
+	return ifaces
+}
+
 func enrichIfacesWithMCS(ifaces []Iface, regNode RegistryNode) []Iface {
 	mcsMap := map[string][2]string{
 		"wlan0": {regNode["WIFI_24_TX_MCS"], regNode["WIFI_24_RX_MCS"]},
@@ -935,17 +960,23 @@ func getGPS(regNode RegistryNode) GPS {
 	data, err := os.ReadFile(GPSStatusFile)
 	if err == nil {
 		var g struct {
-			HasFix bool    `json:"has_fix"`
-			Lat    float64 `json:"latitude"`
-			Lon    float64 `json:"longitude"`
-			Alt    float64 `json:"altitude"`
+			HasFix    bool    `json:"has_fix"`
+			Lat       float64 `json:"latitude"`
+			Lon       float64 `json:"longitude"`
+			Alt       float64 `json:"altitude"`
+			Timestamp int64   `json:"timestamp"`
 		}
-		if json.Unmarshal(data, &g) == nil && g.HasFix {
-			gps.Available = true
-			gps.Lat = fmt.Sprintf("%f", g.Lat)
-			gps.Lon = fmt.Sprintf("%f", g.Lon)
-			gps.Alt = fmt.Sprintf("%f", g.Alt)
-			return gps
+		if json.Unmarshal(data, &g) == nil {
+			if g.Timestamp > 0 && time.Now().Unix()-g.Timestamp < 30 {
+				gps.Connected = true
+			}
+			if g.HasFix {
+				gps.Available = true
+				gps.Lat = fmt.Sprintf("%f", g.Lat)
+				gps.Lon = fmt.Sprintf("%f", g.Lon)
+				gps.Alt = fmt.Sprintf("%f", g.Alt)
+				return gps
+			}
 		}
 	}
 	if lat := regNode["GPS_LATITUDE"]; lat != "" && lat != "0" {

@@ -56,14 +56,27 @@ function hwRenderRadios() {
                   r.driver === 'brcmfmac' ? 'Onboard WiFi (SDIO)' :
                   r.driver || 'Unknown';
 
+    var isHalow = r.driver === 'morse_spi';
     var rows = hwRow('Role', hwRoleLabel(r.role));
     if (r.driver) rows += hwRow('Driver', r.driver);
     rows += hwRow('Bus / Type', busType);
-    if (r.channel) rows += hwRow('Channel', r.channel + (r.freq_mhz ? ' (' + r.freq_mhz + ' MHz)' : ''));
-    if (r.halow_bw) rows += hwRow('Bandwidth', r.halow_bw);
-    if (r.txpower_dbm) rows += hwRow('TX Power', r.txpower_dbm + ' dBm' + (r.txpower_cap_dbm ? ' (cap: ' + r.txpower_cap_dbm + ')' : ''));
+    if (r.channel) {
+      var chLabel = r.channel;
+      if (r.freq_mhz) {
+        var freqVal = parseFloat(r.freq_mhz);
+        chLabel += ' (' + (isHalow && freqVal > 10000 ? (freqVal / 1000).toFixed(1) + ' MHz' : r.freq_mhz + ' MHz') + ')';
+      }
+      rows += hwRow(isHalow ? 'S1G Channel' : 'Channel', chLabel);
+    }
+    if (r.halow_bw) rows += hwRow('Primary BW', r.halow_bw);
+    if (r.txpower_dbm) {
+      var txLabel = r.txpower_dbm + ' dBm';
+      if (r.txpower_cap_dbm) txLabel += ' <span style="color:var(--muted)">(cap: ' + r.txpower_cap_dbm + ' dBm)</span>';
+      rows += hwRow('TX Power', txLabel);
+    }
     if (r.tx_mcs) rows += hwRow('TX MCS', r.tx_mcs);
     if (r.rx_mcs) rows += hwRow('RX MCS', r.rx_mcs);
+    if (isHalow && r.halow_source) rows += hwRow('Data Source', r.halow_source === 'morse' ? 'morse_cli (live)' : 'wpa_supplicant config');
     if (r.addrs && r.addrs.length) rows += hwRow('Addresses', r.addrs.map(escHtml).join('<br>'));
     if (r.faults && r.faults.length) rows += hwRow('Faults', '<span style="color:var(--bad)">' + r.faults.map(escHtml).join(', ') + '</span>');
 
@@ -100,21 +113,26 @@ function hwRenderGPS() {
   var el = document.getElementById('hw-gps');
   var gps = LOCAL_DATA.gps;
   var hasFix = gps && gps.available;
-  var dot = hasFix ? 'dot-ok' : 'dot-warn';
-  var badge = hasFix ? '<span class="hw-badge hw-badge-up">FIX</span>' : '<span class="hw-badge hw-badge-down">NO FIX</span>';
+  var connected = gps && gps.connected;
+  var dot = hasFix ? 'dot-ok' : connected ? 'dot-warn' : 'dot-bad';
+  var badge = hasFix ? '<span class="hw-badge hw-badge-up">FIX</span>' :
+              connected ? '<span class="hw-badge hw-badge-down">NO FIX</span>' :
+              '<span class="hw-badge hw-badge-down">OFFLINE</span>';
 
   var rows = '';
   if (hasFix) {
     rows += hwRow('Latitude', gps.lat || '--');
     rows += hwRow('Longitude', gps.lon || '--');
     rows += hwRow('Altitude', gps.alt ? gps.alt + ' m' : '--');
+  } else if (connected) {
+    rows += hwRow('Status', 'Connected — searching for satellites');
   } else {
-    rows += hwRow('Status', 'No GPS fix or device not connected');
+    rows += hwRow('Status', 'Device not connected');
   }
 
   el.innerHTML = '<div class="svc-card">' +
     '<div class="svc-header"><span class="' + dot + '"></span><span class="svc-name">GPS Receiver</span>' + badge + '</div>' +
-    '<div class="svc-desc">Position tracking via serial NMEA</div>' +
+    '<div class="svc-desc">Position tracking via gpsd</div>' +
     '<div class="hw-details">' + rows + '</div></div>';
 }
 

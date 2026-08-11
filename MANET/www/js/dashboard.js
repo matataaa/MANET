@@ -25,7 +25,60 @@ function dashboardUpdate() {
   topoUpdate(DATA);
   renderDashNodeList(DATA.nodes);
   renderThrottleWarning();
+  renderDashDaemons();
   renderDashApplets();
+}
+
+function renderDashDaemons() {
+  var side = document.querySelector('.dash-side');
+  if (!side) return;
+
+  var el = document.getElementById('dash-daemons');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'dash-daemons';
+    var nodeList = document.getElementById('dash-node-list');
+    if (nodeList && nodeList.nextSibling) side.insertBefore(el, nodeList.nextSibling);
+    else side.appendChild(el);
+  }
+
+  fetch('/api/daemons').then(function(r) { return r.json(); }).then(function(d) {
+    var items = [];
+
+    var g = d.gps;
+    if (g && g.available) {
+      var gpsVal = g.has_fix
+        ? Number(g.latitude).toFixed(4) + ', ' + Number(g.longitude).toFixed(4)
+        : 'No Fix';
+      var gpsDot = g.has_fix ? 'on' : 'off';
+      items.push('<div class="dash-daemon-row"><span class="voice-dot ' + gpsDot + '"></span>' +
+        '<span class="dash-daemon-name">GPS</span>' +
+        '<span class="dash-daemon-val">' + gpsVal + '</span></div>');
+    }
+
+    var b = d.battery;
+    if (b && b.available && b.status !== 'unknown') {
+      var pct = b.percentage != null ? b.percentage + '%' : '--';
+      var bDot = b.charging ? 'on' : (b.percentage != null && b.percentage < 20 ? 'off' : 'on');
+      var bExtra = b.voltage_v != null ? ' &middot; ' + Number(b.voltage_v).toFixed(2) + 'V' : '';
+      items.push('<div class="dash-daemon-row"><span class="voice-dot ' + bDot + '"></span>' +
+        '<span class="dash-daemon-name">Battery</span>' +
+        '<span class="dash-daemon-val">' + pct + bExtra + '</span></div>');
+    }
+
+    var c = d.cot_emitter;
+    if (c && c.available && c.running) {
+      var cotVal = c.last_error === 'no GPS fix' ? 'Waiting for GPS' : c.unicast_targets + ' EUDs &middot; ' + c.total_sent + ' sent';
+      var cDot = c.last_error && c.last_error !== 'no GPS fix' ? 'off' : 'on';
+      items.push('<div class="dash-daemon-row"><span class="voice-dot ' + cDot + '"></span>' +
+        '<span class="dash-daemon-name">CoT</span>' +
+        '<span class="dash-daemon-val">' + cotVal + '</span></div>');
+    }
+
+    if (!items.length) { el.style.display = 'none'; return; }
+    el.style.display = '';
+    el.innerHTML = '<div class="card-header">DAEMONS</div>' + items.join('');
+  }).catch(function() {});
 }
 
 function renderDashApplets() {
@@ -96,7 +149,7 @@ function renderDashNodeList(nodes) {
     if (n.applets && n.applets.length) {
       n.applets.forEach(function(a) {
         var cls = a.status === 'running' ? 'badge-applet-on' : 'badge-applet-off';
-        badges.push('<span class="badge ' + cls + '">' + escHtml(a.label || a.name) + '</span>');
+        badges.push('<span class="badge ' + cls + '" data-applet-badge="' + escHtml(a.name) + '">' + escHtml(a.label || a.name) + '</span>');
       });
     }
     if (n.limp) badges.push('<span class="badge badge-limp">LIMP</span>');

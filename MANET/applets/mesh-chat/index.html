@@ -6,105 +6,121 @@
 <title>Mesh Chat</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--text:#e4e4e7;--muted:#6b7280;--accent:#3b82f6;--self:#1d4ed8;--other:#374151;--dm:#4c1d95;--dm-self:#5b21b6;--online:#22c55e;--offline:#6b7280;--font:-apple-system,system-ui,'Segoe UI',sans-serif}
+:root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--text:#e4e4e7;--muted:#6b7280;--accent:#3b82f6;--good:#22c55e;--warn:#f59e0b;--bad:#ef4444;--unread:#2563eb;--font:-apple-system,system-ui,'Segoe UI',sans-serif}
 body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden}
 
 #header{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;background:var(--surface);flex-shrink:0}
 #header h1{font-size:14px;font-weight:700;white-space:nowrap}
-.conn-status{font-size:11px;display:flex;align-items:center;gap:5px}
-.dot{width:7px;height:7px;border-radius:50%;background:#ef4444;flex-shrink:0}
-.dot.on{background:var(--online)}
-.peers-btn{margin-left:auto;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font);position:relative;white-space:nowrap}
-.peers-btn:hover{border-color:var(--accent)}
-.peers-panel{display:none;position:absolute;top:100%;right:0;margin-top:6px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:6px 0;min-width:180px;z-index:10;box-shadow:0 8px 24px rgba(0,0,0,.4)}
-.peers-panel.open{display:block}
-.peer-row{padding:6px 14px;font-size:12px;display:flex;align-items:center;gap:8px}
-.peer-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-.peer-dot.on{background:var(--online)}
-.peer-dot.off{background:var(--offline)}
-.peer-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.peer-ip{color:var(--muted);font-size:10px}
+.conn-dot{width:7px;height:7px;border-radius:50%;background:var(--bad);flex-shrink:0}
+.conn-dot.on{background:var(--good)}
+.hdr-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.hdr-btn{background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font)}
+.hdr-btn:hover{border-color:var(--accent)}
+.hdr-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.unread-badge{background:var(--bad);color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px}
+.peer-count{font-size:11px;color:var(--muted)}
 
-#channel-bar{padding:6px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;background:var(--bg);flex-shrink:0}
-#channel-bar select{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px;font-family:var(--font);flex:1;max-width:240px}
-#channel-bar select:focus{outline:none;border-color:var(--accent)}
-.sync-btn{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:4px 10px;font-size:10px;font-weight:700;cursor:pointer;font-family:var(--font);text-transform:uppercase;letter-spacing:.3px}
-.sync-btn:hover{border-color:var(--accent);color:var(--accent)}
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden}
 
-#messages{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:3px}
-.day-sep{text-align:center;font-size:10px;color:var(--muted);padding:8px 0 4px;font-weight:600}
+#compose{padding:10px 16px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
+.compose-row{display:flex;align-items:center;gap:8px}
+.compose-to{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.compose-to label{font-size:11px;font-weight:600;color:var(--muted)}
+.compose-to select{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;font-family:var(--font);max-width:160px}
+.compose-to select:focus{outline:none;border-color:var(--accent)}
+.compose-input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:13px;font-family:var(--font);outline:none;min-width:0}
+.compose-input:focus{border-color:var(--accent)}
+.compose-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:4px;line-height:1;flex-shrink:0}
+.compose-btn:hover{color:var(--accent)}
+.send-btn{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);flex-shrink:0}
+.send-btn:disabled{opacity:.35;cursor:default}
 
-.msg{max-width:80%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.45;word-break:break-word;position:relative}
-.msg.self{align-self:flex-end;background:var(--self);border-bottom-right-radius:4px}
-.msg.other{align-self:flex-start;background:var(--other);border-bottom-left-radius:4px}
-.msg.dm-in{align-self:flex-start;background:var(--dm);border-bottom-left-radius:4px}
-.msg.dm-out{align-self:flex-end;background:var(--dm-self);border-bottom-right-radius:4px}
-.msg-head{display:flex;align-items:baseline;gap:6px;margin-bottom:2px}
-.msg-from{font-size:11px;font-weight:700;color:#60a5fa}
-.msg.self .msg-from,.msg.dm-out .msg-from{color:#93c5fd}
-.msg-dm-tag{font-size:9px;font-weight:700;color:#c084fc;background:rgba(192,132,252,.15);padding:1px 5px;border-radius:3px}
-.msg-text{white-space:pre-wrap}
-.msg-meta{font-size:11px;color:rgba(255,255,255,.4);margin-top:3px}
+#inbox{flex:1;overflow-y:auto;padding:0}
+.inbox-empty{text-align:center;padding:40px 20px;color:var(--muted);font-size:13px}
 
-.msg-file{margin-top:4px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:10px}
-.file-icon{font-size:20px;flex-shrink:0}
-.file-info{flex:1;min-width:0}
-.file-name{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.file-size{font-size:10px;color:var(--muted)}
-.file-dl{background:var(--accent);color:#fff;border:none;border-radius:5px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font);text-decoration:none;white-space:nowrap}
-.file-dl:hover{opacity:.85}
+.msg-card{padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer;position:relative;transition:background .15s}
+.msg-card:hover{background:rgba(255,255,255,.03)}
+.msg-card.unread{background:rgba(37,99,235,.06)}
+.msg-card.unread .msg-sender{font-weight:700}
+.msg-card .unread-dot{width:8px;height:8px;border-radius:50%;background:var(--unread);position:absolute;left:6px;top:50%;transform:translateY(-50%);flex-shrink:0}
 
-.system{text-align:center;font-size:11px;color:var(--muted);padding:6px}
+.msg-top{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.msg-sender{font-size:12px;font-weight:600;color:var(--accent);flex-shrink:0}
+.msg-arrow{font-size:10px;color:var(--muted)}
+.msg-recip{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.msg-time{margin-left:auto;font-size:10px;color:var(--muted);white-space:nowrap;flex-shrink:0}
+.msg-dm{font-size:9px;font-weight:700;color:#c084fc;background:rgba(192,132,252,.12);padding:1px 5px;border-radius:3px;flex-shrink:0}
 
-#input-bar{padding:10px 16px;border-top:1px solid var(--border);display:flex;gap:8px;background:var(--surface);flex-shrink:0;align-items:center}
-.attach-btn{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:2px 4px;line-height:1}
-.attach-btn:hover{color:var(--accent)}
-#input-bar input[type="text"]{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:13px;font-family:var(--font);outline:none}
-#input-bar input[type="text"]:focus{border-color:var(--accent)}
-#send-btn{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font)}
-#send-btn:disabled{opacity:.35;cursor:default}
-.upload-progress{position:fixed;top:0;left:0;height:3px;background:var(--accent);transition:width .2s;z-index:100}
+.msg-body{font-size:13px;line-height:1.4;color:var(--text);white-space:pre-wrap;word-break:break-word;max-height:3.2em;overflow:hidden;margin-left:16px}
+
+.msg-file{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);border-radius:6px;padding:6px 10px;margin:4px 0 0 16px;font-size:12px}
+.msg-file .f-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.msg-file .f-size{color:var(--muted);font-size:10px;flex-shrink:0}
+.msg-file .f-dl{background:var(--accent);color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:600;cursor:pointer;text-decoration:none;flex-shrink:0}
+.msg-file .f-dl:hover{opacity:.85}
+
+.msg-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:4px;padding-right:2px}
+.msg-act{background:none;border:none;color:var(--muted);font-size:10px;cursor:pointer;padding:2px 6px;border-radius:4px;font-family:var(--font)}
+.msg-act:hover{background:rgba(255,255,255,.06);color:var(--text)}
+.msg-act.del:hover{color:var(--bad)}
+
+.upload-bar{position:fixed;top:0;left:0;height:3px;background:var(--accent);transition:width .2s;z-index:100}
+
+.day-divider{font-size:10px;color:var(--muted);text-align:center;padding:10px 0 4px;font-weight:600;border-bottom:1px solid var(--border)}
+
+.clear-bar{padding:8px 16px;text-align:center;border-bottom:1px solid var(--border);background:var(--surface)}
+.clear-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:4px 12px;font-size:10px;cursor:pointer;font-family:var(--font)}
+.clear-btn:hover{border-color:var(--bad);color:var(--bad)}
 </style>
 </head>
 <body>
 <div id="header">
+  <span class="conn-dot" id="conn-dot"></span>
   <h1>Mesh Chat</h1>
-  <span class="conn-status"><span id="dot" class="dot"></span> <span id="conn-label">Connecting</span></span>
-  <button class="peers-btn" id="peers-btn">0 online</button>
-  <div class="peers-panel" id="peers-panel"></div>
+  <span class="peer-count" id="peer-count">0 peers</span>
+  <div class="hdr-right">
+    <span class="unread-badge" id="unread-badge" style="display:none">0</span>
+    <button class="hdr-btn" id="sync-btn">Sync</button>
+  </div>
 </div>
-<div id="channel-bar">
-  <select id="channel"><option value="">All Nodes</option></select>
-  <button class="sync-btn" id="sync-btn">Sync</button>
-</div>
-<div id="messages"></div>
-<div id="input-bar">
-  <button class="attach-btn" id="attach-btn" title="Send file">&#128206;</button>
-  <input type="file" id="file-input" hidden>
-  <input id="msg-input" type="text" placeholder="Message all nodes..." autocomplete="off" disabled>
-  <button id="send-btn" disabled>Send</button>
+<div id="main">
+  <div id="compose">
+    <div class="compose-row">
+      <div class="compose-to">
+        <label>To:</label>
+        <select id="to-select"><option value="">All Nodes</option></select>
+      </div>
+      <input class="compose-input" id="msg-input" type="text" placeholder="Message all nodes..." autocomplete="off" disabled>
+      <input type="file" id="file-input" hidden>
+      <button class="compose-btn" id="attach-btn" title="Attach file">&#128206;</button>
+      <button class="send-btn" id="send-btn" disabled>Send</button>
+    </div>
+  </div>
+  <div class="clear-bar"><button class="clear-btn" id="clear-btn">Clear All Messages</button></div>
+  <div id="inbox"></div>
 </div>
 
 <script>
 (function() {
-  var messagesEl = document.getElementById('messages');
+  var inboxEl = document.getElementById('inbox');
   var inputEl = document.getElementById('msg-input');
   var sendBtn = document.getElementById('send-btn');
-  var dotEl = document.getElementById('dot');
-  var connLabel = document.getElementById('conn-label');
-  var channelEl = document.getElementById('channel');
-  var peersBtn = document.getElementById('peers-btn');
-  var peersPanel = document.getElementById('peers-panel');
+  var toSelect = document.getElementById('to-select');
+  var connDot = document.getElementById('conn-dot');
+  var peerCountEl = document.getElementById('peer-count');
+  var unreadBadge = document.getElementById('unread-badge');
   var syncBtn = document.getElementById('sync-btn');
   var attachBtn = document.getElementById('attach-btn');
   var fileInput = document.getElementById('file-input');
+  var clearBtn = document.getElementById('clear-btn');
 
   var ws = null;
-  var myHostname = null;
   var reconnTimer = null;
+  var myHostname = '';
   var peerList = [];
   var allMessages = [];
-  var lastDaySep = '';
+
+  var PROXY = '/api/applets/mesh-chat/proxy';
 
   function esc(s) {
     var d = document.createElement('div');
@@ -114,171 +130,245 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 
   function fmtSize(b) {
     if (b < 1024) return b + ' B';
-    if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
-    return (b/(1024*1024)).toFixed(1) + ' MB';
+    if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+    return (b/1048576).toFixed(1) + ' MB';
   }
 
   function fmtTime(unix) {
     var d = new Date(unix * 1000);
     var now = new Date();
-    var hm = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12: false});
-
+    var hm = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12:false});
     var diffMs = now - d;
-    var diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffDays === 0) return hm;
-    if (diffDays === 1) return 'Yesterday ' + hm;
+    if (diffMs < 60000) return 'just now';
+    if (diffMs < 3600000) return Math.floor(diffMs/60000) + 'm ago';
+    if (d.toDateString() === now.toDateString()) return hm;
+    var y = new Date(now); y.setDate(y.getDate()-1);
+    if (d.toDateString() === y.toDateString()) return 'Yesterday ' + hm;
     return d.toLocaleDateString([], {month:'short', day:'numeric'}) + ' ' + hm;
   }
 
-  function daySep(unix) {
+  function dayLabel(unix) {
     var d = new Date(unix * 1000);
     var now = new Date();
-    var key = d.toDateString();
-    if (key === lastDaySep) return '';
-    lastDaySep = key;
-    if (key === now.toDateString()) return 'Today';
+    if (d.toDateString() === now.toDateString()) return 'Today';
     var y = new Date(now); y.setDate(y.getDate()-1);
-    if (key === y.toDateString()) return 'Yesterday';
+    if (d.toDateString() === y.toDateString()) return 'Yesterday';
     return d.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
   }
 
-  function fileUrl(fi) {
-    if (!fi) return '#';
-    var localProxy = '/api/applets/mesh-chat/proxy/files/' + fi.id;
-    if (!fi.sender_ip || fi.sender_ip === myIP()) return localProxy;
-    return 'http://' + fi.sender_ip + '/api/applets/mesh-chat/proxy/files/' + fi.id;
-  }
-
-  function myIP() {
-    for (var i = 0; i < peerList.length; i++) {
-      if (peerList[i].hostname === myHostname) return peerList[i].ip;
+  function fileUrl(msg) {
+    if (!msg.file) return '#';
+    if (msg.from === myHostname || !msg.from_ip) {
+      return PROXY + '/files/' + msg.file.id;
     }
-    return '';
+    return '/api/peer/' + msg.from_ip + '/api/applets/mesh-chat/proxy/files/' + msg.file.id;
   }
 
-  function renderMsg(msg) {
-    var isSelf = msg.from === myHostname;
-    var isDM = !!msg.to;
-    var cls = 'msg ';
-    if (isDM) cls += isSelf ? 'dm-out' : 'dm-in';
-    else cls += isSelf ? 'self' : 'other';
+  function recipLabel(msg) {
+    if (!msg.to || msg.to.length === 0) return 'all';
+    return msg.to.join(', ');
+  }
 
-    var sep = daySep(msg.time);
+  function renderInbox() {
+    var sorted = allMessages.slice().sort(function(a,b) { return b.ts - a.ts; });
+    if (!sorted.length) {
+      inboxEl.innerHTML = '<div class="inbox-empty">No messages yet. Send one or press Sync.</div>';
+      return;
+    }
+
     var html = '';
-    if (sep) html += '<div class="day-sep">' + sep + '</div>';
+    var lastDay = '';
+    for (var i = 0; i < sorted.length; i++) {
+      var m = sorted[i];
+      var day = dayLabel(m.ts);
+      if (day !== lastDay) {
+        html += '<div class="day-divider">' + day + '</div>';
+        lastDay = day;
+      }
 
-    html += '<div class="' + cls + '">';
-    html += '<div class="msg-head"><span class="msg-from">' + esc(msg.from) + '</span>';
-    if (isDM) {
-      var label = isSelf ? 'DM to ' + esc(msg.to) : 'DM';
-      html += '<span class="msg-dm-tag">' + label + '</span>';
-    }
-    html += '</div>';
+      var isSelf = m.from === myHostname;
+      var isDM = m.to && m.to.length > 0;
+      var isUnread = !m.read && !isSelf;
 
-    if (msg.type === 'file' && msg.file) {
-      html += '<div class="msg-file">';
-      html += '<span class="file-icon">&#128196;</span>';
-      html += '<div class="file-info"><div class="file-name">' + esc(msg.file.name) + '</div>';
-      html += '<div class="file-size">' + fmtSize(msg.file.size) + '</div></div>';
-      html += '<a class="file-dl" href="' + fileUrl(msg.file) + '" target="_blank" download>Download</a>';
+      html += '<div class="msg-card' + (isUnread ? ' unread' : '') + '" data-id="' + esc(m.id) + '">';
+      if (isUnread) html += '<div class="unread-dot"></div>';
+
+      html += '<div class="msg-top">';
+      html += '<span class="msg-sender">' + esc(isSelf ? 'You' : m.from) + '</span>';
+      html += '<span class="msg-arrow">&rarr;</span>';
+      html += '<span class="msg-recip">' + esc(isSelf ? recipLabel(m) : 'you' + (isDM ? '' : ' (all)')) + '</span>';
+      if (isDM) html += '<span class="msg-dm">DM</span>';
+      html += '<span class="msg-time">' + fmtTime(m.ts) + '</span>';
+      html += '</div>';
+
+      if (m.body) {
+        html += '<div class="msg-body">' + esc(m.body) + '</div>';
+      }
+
+      if (m.file) {
+        html += '<div class="msg-file">';
+        html += '<span class="f-name">' + esc(m.file.name) + '</span>';
+        html += '<span class="f-size">' + fmtSize(m.file.size) + '</span>';
+        html += '<a class="f-dl" href="' + fileUrl(m) + '" target="_blank" download>Download</a>';
+        html += '</div>';
+      }
+
+      html += '<div class="msg-actions">';
+      if (isUnread) html += '<button class="msg-act read-btn" data-id="' + esc(m.id) + '">Mark Read</button>';
+      html += '<button class="msg-act del" data-id="' + esc(m.id) + '">Delete</button>';
+      html += '</div>';
+
       html += '</div>';
     }
+    inboxEl.innerHTML = html;
 
-    if (msg.text) html += '<div class="msg-text">' + esc(msg.text) + '</div>';
-    html += '<div class="msg-meta">' + fmtTime(msg.time) + '</div>';
-    html += '</div>';
-    return html;
-  }
-
-  function renderAll() {
-    var ch = channelEl.value;
-    lastDaySep = '';
-    var filtered = allMessages.filter(function(m) {
-      if (m.type !== 'text' && m.type !== 'file') return false;
-      if (!ch) return !m.to;
-      return (m.to === ch && m.from === myHostname) ||
-             (m.from === ch && m.to === myHostname) ||
-             (m.from === ch && !m.to) ||
-             (m.to === ch && !m.to);
+    inboxEl.querySelectorAll('.read-btn').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        markRead(btn.dataset.id);
+      });
     });
-    var html = '';
-    for (var i = 0; i < filtered.length; i++) {
-      html += renderMsg(filtered[i]);
-    }
-    if (!html) html = '<div class="system">No messages' + (ch ? ' with ' + esc(ch) : '') + '</div>';
-    messagesEl.innerHTML = html;
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    inboxEl.querySelectorAll('.msg-act.del').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        deleteMsg(btn.dataset.id);
+      });
+    });
+    inboxEl.querySelectorAll('.msg-card').forEach(function(card) {
+      card.addEventListener('click', function() {
+        if (card.classList.contains('unread')) {
+          markRead(card.dataset.id);
+        }
+      });
+    });
   }
 
-  function addMsg(msg) {
+  function updateUnreadBadge() {
+    var count = 0;
     for (var i = 0; i < allMessages.length; i++) {
-      if (allMessages[i].id && allMessages[i].id === msg.id) return;
+      if (!allMessages[i].read && allMessages[i].from !== myHostname) count++;
     }
-    allMessages.push(msg);
-
-    var ch = channelEl.value;
-    var show = false;
-    if (!ch) show = !msg.to;
-    else show = (msg.to === ch && msg.from === myHostname) ||
-                (msg.from === ch && msg.to === myHostname) ||
-                (msg.from === ch && !msg.to);
-
-    if (show && (msg.type === 'text' || msg.type === 'file')) {
-      var sep = daySep(msg.time);
-      var html = '';
-      if (sep) html += '<div class="day-sep">' + sep + '</div>';
-      html += renderMsg(msg);
-      var tmp = document.createElement('div');
-      tmp.innerHTML = html;
-      while (tmp.firstChild) messagesEl.appendChild(tmp.firstChild);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (count > 0) {
+      unreadBadge.textContent = count;
+      unreadBadge.style.display = '';
+    } else {
+      unreadBadge.style.display = 'none';
     }
   }
 
   function updatePeers(list) {
     peerList = list || [];
-    var online = peerList.length;
-    peersBtn.textContent = online + ' online';
+    var others = peerList.filter(function(p) { return p.hostname !== myHostname; });
+    peerCountEl.textContent = others.length + ' peer' + (others.length !== 1 ? 's' : '');
 
-    var html = '';
-    peerList.sort(function(a,b) { return a.hostname.localeCompare(b.hostname); });
-    for (var i = 0; i < peerList.length; i++) {
-      var p = peerList[i];
-      var isSelf = p.hostname === myHostname;
-      html += '<div class="peer-row">';
-      html += '<span class="peer-dot on"></span>';
-      html += '<span class="peer-name">' + esc(p.hostname) + (isSelf ? ' (you)' : '') + '</span>';
-      html += '<span class="peer-ip">' + esc(p.ip || '') + '</span>';
-      html += '</div>';
-    }
-    peersPanel.innerHTML = html;
-
-    var cur = channelEl.value;
-    channelEl.innerHTML = '<option value="">All Nodes</option>';
-    for (var i = 0; i < peerList.length; i++) {
-      if (peerList[i].hostname === myHostname) continue;
+    var cur = toSelect.value;
+    toSelect.innerHTML = '<option value="">All Nodes</option>';
+    others.sort(function(a,b) { return a.hostname.localeCompare(b.hostname); });
+    for (var i = 0; i < others.length; i++) {
       var opt = document.createElement('option');
-      opt.value = peerList[i].hostname;
-      opt.textContent = peerList[i].hostname;
-      channelEl.appendChild(opt);
+      opt.value = others[i].hostname;
+      opt.textContent = others[i].hostname;
+      toSelect.appendChild(opt);
     }
-    channelEl.value = cur;
+    toSelect.value = cur;
   }
 
   function updatePlaceholder() {
-    var ch = channelEl.value;
-    if (ch) inputEl.placeholder = 'DM to ' + ch + '...';
-    else inputEl.placeholder = 'Message all nodes...';
+    var v = toSelect.value;
+    inputEl.placeholder = v ? 'DM to ' + v + '...' : 'Message all nodes...';
   }
+
+  // --- API calls ---
+
+  function loadMessages() {
+    fetch(PROXY + '/messages').then(function(r) { return r.json(); }).then(function(msgs) {
+      allMessages = msgs || [];
+      renderInbox();
+      updateUnreadBadge();
+    }).catch(function() {});
+  }
+
+  function markRead(id) {
+    fetch(PROXY + '/messages/' + id + '/read', {method:'POST'}).then(function() {
+      for (var i = 0; i < allMessages.length; i++) {
+        if (allMessages[i].id === id) { allMessages[i].read = true; break; }
+      }
+      renderInbox();
+      updateUnreadBadge();
+    }).catch(function() {});
+  }
+
+  function deleteMsg(id) {
+    fetch(PROXY + '/messages/' + id, {method:'DELETE'}).then(function() {
+      allMessages = allMessages.filter(function(m) { return m.id !== id; });
+      renderInbox();
+      updateUnreadBadge();
+    }).catch(function() {});
+  }
+
+  function sendMessage() {
+    var body = inputEl.value.trim();
+    if (!body) return;
+    var to = toSelect.value ? [toSelect.value] : [];
+    fetch(PROXY + '/send', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({to:to, body:body})
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.ok) { inputEl.value = ''; inputEl.focus(); }
+    }).catch(function() {});
+  }
+
+  function uploadFile(file) {
+    var form = new FormData();
+    form.append('file', file);
+    var to = toSelect.value;
+    if (to) form.append('to', to);
+
+    var bar = document.createElement('div');
+    bar.className = 'upload-bar';
+    bar.style.width = '10%';
+    document.body.appendChild(bar);
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', PROXY + '/upload');
+    xhr.upload.onprogress = function(e) {
+      if (e.lengthComputable) bar.style.width = Math.round(e.loaded/e.total*100) + '%';
+    };
+    xhr.onload = function() { bar.style.width = '100%'; setTimeout(function(){ bar.remove(); }, 400); };
+    xhr.onerror = function() { bar.remove(); };
+    xhr.send(form);
+  }
+
+  function doSync() {
+    fetch(PROXY + '/sync', {method:'POST'}).then(function() {
+      syncBtn.textContent = 'Syncing...';
+      syncBtn.classList.add('active');
+      setTimeout(function() {
+        syncBtn.textContent = 'Sync';
+        syncBtn.classList.remove('active');
+        loadMessages();
+      }, 3000);
+    }).catch(function() {});
+  }
+
+  function doClear() {
+    if (!confirm('Delete all messages?')) return;
+    fetch(PROXY + '/clear', {method:'POST'}).then(function() {
+      allMessages = [];
+      renderInbox();
+      updateUnreadBadge();
+    }).catch(function() {});
+  }
+
+  // --- WebSocket ---
 
   function connect() {
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(proto + '//' + location.host + '/api/applets/mesh-chat/proxy/ws');
+    ws = new WebSocket(proto + '//' + location.host + PROXY + '/ws');
 
     ws.onopen = function() {
-      dotEl.className = 'dot on';
-      connLabel.textContent = 'Connected';
+      connDot.classList.add('on');
       inputEl.disabled = false;
       sendBtn.disabled = false;
       inputEl.focus();
@@ -286,23 +376,62 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 
     ws.onmessage = function(e) {
       try {
-        var data = JSON.parse(e.data);
-        if (data.type === 'peers') {
-          updatePeers(data.peers);
+        var evt = JSON.parse(e.data);
+        if (evt.event === 'init') {
+          myHostname = evt.data.hostname;
+          updatePeers(evt.data.peers);
+          updatePlaceholder();
           return;
         }
-        if (!myHostname) {
-          fetch('/api/local').then(function(r){return r.json()}).then(function(d){
-            myHostname = d.hostname || 'unknown';
-          }).catch(function(){});
+        if (evt.event === 'message') {
+          var m = evt.data;
+          var exists = false;
+          for (var i = 0; i < allMessages.length; i++) {
+            if (allMessages[i].id === m.id) { exists = true; break; }
+          }
+          if (!exists) {
+            allMessages.push(m);
+            renderInbox();
+            updateUnreadBadge();
+            if (m.from !== myHostname && !m.read) {
+              try {
+                if (window.parent && window.parent.notify) {
+                  window.parent.notify('Mesh Chat', m.from + ': ' + (m.body || m.type), {type:'info'});
+                }
+              } catch(ex) {}
+            }
+          }
+          return;
         }
-        addMsg(data);
+        if (evt.event === 'peers') {
+          updatePeers(evt.data);
+          return;
+        }
+        if (evt.event === 'deleted') {
+          allMessages = allMessages.filter(function(m) { return m.id !== evt.data.id; });
+          renderInbox();
+          updateUnreadBadge();
+          return;
+        }
+        if (evt.event === 'read') {
+          for (var i = 0; i < allMessages.length; i++) {
+            if (allMessages[i].id === evt.data.id) { allMessages[i].read = true; break; }
+          }
+          renderInbox();
+          updateUnreadBadge();
+          return;
+        }
+        if (evt.event === 'clear') {
+          allMessages = [];
+          renderInbox();
+          updateUnreadBadge();
+          return;
+        }
       } catch(err) {}
     };
 
     ws.onclose = function() {
-      dotEl.className = 'dot';
-      connLabel.textContent = 'Reconnecting';
+      connDot.classList.remove('on');
       inputEl.disabled = true;
       sendBtn.disabled = true;
       reconnTimer = setTimeout(connect, 3000);
@@ -311,76 +440,29 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
     ws.onerror = function() { ws.close(); };
   }
 
-  function send() {
-    var text = inputEl.value.trim();
-    if (!text || !ws || ws.readyState !== 1) return;
-    var ch = channelEl.value;
-    ws.send(JSON.stringify({action:'send', text:text, to:ch}));
-    inputEl.value = '';
-    inputEl.focus();
-  }
+  // --- Events ---
 
-  function uploadFile(file) {
-    var form = new FormData();
-    form.append('file', file);
-    var ch = channelEl.value;
-    if (ch) form.append('to', ch);
-
-    var bar = document.createElement('div');
-    bar.className = 'upload-progress';
-    bar.style.width = '20%';
-    document.body.appendChild(bar);
-
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/applets/mesh-chat/proxy/upload');
-    xhr.upload.onprogress = function(e) {
-      if (e.lengthComputable) bar.style.width = Math.round(e.loaded/e.total*100) + '%';
-    };
-    xhr.onload = function() { bar.style.width = '100%'; setTimeout(function(){ bar.remove(); }, 400); };
-    xhr.onerror = function() { bar.remove(); alert('Upload failed'); };
-    xhr.send(form);
-  }
-
-  sendBtn.onclick = send;
-  inputEl.onkeydown = function(e) { if (e.key === 'Enter') send(); };
-
-  channelEl.onchange = function() {
-    updatePlaceholder();
-    renderAll();
-  };
-
-  peersBtn.onclick = function(e) {
-    e.stopPropagation();
-    peersPanel.classList.toggle('open');
-  };
-  document.addEventListener('click', function() { peersPanel.classList.remove('open'); });
-
-  syncBtn.onclick = function() {
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({action:'sync'}));
-      syncBtn.textContent = 'Syncing...';
-      setTimeout(function(){ syncBtn.textContent = 'Sync'; }, 3000);
-    }
-  };
-
+  sendBtn.onclick = sendMessage;
+  inputEl.onkeydown = function(e) { if (e.key === 'Enter') sendMessage(); };
+  toSelect.onchange = updatePlaceholder;
+  syncBtn.onclick = doSync;
   attachBtn.onclick = function() { fileInput.click(); };
+  clearBtn.onclick = doClear;
   fileInput.onchange = function() {
-    if (fileInput.files.length > 0) {
-      uploadFile(fileInput.files[0]);
-      fileInput.value = '';
-    }
+    if (fileInput.files.length > 0) { uploadFile(fileInput.files[0]); fileInput.value = ''; }
   };
 
-  // drag and drop
-  messagesEl.addEventListener('dragover', function(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
-  messagesEl.addEventListener('drop', function(e) {
+  inboxEl.addEventListener('dragover', function(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  inboxEl.addEventListener('drop', function(e) {
     e.preventDefault();
     if (e.dataTransfer.files.length > 0) uploadFile(e.dataTransfer.files[0]);
   });
 
-  fetch('/api/local').then(function(r){return r.json()}).then(function(d){
-    myHostname = d.hostname || 'unknown';
-  }).catch(function(){});
+  // --- Init ---
+  fetch('/api/local').then(function(r) { return r.json(); }).then(function(d) {
+    myHostname = d.hostname || '';
+    loadMessages();
+  }).catch(function() { loadMessages(); });
 
   connect();
 })();

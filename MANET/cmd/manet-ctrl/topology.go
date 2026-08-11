@@ -48,6 +48,7 @@ func assembleLocalData() LocalData {
 	}
 
 	ifaces = enrichIfacesWithMCS(ifaces, myReg)
+	ifaces = enrichIfacesWithHalow(ifaces)
 
 	ip := stateIP(state)
 	if ip == "" {
@@ -223,6 +224,7 @@ func assembleStatusData() StatusData {
 			AllMACs:      allMACs,
 			BestLink:     bestLink,
 			LastSeen:     rn["LAST_SEEN_TIMESTAMP"],
+			Applets:      parseAppletsBrief(rn["APPLETS"]),
 		}
 
 		for _, m := range allMACs {
@@ -298,12 +300,13 @@ func assembleStatusData() StatusData {
 		nodes = append([]Node{selfNode}, nodes...)
 	}
 
-	// Attach local applets to self node
-	localApplets := scanLocalApplets()
-	for i := range nodes {
-		if nodes[i].IsMe {
-			nodes[i].Applets = localApplets
-			break
+	// Override self applets with fresh local scan (more current than registry)
+	if localApplets := scanLocalApplets(); len(localApplets) > 0 {
+		for i := range nodes {
+			if nodes[i].IsMe {
+				nodes[i].Applets = localApplets
+				break
+			}
 		}
 	}
 

@@ -9,7 +9,7 @@
     "binary": "mesh-chat",
     "port": 9800,
     "args": ["-port", "9800", "-iface", "br0"],
-    "service": "applet-mesh-chat.service"
+    "service": "mesh-chat.service"
   },
   "frontend": {
     "entrypoint": "index.html"

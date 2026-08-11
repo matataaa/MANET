@@ -5,6 +5,7 @@ let LOCAL_DATA = null;
 let activeTab = 'dashboard';
 let pollTimer = null;
 let booted = false;
+let _lastBadgeCounts = {};
 
 // Tab routing
 function switchTab(tab) {
@@ -81,39 +82,30 @@ async function fetchData() {
 function onDataUpdated() {
   if (activeTab === 'dashboard') dashboardUpdate();
   else if (activeTab === 'nodes') nodesUpdate();
-  fetchPeerApplets();
+  pollAppletBadges();
 }
 
-let _peerAppletCache = {};
-let _peerAppletFetching = {};
-function fetchPeerApplets() {
-  if (!DATA || !DATA.nodes) return;
-  DATA.nodes.forEach(function(n) {
-    if (n.is_me || !n.ip || n.applets) return;
-    if (_peerAppletCache[n.ip]) {
-      n.applets = _peerAppletCache[n.ip];
-      return;
-    }
-    if (_peerAppletFetching[n.ip]) return;
-    _peerAppletFetching[n.ip] = true;
-    fetch('http://' + n.ip + '/api/applets', {signal: AbortSignal.timeout(3000)})
-      .then(function(r) { return r.json(); })
-      .then(function(d) {
-        var applets = (d.applets || []).map(function(a) {
-          return {name: a.name, label: a.label || a.name, status: a.status || 'unknown'};
-        });
-        _peerAppletCache[n.ip] = applets;
-        if (DATA && DATA.nodes) {
-          DATA.nodes.forEach(function(nd) {
-            if (nd.ip === n.ip && !nd.is_me) nd.applets = applets;
-          });
-          if (activeTab === 'dashboard') dashboardUpdate();
-          else if (activeTab === 'nodes') nodesUpdate();
-        }
-      })
-      .catch(function() {})
-      .finally(function() { delete _peerAppletFetching[n.ip]; });
-  });
+function pollAppletBadges() {
+  var controller = new AbortController();
+  var timeoutId = setTimeout(function() { controller.abort(); }, 3000);
+  fetch('/api/applets/mesh-chat/proxy/unread', { signal: controller.signal })
+    .then(function(resp) {
+      clearTimeout(timeoutId);
+      return resp.json();
+    })
+    .then(function(data) {
+      var count = data.count || 0;
+      if (typeof notifyBadge === 'function') notifyBadge('mesh-chat', count);
+      var prev = _lastBadgeCounts['mesh-chat'] || 0;
+      if (count > prev && typeof notify === 'function') {
+        notify('Mesh Chat', count + ' unread message(s)', { type: 'info' });
+      }
+      _lastBadgeCounts['mesh-chat'] = count;
+    })
+    .catch(function() {
+      clearTimeout(timeoutId);
+      // Silently ignore errors
+    });
 }
 
 function updateHeader() {

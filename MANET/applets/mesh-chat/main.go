@@ -22,41 +22,37 @@ import (
 
 const (
 	defaultMulticastAddr = "239.255.50.50:9800"
-	maxHistory           = 500
+	maxMessages          = 1000
 	maxMsgBytes          = 65536
-	maxFileSize          = 5 << 20
+	maxFileSize          = 10 << 20
 	presenceInterval     = 15 * time.Second
-	peerTimeout          = 60 * time.Second
+	peerTimeout          = 90 * time.Second
+	deliveryTimeout      = 5 * time.Second
 	dataDir              = "/var/lib/mesh-chat"
 )
 
 type Message struct {
-	ID   string    `json:"id"`
-	From string    `json:"from"`
-	To   string    `json:"to,omitempty"`
-	Text string    `json:"text,omitempty"`
-	Time int64     `json:"time"`
-	Type string    `json:"type"`
-	File *FileInfo `json:"file,omitempty"`
+	ID     string   `json:"id"`
+	From   string   `json:"from"`
+	FromIP string   `json:"from_ip"`
+	To     []string `json:"to"`
+	Type   string   `json:"type"`
+	Body   string   `json:"body,omitempty"`
+	File   *FileMeta `json:"file,omitempty"`
+	TS     int64    `json:"ts"`
+	Read   bool     `json:"read"`
 }
 
-type FileInfo struct {
-	Name     string `json:"name"`
-	Size     int64  `json:"size"`
-	ID       string `json:"id"`
-	SenderIP string `json:"sender_ip"`
+type FileMeta struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+	ID   string `json:"id"`
 }
 
 type Peer struct {
 	Hostname string `json:"hostname"`
 	IP       string `json:"ip"`
 	LastSeen int64  `json:"last_seen"`
-}
-
-type WSCommand struct {
-	Action string `json:"action"`
-	Text   string `json:"text,omitempty"`
-	To     string `json:"to,omitempty"`
 }
 
 type Config struct {
@@ -71,17 +67,19 @@ var (
 	meshIP   string
 	cfg      Config
 
-	mu      sync.Mutex
-	clients = map[*websocket.Conn]bool{}
-	history []Message
-	peers   = map[string]*Peer{}
-	seenIDs = map[string]bool{}
+	mu         sync.Mutex
+	messages   []Message
+	readSet    = map[string]bool{}
+	deletedSet = map[string]bool{}
+	seenIDs    = map[string]bool{}
+	peers      = map[string]*Peer{}
+	clients    = map[*websocket.Conn]bool{}
 )
 
 func genID() string {
-	b := make([]byte, 6)
+	b := make([]byte, 8)
 	rand.Read(b)
-	return fmt.Sprintf("%s-%d-%s", hostname, time.Now().UnixMilli(), hex.EncodeToString(b))
+	return fmt.Sprintf("%d-%s", time.Now().UnixMilli(), hex.EncodeToString(b))
 }
 
 func getMeshIP(ifaceName string) string {
@@ -101,29 +99,99 @@ func getMeshIP(ifaceName string) string {
 	return ""
 }
 
-func isDuplicate(id string) bool {
-	if id == "" {
-		return false
+// --- Persistence ---
+
+func messagesPath() string { return filepath.Join(dataDir, "messages.jsonl") }
+func statePath() string    { return filepath.Join(dataDir, "state.json") }
+func filesDir() string     { return filepath.Join(dataDir, "files") }
+
+func loadMessages() {
+	data, err := os.ReadFile(messagesPath())
+	if err != nil {
+		return
 	}
-	if seenIDs[id] {
-		return true
-	}
-	seenIDs[id] = true
-	if len(seenIDs) > maxHistory*3 {
-		seenIDs = map[string]bool{}
-		for _, m := range history {
-			seenIDs[m.ID] = true
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
 		}
+		msg := migrateMessage([]byte(line))
+		if msg.ID == "" {
+			continue
+		}
+		messages = append(messages, msg)
+		seenIDs[msg.ID] = true
 	}
-	return false
+	if len(messages) > maxMessages {
+		messages = messages[len(messages)-maxMessages:]
+	}
+	log.Printf("loaded %d messages", len(messages))
 }
 
-func historyPath() string { return filepath.Join(dataDir, "history.jsonl") }
-func filesPath() string   { return filepath.Join(dataDir, "files") }
+func migrateMessage(data []byte) Message {
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return Message{}
+	}
+	var msg Message
+	j := func(key string, dst *string) {
+		if v, ok := raw[key]; ok {
+			json.Unmarshal(v, dst)
+		}
+	}
+	var i64 int64
+	j("id", &msg.ID)
+	j("from", &msg.From)
+	j("from_ip", &msg.FromIP)
+	j("type", &msg.Type)
 
-func persistMsg(msg Message) {
+	if v, ok := raw["body"]; ok {
+		json.Unmarshal(v, &msg.Body)
+	} else if v, ok := raw["text"]; ok {
+		json.Unmarshal(v, &msg.Body)
+	}
+
+	if v, ok := raw["ts"]; ok {
+		json.Unmarshal(v, &i64)
+		msg.TS = i64
+	} else if v, ok := raw["time"]; ok {
+		json.Unmarshal(v, &i64)
+		msg.TS = i64
+	}
+
+	if v, ok := raw["to"]; ok {
+		var s string
+		var arr []string
+		if json.Unmarshal(v, &arr) == nil {
+			msg.To = arr
+		} else if json.Unmarshal(v, &s) == nil && s != "" {
+			msg.To = []string{s}
+		}
+	}
+
+	if v, ok := raw["file"]; ok {
+		var fm FileMeta
+		json.Unmarshal(v, &fm)
+		if fm.ID != "" {
+			msg.File = &fm
+		}
+	}
+
+	if v, ok := raw["read"]; ok {
+		json.Unmarshal(v, &msg.Read)
+	}
+
+	if msg.Type == "" {
+		msg.Type = "text"
+	}
+	if msg.ID == "" {
+		msg.ID = genID()
+	}
+	return msg
+}
+
+func saveMessage(msg Message) {
 	os.MkdirAll(dataDir, 0755)
-	f, err := os.OpenFile(historyPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(messagesPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
@@ -132,89 +200,110 @@ func persistMsg(msg Message) {
 	f.Write(append(data, '\n'))
 }
 
-func loadHistory() {
-	data, err := os.ReadFile(historyPath())
+type persistedState struct {
+	Read    []string `json:"read"`
+	Deleted []string `json:"deleted"`
+}
+
+func loadState() {
+	data, err := os.ReadFile(statePath())
 	if err != nil {
 		return
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	start := 0
-	if len(lines) > maxHistory {
-		start = len(lines) - maxHistory
+	var s persistedState
+	if json.Unmarshal(data, &s) != nil {
+		return
 	}
-	for _, line := range lines[start:] {
-		if line == "" {
+	for _, id := range s.Read {
+		readSet[id] = true
+	}
+	for _, id := range s.Deleted {
+		deletedSet[id] = true
+	}
+	for i := range messages {
+		if readSet[messages[i].ID] {
+			messages[i].Read = true
+		}
+	}
+}
+
+func saveState() {
+	s := persistedState{}
+	for id := range readSet {
+		s.Read = append(s.Read, id)
+	}
+	for id := range deletedSet {
+		s.Deleted = append(s.Deleted, id)
+	}
+	data, _ := json.Marshal(s)
+	os.WriteFile(statePath(), data, 0644)
+}
+
+// --- WebSocket broadcast ---
+
+func wsEvent(event string, payload interface{}) {
+	data, _ := json.Marshal(map[string]interface{}{"event": event, "data": payload})
+	dead := []*websocket.Conn{}
+	for c := range clients {
+		if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
+			dead = append(dead, c)
+		}
+	}
+	for _, c := range dead {
+		delete(clients, c)
+		c.Close()
+	}
+}
+
+func unreadCount() int {
+	n := 0
+	for _, m := range messages {
+		if deletedSet[m.ID] || m.Type == "system" {
 			continue
 		}
-		var msg Message
-		if json.Unmarshal([]byte(line), &msg) == nil {
-			if msg.Type == "" {
-				msg.Type = "text"
+		if m.From == hostname {
+			continue
+		}
+		if !m.Read && !readSet[m.ID] {
+			if len(m.To) == 0 || contains(m.To, hostname) {
+				n++
 			}
-			if msg.ID == "" {
-				msg.ID = genID()
-			}
-			history = append(history, msg)
-			seenIDs[msg.ID] = true
 		}
 	}
-	log.Printf("loaded %d messages from disk", len(history))
+	return n
 }
 
-func broadcast(msg Message) {
-	mu.Lock()
-	defer mu.Unlock()
-
-	if msg.Type == "text" || msg.Type == "file" {
-		history = append(history, msg)
-		if len(history) > maxHistory {
-			history = history[len(history)-maxHistory:]
-		}
-		seenIDs[msg.ID] = true
-		persistMsg(msg)
-	}
-
-	dead := []*websocket.Conn{}
-	for c := range clients {
-		if err := c.WriteJSON(msg); err != nil {
-			dead = append(dead, c)
+func contains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
 		}
 	}
-	for _, c := range dead {
-		delete(clients, c)
-		c.Close()
-	}
+	return false
 }
 
-func sendPeers() {
-	mu.Lock()
-	defer mu.Unlock()
-	list := []Peer{{Hostname: hostname, IP: meshIP, LastSeen: time.Now().Unix()}}
-	for _, p := range peers {
-		list = append(list, *p)
-	}
-	payload := map[string]interface{}{"type": "peers", "peers": list}
-	dead := []*websocket.Conn{}
-	for c := range clients {
-		if err := c.WriteJSON(payload); err != nil {
-			dead = append(dead, c)
-		}
-	}
-	for _, c := range dead {
-		delete(clients, c)
-		c.Close()
-	}
-}
+// --- Multicast ---
 
-func multicastSend(msg Message) {
+func multicastSend(data []byte) {
 	addr, _ := net.ResolveUDPAddr("udp4", cfg.MulticastAddr)
 	conn, err := net.DialUDP("udp4", nil, addr)
 	if err != nil {
 		return
 	}
 	defer conn.Close()
-	data, _ := json.Marshal(msg)
 	conn.Write(data)
+}
+
+func multicastMsg(msg Message) {
+	data, _ := json.Marshal(msg)
+	multicastSend(data)
+}
+
+type syncBeacon struct {
+	Type     string `json:"type"`
+	From     string `json:"from"`
+	FromIP   string `json:"from_ip"`
+	Since    int64  `json:"since"`
 }
 
 func multicastListener() {
@@ -238,76 +327,130 @@ func multicastListener() {
 		if err != nil {
 			continue
 		}
-		var msg Message
-		if json.Unmarshal(buf[:n], &msg) != nil {
+		var raw map[string]json.RawMessage
+		if json.Unmarshal(buf[:n], &raw) != nil {
 			continue
 		}
-
-		if msg.Type == "presence" {
-			if msg.From != hostname {
-				mu.Lock()
-				peers[msg.From] = &Peer{Hostname: msg.From, IP: msg.Text, LastSeen: time.Now().Unix()}
-				mu.Unlock()
-				sendPeers()
-			}
-			continue
+		var msgType string
+		if v, ok := raw["type"]; ok {
+			json.Unmarshal(v, &msgType)
 		}
 
-		if msg.Type == "sync_req" {
-			if msg.From != hostname {
-				go handleSyncReq(msg)
-			}
-			continue
+		switch msgType {
+		case "presence":
+			handlePresence(buf[:n])
+		case "sync":
+			handleSyncBeacon(buf[:n])
+		case "text", "file":
+			handleIncomingMessage(buf[:n])
 		}
-
-		if msg.From == hostname {
-			continue
-		}
-
-		mu.Lock()
-		dup := isDuplicate(msg.ID)
-		mu.Unlock()
-		if dup {
-			continue
-		}
-
-		log.Printf("rx %s from %s", msg.Type, msg.From)
-		broadcast(msg)
 	}
 }
 
-func handleSyncReq(req Message) {
+func handlePresence(data []byte) {
+	var p struct {
+		From   string `json:"from"`
+		FromIP string `json:"from_ip"`
+	}
+	if json.Unmarshal(data, &p) != nil || p.From == hostname {
+		return
+	}
 	mu.Lock()
-	var msgs []Message
-	for _, m := range history {
-		if m.Time > req.Time {
-			msgs = append(msgs, m)
+	_, existed := peers[p.From]
+	peers[p.From] = &Peer{Hostname: p.From, IP: p.FromIP, LastSeen: time.Now().Unix()}
+	mu.Unlock()
+	if !existed {
+		mu.Lock()
+		wsEvent("peers", peerList())
+		mu.Unlock()
+	}
+}
+
+func handleSyncBeacon(data []byte) {
+	var sb syncBeacon
+	if json.Unmarshal(data, &sb) != nil || sb.From == hostname || sb.FromIP == "" {
+		return
+	}
+	mu.Lock()
+	peers[sb.From] = &Peer{Hostname: sb.From, IP: sb.FromIP, LastSeen: time.Now().Unix()}
+	var toSend []Message
+	for _, m := range messages {
+		if m.TS <= sb.Since || m.From == sb.From {
+			continue
+		}
+		if len(m.To) == 0 || contains(m.To, sb.From) {
+			toSend = append(toSend, m)
 		}
 	}
 	mu.Unlock()
-	for _, m := range msgs {
-		multicastSend(m)
-		time.Sleep(5 * time.Millisecond)
+	if len(toSend) > 0 {
+		go deliverMessages(sb.FromIP, toSend)
 	}
 }
+
+func handleIncomingMessage(data []byte) {
+	msg := migrateMessage(data)
+	if msg.ID == "" || msg.From == hostname {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if seenIDs[msg.ID] {
+		return
+	}
+	if len(msg.To) > 0 && !contains(msg.To, hostname) {
+		return
+	}
+	msg.Read = false
+	seenIDs[msg.ID] = true
+	messages = append(messages, msg)
+	if len(messages) > maxMessages {
+		messages = messages[len(messages)-maxMessages:]
+	}
+	saveMessage(msg)
+	wsEvent("message", msg)
+	wsEvent("unread", map[string]int{"count": unreadCount()})
+	log.Printf("rx %s from %s", msg.Type, msg.From)
+}
+
+// --- Peer delivery ---
+
+func deliverMessages(peerIP string, msgs []Message) {
+	client := &http.Client{Timeout: deliveryTimeout}
+	for _, m := range msgs {
+		data, _ := json.Marshal(m)
+		resp, err := client.Post(
+			fmt.Sprintf("http://%s:%d/deliver", peerIP, cfg.Port),
+			"application/json",
+			strings.NewReader(string(data)),
+		)
+		if err != nil {
+			log.Printf("deliver to %s failed: %v", peerIP, err)
+			continue
+		}
+		resp.Body.Close()
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func peerList() []Peer {
+	list := []Peer{{Hostname: hostname, IP: meshIP, LastSeen: time.Now().Unix()}}
+	for _, p := range peers {
+		list = append(list, *p)
+	}
+	return list
+}
+
+// --- Presence loop ---
 
 func presenceLoop() {
 	time.Sleep(2 * time.Second)
-
-	multicastSend(Message{Type: "presence", From: hostname, Text: meshIP, Time: time.Now().Unix()})
-
-	mu.Lock()
-	var lastTime int64
-	if len(history) > 0 {
-		lastTime = history[len(history)-1].Time
-	}
-	mu.Unlock()
-	multicastSend(Message{Type: "sync_req", From: hostname, Time: lastTime})
+	sendPresence()
+	sendSync()
 
 	tick := time.NewTicker(presenceInterval)
 	for range tick.C {
-		multicastSend(Message{Type: "presence", From: hostname, Text: meshIP, Time: time.Now().Unix()})
-
+		sendPresence()
 		mu.Lock()
 		now := time.Now().Unix()
 		changed := false
@@ -317,29 +460,51 @@ func presenceLoop() {
 				changed = true
 			}
 		}
-		mu.Unlock()
 		if changed {
-			sendPeers()
+			wsEvent("peers", peerList())
 		}
+		mu.Unlock()
 	}
 }
+
+func sendPresence() {
+	data, _ := json.Marshal(map[string]string{
+		"type": "presence", "from": hostname, "from_ip": meshIP,
+	})
+	multicastSend(data)
+}
+
+func sendSync() {
+	mu.Lock()
+	var since int64
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].TS > 0 {
+			since = messages[i].TS - 3600
+			break
+		}
+	}
+	mu.Unlock()
+	data, _ := json.Marshal(syncBeacon{
+		Type: "sync", From: hostname, FromIP: meshIP, Since: since,
+	})
+	multicastSend(data)
+}
+
+// --- HTTP Handlers ---
 
 func handleWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
-
 	mu.Lock()
 	clients[conn] = true
-	for _, msg := range history {
-		conn.WriteJSON(msg)
+	init := map[string]interface{}{
+		"hostname": hostname,
+		"peers":    peerList(),
+		"unread":   unreadCount(),
 	}
-	list := []Peer{{Hostname: hostname, IP: meshIP, LastSeen: time.Now().Unix()}}
-	for _, p := range peers {
-		list = append(list, *p)
-	}
-	conn.WriteJSON(map[string]interface{}{"type": "peers", "peers": list})
+	conn.WriteJSON(map[string]interface{}{"event": "init", "data": init})
 	mu.Unlock()
 
 	defer func() {
@@ -350,85 +515,177 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	for {
-		_, raw, err := conn.ReadMessage()
+		_, _, err := conn.ReadMessage()
 		if err != nil {
 			break
 		}
-
-		var cmd WSCommand
-		if json.Unmarshal(raw, &cmd) == nil && cmd.Action != "" {
-			switch cmd.Action {
-			case "send":
-				text := strings.TrimSpace(cmd.Text)
-				if text == "" || len(text) > 2000 {
-					continue
-				}
-				msg := Message{ID: genID(), From: hostname, To: cmd.To, Text: text, Time: time.Now().Unix(), Type: "text"}
-				broadcast(msg)
-				multicastSend(msg)
-			case "sync":
-				mu.Lock()
-				var t int64
-				if len(history) > 0 {
-					t = history[len(history)-1].Time - 3600
-				}
-				mu.Unlock()
-				multicastSend(Message{Type: "sync_req", From: hostname, Time: t})
-			}
-			continue
-		}
-
-		// backward compat: plain text
-		text := strings.TrimSpace(string(raw))
-		if text == "" || len(text) > 2000 {
-			continue
-		}
-		msg := Message{ID: genID(), From: hostname, Text: text, Time: time.Now().Unix(), Type: "text"}
-		broadcast(msg)
-		multicastSend(msg)
 	}
 }
 
+func handleGetMessages(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	var out []Message
+	for _, m := range messages {
+		if deletedSet[m.ID] {
+			continue
+		}
+		if m.Type != "text" && m.Type != "file" {
+			continue
+		}
+		if readSet[m.ID] {
+			m.Read = true
+		}
+		if len(m.To) == 0 || contains(m.To, hostname) || m.From == hostname {
+			out = append(out, m)
+		}
+	}
+	mu.Unlock()
+	if out == nil {
+		out = []Message{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+func handleMessageAction(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/messages/"), "/")
+	if len(parts) < 1 {
+		http.Error(w, "not found", 404)
+		return
+	}
+	id := parts[0]
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == "DELETE" || (r.Method == "POST" && action == "delete") {
+		deletedSet[id] = true
+		saveState()
+		wsEvent("deleted", map[string]string{"id": id})
+		wsEvent("unread", map[string]int{"count": unreadCount()})
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+		return
+	}
+
+	if r.Method == "POST" && action == "read" {
+		readSet[id] = true
+		for i := range messages {
+			if messages[i].ID == id {
+				messages[i].Read = true
+				break
+			}
+		}
+		saveState()
+		wsEvent("read", map[string]string{"id": id})
+		wsEvent("unread", map[string]int{"count": unreadCount()})
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+		return
+	}
+
+	http.Error(w, "not found", 404)
+}
+
+func handleSend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	var req struct {
+		To   []string `json:"to"`
+		Body string   `json:"body"`
+	}
+	if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.Body) == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "empty message"})
+		return
+	}
+	if len(req.Body) > 4000 {
+		req.Body = req.Body[:4000]
+	}
+
+	msg := Message{
+		ID: genID(), From: hostname, FromIP: meshIP,
+		To: req.To, Type: "text", Body: req.Body,
+		TS: time.Now().Unix(), Read: true,
+	}
+
+	mu.Lock()
+	seenIDs[msg.ID] = true
+	messages = append(messages, msg)
+	if len(messages) > maxMessages {
+		messages = messages[len(messages)-maxMessages:]
+	}
+	saveMessage(msg)
+	wsEvent("message", msg)
+	mu.Unlock()
+
+	multicastMsg(msg)
+	go tryDeliver(msg)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "id": msg.ID})
+}
+
 func handleUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method != "POST" {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
 	r.ParseMultipartForm(maxFileSize)
 	file, hdr, err := r.FormFile("file")
 	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "no file"})
 		return
 	}
 	defer file.Close()
 	if hdr.Size > maxFileSize {
-		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "max 5MB"})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "max 10MB"})
 		return
 	}
 
-	id := genID()
-	ext := filepath.Ext(hdr.Filename)
-	stored := id + ext
-
-	os.MkdirAll(filesPath(), 0755)
-	dst, err := os.Create(filepath.Join(filesPath(), stored))
+	fileID := genID() + filepath.Ext(hdr.Filename)
+	os.MkdirAll(filesDir(), 0755)
+	dst, err := os.Create(filepath.Join(filesDir(), fileID))
 	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "storage error"})
 		return
 	}
 	io.Copy(dst, file)
 	dst.Close()
 
-	to := r.FormValue("to")
-	msg := Message{
-		ID: id, From: hostname, To: to, Time: time.Now().Unix(), Type: "file",
-		File: &FileInfo{Name: hdr.Filename, Size: hdr.Size, ID: stored, SenderIP: meshIP},
+	var to []string
+	if t := r.FormValue("to"); t != "" {
+		to = strings.Split(t, ",")
 	}
-	broadcast(msg)
-	multicastSend(msg)
+
+	msg := Message{
+		ID: genID(), From: hostname, FromIP: meshIP,
+		To: to, Type: "file",
+		File: &FileMeta{Name: hdr.Filename, Size: hdr.Size, ID: fileID},
+		TS: time.Now().Unix(), Read: true,
+	}
+
+	mu.Lock()
+	seenIDs[msg.ID] = true
+	messages = append(messages, msg)
+	saveMessage(msg)
+	wsEvent("message", msg)
+	mu.Unlock()
+
+	multicastMsg(msg)
+	go tryDeliver(msg)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "id": stored})
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "id": msg.ID})
 }
 
 func handleFiles(w http.ResponseWriter, r *http.Request) {
@@ -437,25 +694,132 @@ func handleFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", 404)
 		return
 	}
-	http.ServeFile(w, r, filepath.Join(filesPath(), name))
+	http.ServeFile(w, r, filepath.Join(filesDir(), name))
+}
+
+func handleUnread(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	n := unreadCount()
+	mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"count": n})
+}
+
+func handleSyncReq(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	go sendSync()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+func handlePeers(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	list := peerList()
+	mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(list)
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
-	nc, nh, np := len(clients), len(history), len(peers)+1
+	nc, nm, np := len(clients), len(messages), len(peers)+1
 	mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "ok", "hostname": hostname, "clients": nc, "history": nh, "peers": np,
+		"status": "ok", "hostname": hostname, "clients": nc, "messages": nm, "peers": np,
 	})
 }
 
 func handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"multicast_addr": cfg.MulticastAddr, "interface": cfg.Iface, "port": cfg.Port, "max_history": maxHistory,
+		"multicast_addr": cfg.MulticastAddr, "interface": cfg.Iface, "port": cfg.Port,
 	})
 }
+
+func handleDeliver(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxMsgBytes))
+	if err != nil {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	msg := migrateMessage(body)
+	if msg.ID == "" || msg.From == hostname {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+		return
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if seenIDs[msg.ID] {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "dup": true})
+		return
+	}
+	msg.Read = false
+	seenIDs[msg.ID] = true
+	messages = append(messages, msg)
+	if len(messages) > maxMessages {
+		messages = messages[len(messages)-maxMessages:]
+	}
+	saveMessage(msg)
+	wsEvent("message", msg)
+	wsEvent("unread", map[string]int{"count": unreadCount()})
+	log.Printf("delivered %s from %s", msg.Type, msg.From)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+func handleDeleteAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	mu.Lock()
+	for _, m := range messages {
+		deletedSet[m.ID] = true
+	}
+	saveState()
+	wsEvent("clear", nil)
+	wsEvent("unread", map[string]int{"count": 0})
+	mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+// --- Delivery helper ---
+
+func tryDeliver(msg Message) {
+	mu.Lock()
+	targets := make(map[string]string)
+	if len(msg.To) == 0 {
+		for _, p := range peers {
+			targets[p.Hostname] = p.IP
+		}
+	} else {
+		for _, h := range msg.To {
+			if p, ok := peers[h]; ok {
+				targets[h] = p.IP
+			}
+		}
+	}
+	mu.Unlock()
+
+	for _, ip := range targets {
+		deliverMessages(ip, []Message{msg})
+	}
+}
+
+// --- Config ---
 
 func loadConfig(path string) Config {
 	c := Config{MulticastAddr: defaultMulticastAddr, Iface: "br0", Port: 9800}
@@ -509,17 +873,28 @@ func main() {
 	}
 	meshIP = getMeshIP(cfg.Iface)
 
-	loadHistory()
+	loadMessages()
+	loadState()
+
 	go multicastListener()
 	go presenceLoop()
 
-	http.HandleFunc("/ws", handleWS)
-	http.HandleFunc("/health", handleHealth)
-	http.HandleFunc("/config", handleConfig)
-	http.HandleFunc("/upload", handleUpload)
-	http.HandleFunc("/files/", handleFiles)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", handleWS)
+	mux.HandleFunc("/messages", handleGetMessages)
+	mux.HandleFunc("/messages/", handleMessageAction)
+	mux.HandleFunc("/send", handleSend)
+	mux.HandleFunc("/upload", handleUpload)
+	mux.HandleFunc("/files/", handleFiles)
+	mux.HandleFunc("/unread", handleUnread)
+	mux.HandleFunc("/sync", handleSyncReq)
+	mux.HandleFunc("/peers", handlePeers)
+	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/config", handleConfig)
+	mux.HandleFunc("/deliver", handleDeliver)
+	mux.HandleFunc("/clear", handleDeleteAll)
 
-	listen := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
-	log.Printf("mesh-chat v2: host=%s ip=%s listen=%s mcast=%s", hostname, meshIP, listen, cfg.MulticastAddr)
-	log.Fatal(http.ListenAndServe(listen, nil))
+	listen := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
+	log.Printf("mesh-chat v3: host=%s ip=%s listen=%s mcast=%s", hostname, meshIP, listen, cfg.MulticastAddr)
+	log.Fatal(http.ListenAndServe(listen, mux))
 }

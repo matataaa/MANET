@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ const (
 	registryFile = "/var/run/mesh_node_registry"
 	stateFile    = "/var/lib/manet/state.json"
 	confFile     = "/etc/mesh.conf"
+	appletsDir   = "/usr/local/share/manet/applets"
 	interval     = 15 * time.Second
 )
 
@@ -46,6 +48,7 @@ type NodeInfo struct {
 	Ch5G         string `json:"ch_5g"`
 	IsLimp       string `json:"is_limp"`
 	Timestamp    string `json:"timestamp"`
+	Applets      string `json:"applets,omitempty"`
 }
 
 func main() {
@@ -108,6 +111,7 @@ func collectLocal() NodeInfo {
 		Ch5G:         getChannel("5"),
 		IsLimp:       boolStr(fileExists("/var/run/mesh_limp_mode")),
 		Timestamp:    fmt.Sprintf("%d", time.Now().Unix()),
+		Applets:      scanApplets(),
 	}
 }
 
@@ -201,6 +205,7 @@ func writeNode(b *strings.Builder, n NodeInfo) {
 	w("IS_IN_LIMP_MODE", n.IsLimp)
 	w("LAST_SEEN_TIMESTAMP", n.Timestamp)
 	w("NODE_STATE", "ACTIVE")
+	w("APPLETS", n.Applets)
 	fmt.Fprintln(b)
 }
 
@@ -416,4 +421,47 @@ func loadKV(path string) map[string]string {
 		}
 	}
 	return m
+}
+
+func scanApplets() string {
+	entries, err := os.ReadDir(appletsDir)
+	if err != nil {
+		return ""
+	}
+	var parts []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(appletsDir, e.Name(), "applet.json"))
+		if err != nil {
+			continue
+		}
+		var m struct {
+			Name    string `json:"name"`
+			Label   string `json:"label"`
+			Backend struct {
+				Service string `json:"service"`
+			} `json:"backend"`
+		}
+		if json.Unmarshal(data, &m) != nil || m.Name == "" {
+			continue
+		}
+		label := m.Label
+		if label == "" {
+			label = m.Name
+		}
+		svc := m.Backend.Service
+		if svc == "" {
+			svc = m.Name + ".service"
+		}
+		status := "unknown"
+		if exec.Command("systemctl", "is-active", "--quiet", svc).Run() == nil {
+			status = "running"
+		} else {
+			status = "stopped"
+		}
+		parts = append(parts, m.Name+"|"+label+"|"+status)
+	}
+	return strings.Join(parts, ",")
 }

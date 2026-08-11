@@ -10,6 +10,9 @@ function servicesActivate() {
   svcFetch();
 }
 
+function servicesDeactivate() {
+}
+
 async function svcFetch() {
   try {
     const r = await fetch('/api/services');

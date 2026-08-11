@@ -108,6 +108,7 @@ function emit(prefix, field, val) {
     emit(p, "WIFI_24_RX_MCS", jval(json, "wifi_24_rx_mcs"))
     emit(p, "WIFI_5_TX_MCS", jval(json, "wifi_5_tx_mcs"))
     emit(p, "WIFI_5_RX_MCS", jval(json, "wifi_5_rx_mcs"))
+    emit(p, "APPLETS", jval(json, "applets"))
     printf "\n" >> reg_tmp
 
     decoded++

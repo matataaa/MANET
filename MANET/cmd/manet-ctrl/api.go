@@ -85,21 +85,89 @@ func apiLocal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, data)
 }
 
+func apiDaemons(w http.ResponseWriter, r *http.Request) {
+	result := map[string]interface{}{}
+
+	for _, d := range []struct {
+		key  string
+		path string
+	}{
+		{"gps", "/run/gps_status.json"},
+		{"battery", "/run/battery_status.json"},
+		{"cot_emitter", "/run/cot_emitter_status.json"},
+	} {
+		data, err := os.ReadFile(d.path)
+		if err != nil {
+			result[d.key] = map[string]interface{}{"available": false}
+			continue
+		}
+		var m map[string]interface{}
+		if json.Unmarshal(data, &m) != nil {
+			result[d.key] = map[string]interface{}{"available": false}
+			continue
+		}
+		m["available"] = true
+		result[d.key] = m
+	}
+
+	writeJSON(w, 200, result)
+}
+
 func apiPeer(w http.ResponseWriter, r *http.Request) {
-	peerIP := strings.TrimPrefix(r.URL.Path, "/api/peer/")
-	if peerIP == "" {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/peer/")
+	if rest == "" {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Missing peer IP"})
 		return
+	}
+	peerIP := rest
+	subPath := ""
+	if idx := strings.IndexByte(rest, '/'); idx >= 0 {
+		peerIP = rest[:idx]
+		subPath = rest[idx:]
 	}
 	if ip := net.ParseIP(peerIP); ip == nil {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Invalid IP"})
 		return
 	}
-	data := getPeerLocalData(peerIP, 2*time.Second)
-	if data == nil {
-		data = make(map[string]interface{})
+
+	if subPath == "" {
+		data := getPeerLocalData(peerIP, 2*time.Second)
+		if data == nil {
+			data = make(map[string]interface{})
+		}
+		writeJSON(w, 200, data)
+		return
 	}
-	writeJSON(w, 200, data)
+
+	peerProxyRequest(w, r, peerIP, subPath)
+}
+
+func peerProxyRequest(w http.ResponseWriter, r *http.Request, peerIP, path string) {
+	targetURL := fmt.Sprintf("http://%s:80%s", peerIP, path)
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
+	if err != nil {
+		writeJSON(w, 502, map[string]interface{}{"ok": false, "error": "proxy request failed"})
+		return
+	}
+	proxyReq.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+	proxyReq.ContentLength = r.ContentLength
+
+	resp, err := client.Do(proxyReq)
+	if err != nil {
+		writeJSON(w, 502, map[string]interface{}{"ok": false, "error": "peer unreachable: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	for k, vals := range resp.Header {
+		for _, v := range vals {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 func apiVoice(w http.ResponseWriter, r *http.Request) {
@@ -439,8 +507,10 @@ func apiControlHostname(w http.ResponseWriter, r *http.Request) {
 
 var saveableKeys = map[string]bool{
 	"node_hostname": true, "eud": true, "lan_ap_ssid": true, "lan_ap_key": true,
+	"lan_ap_channel": true, "lan_ap_bw": true,
 	"max_euds_per_node": true, "mesh_ssid": true, "mesh_key": true,
-	"ipv4_network": true, "regulatory_domain": true, "acs": true, "mtx": true,
+	"ipv4_network": true, "regulatory_domain": true, "halow_bw": true,
+	"acs": true, "mtx": true,
 	"mumble": true, "auto_update": true, "admin_password": true,
 	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
 }

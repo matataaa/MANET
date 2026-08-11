@@ -114,6 +114,7 @@ type EUD struct {
 
 type GPS struct {
 	Available bool   `json:"available"`
+	Connected bool   `json:"connected"`
 	Lat       string `json:"lat"`
 	Lon       string `json:"lon"`
 	Alt       string `json:"alt"`
@@ -314,6 +315,25 @@ func parseRegistry() map[string]RegistryNode {
 
 func normMAC(mac string) string {
 	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(mac), "-", ":"))
+}
+
+func parseAppletsBrief(s string) []AppletBrief {
+	if s == "" {
+		return nil
+	}
+	var out []AppletBrief
+	for _, entry := range strings.Split(s, ",") {
+		parts := strings.SplitN(entry, "|", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		ab := AppletBrief{Name: parts[0], Label: parts[1]}
+		if len(parts) >= 3 {
+			ab.Status = parts[2]
+		}
+		out = append(out, ab)
+	}
+	return out
 }
 
 // --- Auth helpers ---

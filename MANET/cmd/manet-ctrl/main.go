@@ -241,6 +241,7 @@ func main() {
 	mux.HandleFunc("/api/peer/", apiPeer)
 	mux.HandleFunc("/api/voice", apiVoice)
 	mux.HandleFunc("/api/admin/status", apiAdminStatus)
+	mux.HandleFunc("/api/daemons", apiDaemons)
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
 			apiServiceAction(w, r)
