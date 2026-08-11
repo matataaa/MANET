@@ -72,6 +72,10 @@ The nodes support connecting external devices (End User Devices) in three ways:
 * **Wireless**: The node broadcasts a local 5GHz AP (separate from the mesh backhaul) for clients to join.
 * **Auto**: Default behavior. Acts as "Wireless" unless an Ethernet device is detected, then switches priority to "Wired".
 
+## Credits
+
+This project is a fork of [very-srs/MANET](https://github.com/very-srs/MANET) with additional contributions from [quietprotocol/MANET](https://github.com/quietprotocol/MANET).
+
 ## Documentation
 * [Provisioning Guide](MANET/provisioning/README.md)
 * [Node Tools Documentation](MANET/node_tools/README.md)
