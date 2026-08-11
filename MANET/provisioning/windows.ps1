@@ -31,8 +31,6 @@ $Script:EUD_CONNECTION    = ""
 $Script:LAN_AP_SSID       = ""
 $Script:LAN_AP_KEY        = ""
 $Script:MAX_EUDS_PER_NODE = 0
-$Script:INSTALL_MEDIAMTX  = ""
-$Script:INSTALL_MUMBLE    = ""
 $Script:MESH_SSID         = ""
 $Script:MESH_SAE_KEY      = ""
 $Script:LAN_CIDR_BLOCK    = ""
@@ -579,12 +577,6 @@ function Ask-Questions {
         $Script:MAX_EUDS_PER_NODE = 0
     }
 
-    $r = Read-Host "Install MediaMTX Server? (Y/n)"
-    $Script:INSTALL_MEDIAMTX = if ([string]::IsNullOrWhiteSpace($r) -or $r -match "^[Yy]") { "y" } else { "n" }
-
-    $r = Read-Host "Install Mumble Server (murmur)? (Y/n)"
-    $Script:INSTALL_MUMBLE = if ([string]::IsNullOrWhiteSpace($r) -or $r -match "^[Yy]") { "y" } else { "n" }
-
     $Script:MESH_SSID = Read-Host "Enter MESH SSID Name"
 
     while ($true) {
@@ -694,8 +686,6 @@ EUD_CONNECTION="$($Script:EUD_CONNECTION)"
 LAN_AP_SSID="$($Script:LAN_AP_SSID)"
 LAN_AP_KEY="$($Script:LAN_AP_KEY)"
 MAX_EUDS_PER_NODE="$($Script:MAX_EUDS_PER_NODE)"
-INSTALL_MEDIAMTX="$($Script:INSTALL_MEDIAMTX)"
-INSTALL_MUMBLE="$($Script:INSTALL_MUMBLE)"
 REGULATORY_DOMAIN="$($Script:REGULATORY_DOMAIN)"
 HALOW_REGULATORY_DOMAIN="$($Script:HALOW_REGULATORY_DOMAIN)"
 MESH_SSID="$($Script:MESH_SSID)"
@@ -722,8 +712,6 @@ function Load-Config {
                 "LAN_AP_SSID"             { $Script:LAN_AP_SSID             = $Matches[2] }
                 "LAN_AP_KEY"              { $Script:LAN_AP_KEY               = $Matches[2] }
                 "MAX_EUDS_PER_NODE"       { $Script:MAX_EUDS_PER_NODE        = [int]$Matches[2] }
-                "INSTALL_MEDIAMTX"        { $Script:INSTALL_MEDIAMTX         = $Matches[2] }
-                "INSTALL_MUMBLE"          { $Script:INSTALL_MUMBLE            = $Matches[2] }
                 "REGULATORY_DOMAIN"       { $Script:REGULATORY_DOMAIN        = $Matches[2] }
                 "HALOW_REGULATORY_DOMAIN" { $Script:HALOW_REGULATORY_DOMAIN  = $Matches[2] }
                 "MESH_SSID"               { $Script:MESH_SSID                = $Matches[2] }
@@ -749,8 +737,6 @@ function Load-Config {
         Write-Host "  LAN AP Key: $($Script:LAN_AP_KEY)"
         Write-Host "  Max EUDs per node: $($Script:MAX_EUDS_PER_NODE)"
     }
-    Write-Host "  Install MediaMTX: $($Script:INSTALL_MEDIAMTX)"
-    Write-Host "  Install Mumble: $($Script:INSTALL_MUMBLE)"
     Write-Host "  Regulatory Domain: $($Script:REGULATORY_DOMAIN)"
     Write-Host "  HaLow Regulatory Region: $($Script:HALOW_REGULATORY_DOMAIN)"
     Write-Host "  Mesh SSID: $($Script:MESH_SSID)"
@@ -918,8 +904,6 @@ lan_ap_key=$($Script:LAN_AP_KEY)
 lan_ap_channel=100
 lan_ap_bw=80
 max_euds_per_node=$($Script:MAX_EUDS_PER_NODE)
-mtx=$($Script:INSTALL_MEDIAMTX)
-mumble=$($Script:INSTALL_MUMBLE)
 mesh_ssid=$($Script:MESH_SSID)
 mesh_key=$($Script:MESH_SAE_KEY)
 ipv4_network=$($Script:LAN_CIDR_BLOCK)
@@ -989,8 +973,6 @@ auto_update=$($Script:AUTO_UPDATE)
             -replace '__LAN_AP_SSID__',             $Script:LAN_AP_SSID `
             -replace '__LAN_AP_KEY__',              $Script:LAN_AP_KEY `
             -replace '__MAX_EUDS_PER_NODE__',       $Script:MAX_EUDS_PER_NODE `
-            -replace '__INSTALL_MEDIAMTX__',        $Script:INSTALL_MEDIAMTX `
-            -replace '__INSTALL_MUMBLE__',          $Script:INSTALL_MUMBLE `
             -replace '__MESH_SSID__',               $Script:MESH_SSID `
             -replace '__MESH_SAE_KEY__',            $Script:MESH_SAE_KEY `
             -replace '__LAN_CIDR_BLOCK__',          $Script:LAN_CIDR_BLOCK `
@@ -1159,8 +1141,6 @@ WantedBy=multi-user.target
         -replace '__LAN_AP_SSID__',             $Script:LAN_AP_SSID `
         -replace '__LAN_AP_KEY__',              $Script:LAN_AP_KEY `
         -replace '__MAX_EUDS_PER_NODE__',       $Script:MAX_EUDS_PER_NODE `
-        -replace '__INSTALL_MEDIAMTX__',        $Script:INSTALL_MEDIAMTX `
-        -replace '__INSTALL_MUMBLE__',          $Script:INSTALL_MUMBLE `
         -replace '__MESH_SSID__',               $Script:MESH_SSID `
         -replace '__MESH_SAE_KEY__',            $Script:MESH_SAE_KEY `
         -replace '__LAN_CIDR_BLOCK__',          $Script:LAN_CIDR_BLOCK `

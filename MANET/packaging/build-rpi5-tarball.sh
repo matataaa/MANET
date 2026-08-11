@@ -36,6 +36,14 @@ install_tree "$ROOTFS/usr" "$STAGE/usr"
 install_tree "$ROOTFS/etc" "$STAGE/etc"
 install_tree "$ROOTFS/root" "$STAGE/root"
 
+# provision-mesh.sh is generated per-build from firstrun.sh.template and is
+# ALREADY RUNNING (as /usr/local/bin/provision-mesh.sh) at the moment this
+# tarball is extracted over /. Shipping it would overwrite the executing
+# script in place — bash reads scripts lazily by byte offset, so it can then
+# resume at a bogus offset. The rootfs copy is also a pre-rendered rpi5 build
+# (hardcoded max_euds_per_node), which would be wrong on any other board.
+rm -f "$STAGE/usr/local/bin/provision-mesh.sh"
+
 chmod -R a+rX "$STAGE/usr/local/bin"
 find "$STAGE/usr/local/bin" -type f \
     \( -name '*.sh' -o -name '*.py' -o -name 'mesh' \) \

@@ -146,7 +146,8 @@ apt install -y ipcalc nmap lshw tcpdump net-tools nftables wireless-tools iperf3
         radvd bridge-utils firmware-mediatek libnss-mdns networkd-dispatcher\
         libgps-dev libcap-dev screen arping bc jq git libssl-dev hostapd dnsmasq pulseaudio\
         python3-protobuf unzip chrony systemd-resolved dhcping mpg123\
-        libnl-3-dev libnl-genl-3-dev libnl-route-3-dev ebtables libdbus-1-dev gpsd pulseaudio-utils
+        libnl-3-dev libnl-genl-3-dev libnl-route-3-dev ebtables libdbus-1-dev gpsd pulseaudio-utils \
+    || echo "WARNING: apt install failed (offline re-run?) — continuing with packages already present"
 
 
 # Unpack the tar file that was pulled down earlier.  This contains the kernel and
@@ -226,8 +227,16 @@ echo "Done"
 apt remove -y avahi yq > /dev/null 2>&1 || true
 
 # Download and install Go yq, this has better features
-wget -q https://github.com/mikefarah/yq/releases/latest/download/yq_linux_arm64 -O /usr/bin/yq 2>/dev/null || true
-[ -f /usr/bin/yq ] && chmod +x /usr/bin/yq
+# Download to a temp path first — wget -O truncates its target before the
+# transfer starts, so writing straight to /usr/bin/yq leaves a 0-byte
+# executable when there is no internet.
+if wget -q https://github.com/mikefarah/yq/releases/latest/download/yq_linux_arm64 \
+        -O /tmp/yq.download 2>/dev/null && [ -s /tmp/yq.download ]; then
+    install -m 0755 /tmp/yq.download /usr/bin/yq
+else
+    echo "WARNING: yq download failed; keeping existing /usr/bin/yq if present"
+fi
+rm -f /tmp/yq.download
 
 # These add network traffic, disable them
 echo "Disabling APT timers for automatic updates"
@@ -376,7 +385,7 @@ for LAN in $(networkctl | awk '/ether/ {print $2}'); do
 		Name=end${CT}
 	EOF
     cp /etc/systemd/network/10-end${CT}.network /etc/systemd/network/10-end${CT}.network.dhcp-default
-    (( CT++ ))
+    CT=$((CT + 1))
 done
 echo "Ethernet config added"
 

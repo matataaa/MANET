@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
@@ -192,11 +193,17 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	q := r.URL.Query()
+	target := q.Get("target")
 	unit := q.Get("unit")
 	file := q.Get("file")
 	lines := q.Get("lines")
 	if lines == "" {
 		lines = "200"
+	}
+
+	if target != "" {
+		handleLogsProxy(conn, target, q)
+		return
 	}
 
 	var cmd *exec.Cmd
@@ -245,6 +252,58 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 	log.Printf("logs ended pid=%d", cmd.Process.Pid)
 }
 
+func handleLogsProxy(client *websocket.Conn, target string, q url.Values) {
+	params := url.Values{}
+	if u := q.Get("unit"); u != "" {
+		params.Set("unit", u)
+	}
+	if f := q.Get("file"); f != "" {
+		params.Set("file", f)
+	}
+	if l := q.Get("lines"); l != "" {
+		params.Set("lines", l)
+	}
+	remoteURL := fmt.Sprintf("wss://%s/ws/logs?%s", target, params.Encode())
+
+	dialer := websocket.Dialer{
+		ReadBufferSize:  16384,
+		WriteBufferSize: 16384,
+		TLSClientConfig: peerTLSConfig,
+		HandshakeTimeout: 5 * time.Second,
+	}
+	remote, _, err := dialer.Dial(remoteURL, nil)
+	if err != nil {
+		log.Printf("logs proxy dial %s: %v", target, err)
+		client.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\x1b[31mFailed to connect to %s: %v\x1b[0m\r\n", target, err)))
+		return
+	}
+	defer remote.Close()
+	log.Printf("logs proxy connected to %s", target)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			msgType, msg, err := remote.ReadMessage()
+			if err != nil {
+				client.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\x1b[31mRemote %s disconnected\x1b[0m\r\n", target)))
+				return
+			}
+			if err := client.WriteMessage(msgType, msg); err != nil {
+				return
+			}
+		}
+	}()
+
+	for {
+		_, _, err := client.ReadMessage()
+		if err != nil {
+			break
+		}
+	}
+	<-done
+}
+
 var mimeTypes = map[string]string{
 	".html": "text/html; charset=utf-8",
 	".css":  "text/css; charset=utf-8",
@@ -289,6 +348,13 @@ func serveStatic(webRoot string) http.HandlerFunc {
 			w.Header().Set("Content-Type", ct)
 		}
 
+		switch ext {
+		case ".js", ".css":
+			w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+		case ".woff", ".woff2", ".ttf", ".png", ".jpg", ".ico", ".svg":
+			w.Header().Set("Cache-Control", "public, max-age=86400")
+		}
+
 		http.ServeFile(w, r, filePath)
 	}
 }
@@ -309,13 +375,11 @@ func main() {
 	// WebSocket
 	mux.HandleFunc("/ws/terminal", handleTerminal)
 	mux.HandleFunc("/ws/logs", handleLogs)
-	mux.HandleFunc("/ws/voice", handleVoiceWS)
 
 	// Status APIs
 	mux.HandleFunc("/api/data", apiData)
 	mux.HandleFunc("/api/local", apiLocal)
 	mux.HandleFunc("/api/peer/", apiPeer)
-	mux.HandleFunc("/api/voice", apiVoice)
 	mux.HandleFunc("/api/admin/status", apiAdminStatus)
 	mux.HandleFunc("/api/daemons", apiDaemons)
 	mux.HandleFunc("/api/atak-package", apiATAKPackage)

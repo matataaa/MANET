@@ -72,8 +72,6 @@ func assembleAdminStatus() AdminStatus {
 		"mesh_key":          conf["mesh_key"],
 		"ipv4_network":      confGet(conf, "ipv4_network", "10.30.2.0/24"),
 		"regulatory_domain": confGet(conf, "regulatory_domain", "US"),
-		"acs":               confGet(conf, "acs", "n"),
-		"auto_update":       confGet(conf, "auto_update", "n"),
 		"admin_password":    conf["admin_password"],
 		"gateway":           confGet(conf, "gateway", "y"),
 		"gateway_nat":       confGet(conf, "gateway_nat", "y"),

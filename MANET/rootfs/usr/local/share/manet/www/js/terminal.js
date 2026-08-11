@@ -327,7 +327,8 @@ function termConnectWs(target, session) {
   var reconnBtn = document.getElementById('term-reconnect');
   var statusEl = document.getElementById('term-status');
   var params = new URLSearchParams();
-  if (target && session) {
+  var isRemote = !!(target && session);
+  if (isRemote) {
     params.set('target', target);
     params.set('protocol', session.protocol);
     if (session.user) params.set('user', session.user);
@@ -341,11 +342,13 @@ function termConnectWs(target, session) {
   reconnBtn.style.display = 'none';
   term.clear();
 
+  var openedAt = 0;
   termWs = new WebSocket(wsUrl);
   termWs.binaryType = 'arraybuffer';
 
   termWs.onopen = function() {
-    statusEl.textContent = 'Connected';
+    openedAt = Date.now();
+    statusEl.textContent = isRemote ? 'Connected to ' + target : 'Connected';
     statusEl.className = 'term-status term-status-ok';
     reconnBtn.style.display = 'none';
     termSendResize(term.cols, term.rows);
@@ -356,17 +359,33 @@ function termConnectWs(target, session) {
     else term.write(event.data);
   };
   termWs.onclose = function() {
-    term.writeln('\r\n\x1b[31m[Connection closed — reconnecting in 3s…]\x1b[0m');
-    statusEl.textContent = 'Reconnecting…';
-    statusEl.className = 'term-status term-status-off';
-    reconnBtn.style.display = '';
     termWs = null;
-    termReconnectTimer = setTimeout(function() {
-      if (termMode === 'terminal') termConnectWs(target, session);
-    }, 3000);
+    var quickClose = openedAt && (Date.now() - openedAt) < 3000;
+    if (isRemote && quickClose) {
+      statusEl.textContent = 'Node unreachable';
+      statusEl.className = 'term-status term-status-off';
+      reconnBtn.style.display = '';
+    } else if (isRemote) {
+      term.writeln('\r\n\x1b[31m[Remote node disconnected]\x1b[0m');
+      statusEl.textContent = 'Disconnected';
+      statusEl.className = 'term-status term-status-off';
+      reconnBtn.style.display = '';
+    } else {
+      term.writeln('\r\n\x1b[31m[Connection closed — reconnecting in 3s…]\x1b[0m');
+      statusEl.textContent = 'Reconnecting…';
+      statusEl.className = 'term-status term-status-off';
+      reconnBtn.style.display = '';
+      termReconnectTimer = setTimeout(function() {
+        if (termMode === 'terminal') termConnectWs(target, session);
+      }, 3000);
+    }
   };
   termWs.onerror = function() {
-    statusEl.textContent = 'Error';
+    if (isRemote) {
+      statusEl.textContent = 'Failed to reach ' + target;
+    } else {
+      statusEl.textContent = 'Error';
+    }
     statusEl.className = 'term-status term-status-off';
     reconnBtn.style.display = '';
   };
@@ -381,6 +400,7 @@ function termConnectLogs() {
   var unit = document.getElementById('term-log-unit').value;
   var target = document.getElementById('term-target').value;
   if (target === '__custom__') target = '';
+  var isRemote = !!target;
   var params = new URLSearchParams();
   if (unit) params.set('unit', unit);
   if (target) params.set('target', target);
@@ -394,25 +414,45 @@ function termConnectLogs() {
   reconnBtn.style.display = 'none';
   term.clear();
 
+  var openedAt = 0;
   termWs = new WebSocket(wsUrl);
   termWs.onopen = function() {
-    statusEl.textContent = 'Streaming' + (unit ? ' — ' + unit : '');
+    openedAt = Date.now();
+    var label = 'Streaming' + (unit ? ' — ' + unit : '');
+    if (isRemote) label += ' on ' + target;
+    statusEl.textContent = label;
     statusEl.className = 'term-status term-status-ok';
     reconnBtn.style.display = 'none';
   };
   termWs.onmessage = function(event) { term.write(event.data); };
   termWs.onclose = function() {
-    term.writeln('\r\n\x1b[31m[Stream ended — reconnecting in 3s…]\x1b[0m');
-    statusEl.textContent = 'Reconnecting…';
-    statusEl.className = 'term-status term-status-off';
-    reconnBtn.style.display = '';
     termWs = null;
-    termReconnectTimer = setTimeout(function() {
-      if (termMode === 'logs') termConnectLogs();
-    }, 3000);
+    var quickClose = openedAt && (Date.now() - openedAt) < 3000;
+    if (isRemote && quickClose) {
+      statusEl.textContent = 'Node unreachable';
+      statusEl.className = 'term-status term-status-off';
+      reconnBtn.style.display = '';
+    } else if (isRemote) {
+      term.writeln('\r\n\x1b[31m[Remote node disconnected]\x1b[0m');
+      statusEl.textContent = 'Disconnected';
+      statusEl.className = 'term-status term-status-off';
+      reconnBtn.style.display = '';
+    } else {
+      term.writeln('\r\n\x1b[31m[Stream ended — reconnecting in 3s…]\x1b[0m');
+      statusEl.textContent = 'Reconnecting…';
+      statusEl.className = 'term-status term-status-off';
+      reconnBtn.style.display = '';
+      termReconnectTimer = setTimeout(function() {
+        if (termMode === 'logs') termConnectLogs();
+      }, 3000);
+    }
   };
   termWs.onerror = function() {
-    statusEl.textContent = 'Error';
+    if (isRemote) {
+      statusEl.textContent = 'Failed to reach ' + target;
+    } else {
+      statusEl.textContent = 'Error';
+    }
     statusEl.className = 'term-status term-status-off';
     reconnBtn.style.display = '';
   };

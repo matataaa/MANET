@@ -2,7 +2,6 @@
 let configInitialized = false;
 let configEditing = false;
 let configData = null;
-let configVoiceData = null;
 let configTarget = null;
 
 function configBaseUrl() {
@@ -21,7 +20,6 @@ function configActivate() {
       configTarget = this.value || null;
       configEditing = false;
       configData = null;
-      configVoiceData = null;
       configFetch();
     });
     configInitialized = true;
@@ -55,9 +53,8 @@ function configPopulateTargets() {
 async function configFetch() {
   try {
     var base = configBaseUrl();
-    const [adminR, voiceR] = await Promise.all([fetch(base + '/api/admin/status'), fetch(base + '/api/voice')]);
+    const adminR = await fetch(base + '/api/admin/status');
     configData = await adminR.json();
-    configVoiceData = await voiceR.json();
     configRender();
   } catch(e) {
     document.getElementById('cfg-content').innerHTML =
@@ -98,9 +95,7 @@ function configRenderView(panel, cfg) {
       { label: 'Multicast Mode', key: 'multicast_mode', fmt: function(v) { return v === 'optimized' ? 'Optimized (IGMP)' : 'Flood (default)'; } },
     ]},
     { title: 'Services', fields: [
-      { label: 'ACS (Auto Channel)', key: 'acs', yesno: true },
       { label: 'Battery Monitor', key: 'battery_monitor', yesno: true },
-      { label: 'Auto Update', key: 'auto_update', yesno: true },
     ]},
     { title: 'Access Point', fields: [
       { label: 'EUD Mode', key: 'eud' },
@@ -119,12 +114,6 @@ function configRenderView(panel, cfg) {
     { title: 'Access', fields: [
       { label: 'Admin Key', key: 'admin_password', masked: true },
     ]},
-    { title: 'Voice', voice: true, fields: [
-      { label: 'PTT Mode', voiceKey: 'ptt_mode' },
-      { label: 'Multicast Address', voiceKey: 'mcast_addr', fallback: '239.69.0.1' },
-      { label: 'Port', voiceKey: 'port', fallback: '4370' },
-      { label: 'Interface', voiceKey: 'interface', fallback: 'br0' },
-    ]},
   ];
 
   let html = '<div>';
@@ -133,11 +122,7 @@ function configRenderView(panel, cfg) {
     html += '<div class="card cfg-section"><div class="cfg-section-title">' + sec.title + '</div>';
     sec.fields.forEach(f => {
       let val;
-      if (f.voiceKey) {
-        val = (configVoiceData && configVoiceData[f.voiceKey]) || f.fallback || '--';
-      } else {
-        val = f.computed ? f.computed() : (cfg[f.key] || '--');
-      }
+      val = f.computed ? f.computed() : (cfg[f.key] || '--');
       let cls = 'cfg-value';
       if (f.masked && val !== '--') { val = '••••••••'; cls += ' masked'; }
       if (f.fmt) val = f.fmt(val);
@@ -181,9 +166,7 @@ function configRenderEdit(panel, cfg) {
       {v:'flood',l:'Flood (recommended ≤10 nodes)'},
       {v:'optimized',l:'Optimized IGMP (10+ nodes)'}
     ], hint: 'Flood sends all multicast to all peers; IGMP uses snooping for selective delivery' },
-    { label: 'ACS', key: 'acs', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Battery Monitor', key: 'battery_monitor', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
-    { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Admin Key', key: 'admin_password', type: 'password' },
     { section: 'Gateway' },
     { label: 'Gateway Enabled', key: 'gateway', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}], hint: 'Allow this node to act as a mesh gateway' },
@@ -193,13 +176,6 @@ function configRenderEdit(panel, cfg) {
       {v:'',l:'Auto (batman default)'},{v:'2M/2M',l:'2M/2M'},{v:'5M/5M',l:'5M/5M'},{v:'10M/10M',l:'10M/10M'},
       {v:'20M/20M',l:'20M/20M'},{v:'50M/50M',l:'50M/50M'},{v:'100M/100M',l:'100M/100M'}
     ] },
-    { section: 'Voice' },
-    { label: 'PTT Mode', key: 'voice_ptt_mode', type: 'select', options: [
-      {v:'always',l:'Always On'},{v:'gpio',l:'GPIO Button'},{v:'openvlm',l:'OpenVLM HID'},{v:'vox',l:'VOX (auto)'}
-    ], voiceKey: 'ptt_mode', fallback: 'always' },
-    { label: 'Multicast Address', key: 'voice_mcast_addr', type: 'text', voiceKey: 'mcast_addr', fallback: '239.69.0.1' },
-    { label: 'Port', key: 'voice_port', type: 'text', voiceKey: 'port', fallback: '4370' },
-    { label: 'Interface', key: 'voice_iface', type: 'text', voiceKey: 'interface', fallback: 'br0' },
   ];
 
   let html = '<div class="card"><div class="cfg-section-title">Edit Configuration' + (configTarget ? ' — ' + escHtml(configTarget) : '') + '</div>';
@@ -208,7 +184,7 @@ function configRenderEdit(panel, cfg) {
       html += '</div><div class="card"><div class="cfg-section-title">' + f.section + '</div>';
       return;
     }
-    const curVal = f.voiceKey ? ((configVoiceData && configVoiceData[f.voiceKey]) || f.fallback || '') : (cfg[f.key] || '');
+    const curVal = cfg[f.key] || '';
     html += '<div class="cfg-row"><div class="cfg-label">' + f.label;
     if (f.hint) html += '<span class="hint">' + f.hint + '</span>';
     html += '</div>';
@@ -262,7 +238,7 @@ function configRenderEdit(panel, cfg) {
 
 async function configSave() {
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','mesh_ssid','mesh_key',
-    'ipv4_network','regulatory_domain','halow_bw','multicast_mode','acs','battery_monitor','auto_update','admin_password',
+    'ipv4_network','regulatory_domain','halow_bw','multicast_mode','battery_monitor','admin_password',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth'];
   const config = {};
   meshFields.forEach(f => {
@@ -270,30 +246,15 @@ async function configSave() {
     if (el) config[f] = el.value;
   });
 
-  const voiceCfg = {
-    action: 'configure',
-    ptt_mode: (document.getElementById('cfg-f-voice_ptt_mode') || {}).value || 'always',
-    mcast_addr: (document.getElementById('cfg-f-voice_mcast_addr') || {}).value || '239.69.0.1',
-    port: (document.getElementById('cfg-f-voice_port') || {}).value || '4370',
-    interface: (document.getElementById('cfg-f-voice_iface') || {}).value || 'br0',
-  };
-
   var base = configBaseUrl();
   try {
-    const [meshR, voiceR] = await Promise.all([
-      fetch(base + '/api/admin/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({config}) }),
-      fetch(base + '/api/voice', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(voiceCfg) })
-    ]);
+    const meshR = await fetch(base + '/api/admin/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({config}) });
     const meshResult = await meshR.json();
-    const voiceResult = await voiceR.json();
-    if (meshResult.ok && voiceResult.ok) {
+    if (meshResult.ok) {
       configEditing = false;
       configFetch();
     } else {
-      const errors = [];
-      if (!meshResult.ok) errors.push('Mesh: ' + (meshResult.error || 'unknown'));
-      if (!voiceResult.ok) errors.push('Voice: ' + (voiceResult.error || 'unknown'));
-      alert('Save failed: ' + errors.join(', '));
+      alert('Save failed: ' + (meshResult.error || 'unknown'));
     }
   } catch(e) { alert('Save failed: ' + e.message); }
 }

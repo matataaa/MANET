@@ -41,8 +41,6 @@ Config keys:
   lan_ap_bw           AP bandwidth (20, 40, 80)
   max_euds_per_node   Max EUD clients per node
   acs                 Auto channel selection (y/n)
-  mtx                 MediaMTX server (y/n)
-  mumble              Mumble voice server (y/n)
   battery_monitor     Battery monitoring (y/n)
   auto_update         Auto update (y/n)
   admin_password      Admin/perf auth key
@@ -178,8 +176,6 @@ lan_ap_channel        AP channel
 lan_ap_bw             AP bandwidth (20, 40, 80)
 max_euds_per_node     Max EUD clients per node
 acs                   Auto channel selection (y/n)
-mtx                   MediaMTX server (y/n)
-mumble                Mumble voice server (y/n)
 battery_monitor       Battery monitoring (y/n)
 auto_update           Auto update (y/n)
 admin_password        Admin/perf auth key

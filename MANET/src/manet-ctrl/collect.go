@@ -777,70 +777,6 @@ func wifiChannelToFreq(iface string, ch int) int {
 	return 0
 }
 
-// --- Voice ---
-
-func getVoiceStatus() VoiceStatus {
-	vs := VoiceStatus{}
-	err := exec.Command("systemctl", "is-active", "--quiet", "mesh-voice").Run()
-	vs.Active = err == nil
-	if !vs.Active {
-		return vs
-	}
-	if out, err := runCmdStdout(3*time.Second, "systemctl", "show", "mesh-voice",
-		"--property=ExecMainStartTimestamp,ExecStart"); err == nil {
-		for _, line := range strings.Split(out, "\n") {
-			if strings.HasPrefix(line, "ExecStart=") {
-				args := line
-				if i := strings.Index(args, "-addr"); i >= 0 {
-					if m := regexp.MustCompile(`-addr\s+(\S+)`).FindStringSubmatch(args[i:]); len(m) > 1 {
-						vs.McastAddr = m[1]
-					}
-				}
-				if i := strings.Index(args, "-port"); i >= 0 {
-					if m := regexp.MustCompile(`-port\s+(\S+)`).FindStringSubmatch(args[i:]); len(m) > 1 {
-						vs.Port = m[1]
-					}
-				}
-				if i := strings.Index(args, "-ptt"); i >= 0 {
-					if m := regexp.MustCompile(`-ptt\s+(\S+)`).FindStringSubmatch(args[i:]); len(m) > 1 {
-						vs.PTTMode = m[1]
-					}
-				}
-				if i := strings.Index(args, "-iface"); i >= 0 {
-					if m := regexp.MustCompile(`-iface\s+(\S+)`).FindStringSubmatch(args[i:]); len(m) > 1 {
-						vs.Interface = m[1]
-					}
-				}
-			}
-		}
-	}
-	if out, err := runCmdStdout(3*time.Second, "systemctl", "status", "mesh-voice"); err == nil {
-		if m := regexp.MustCompile(`Active:.*;\s+(.+?)\s+ago`).FindStringSubmatch(out); len(m) > 1 {
-			vs.Uptime = m[1]
-		}
-	}
-	if data, err := os.ReadFile("/run/mesh-voice-ptt.json"); err == nil {
-		var ps struct {
-			Active    bool   `json:"ptt_active"`
-			Connected bool   `json:"ptt_connected"`
-			Device    string `json:"ptt_device"`
-			TX        bool   `json:"tx"`
-			RX        bool   `json:"rx"`
-		}
-		if json.Unmarshal(data, &ps) == nil {
-			vs.PTTActive = ps.Active
-			vs.PTTConnected = ps.Connected
-			vs.PTTDevice = ps.Device
-			vs.TX = ps.TX
-			vs.RX = ps.RX
-		}
-	} else if vs.PTTMode == "always" {
-		vs.PTTActive = true
-		vs.PTTConnected = true
-		vs.PTTDevice = "always"
-	}
-	return vs
-}
 
 // --- Services ---
 
@@ -861,7 +797,6 @@ var serviceRegistry = []serviceEntry{
 	{"hostapd", "hostapd", []string{"hostapd"}, "network", []string{"start", "stop", "restart"}, "Access point daemon"},
 	{"dnsmasq", "dnsmasq", []string{"dnsmasq"}, "network", []string{"start", "stop", "restart", "reload"}, "DHCP and DNS for EUDs"},
 	{"avahi", "Avahi", []string{"avahi-daemon"}, "network", []string{"start", "stop", "restart", "reload"}, "mDNS / service discovery"},
-	{"mesh-voice", "Mesh Voice", []string{"mesh-voice"}, "application", []string{"start", "stop", "restart"}, "PTT voice over mesh"},
 	{"chronyd", "Chrony NTP", []string{"chronyd", "chrony"}, "system", []string{"start", "stop", "restart"}, "Network time synchronisation"},
 	{"gps-reader", "GPS Reader", []string{"gps-reader"}, "system", []string{"start", "stop", "restart"}, "GPS position tracking"},
 	{"gateway-manager", "Gateway Manager", []string{"gateway-manager"}, "network", []string{"restart", "reload"}, "Gateway routing, NAT, and bandwidth control"},

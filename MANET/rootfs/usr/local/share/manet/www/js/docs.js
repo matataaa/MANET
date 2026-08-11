@@ -56,7 +56,6 @@ DOCS_TABS.overview = [
 '<tr><td><strong>Nodes</strong></td><td>Full table of all mesh nodes — hostname, IP, DNS (.mesh), TQ, hops, battery, uptime, last seen. Sortable columns.</td></tr>',
 '<tr><td><strong>Config</strong></td><td>View and edit node configuration. Hostname, SSID, keys, network, regulatory domain, EUD mode, services.</td></tr>',
 '<tr><td><strong>Hardware</strong></td><td>Radio interfaces (driver, channel, TX power, MCS), network interfaces, GPS status/coordinates, system info.</td></tr>',
-'<tr><td><strong>Voice</strong></td><td>Mesh voice (PTT) service status — active/inactive, uptime, multicast address.</td></tr>',
 '<tr><td><strong>Perf</strong></td><td>Performance testing — iperf3 throughput, ping latency, streaming results.</td></tr>',
 '<tr><td><strong>Services</strong></td><td>All systemd services grouped by category. Start/stop/restart controls.</td></tr>',
 '<tr><td><strong>Mesh</strong></td><td>Raw batman-adv data — originators, neighbors, gateways, interface membership.</td></tr>',
@@ -81,7 +80,7 @@ DOCS_TABS.config = [
 '<tr><td>Save changes</td><td>Click <strong>Save</strong>. Changes are written to <code>/etc/mesh.conf</code> and relevant services are restarted (hostname, AP, mesh). A reboot may still be needed for some settings.</td></tr>',
 '<tr><td>Cancel</td><td>Click <strong>Cancel</strong> to discard unsaved edits.</td></tr>',
 '</tbody></table>',
-'<p>The Config tab exposes these fields: hostname prefix, mesh SSID, mesh key, IPv4 network, regulatory domain, EUD mode, AP SSID, AP key, max EUDs per node, ACS, auto update, and admin password.</p>',
+'<p>The Config tab exposes these fields: hostname prefix, mesh SSID, mesh key, IPv4 network, regulatory domain, EUD mode, AP SSID, AP key, max EUDs per node, battery monitor, and admin password.</p>',
 '<p>Settings not exposed in the UI (e.g. <code>halow_regulatory_domain</code>) must be set via CLI or direct file edit.</p>',
 
 '<h3>CLI Configuration</h3>',
@@ -96,7 +95,7 @@ DOCS_TABS.config = [
 '<p>Example — change EUD mode to wireless and reboot:</p>',
 '<pre class="docs-pre">sudo sed -i "s/^eud=.*/eud=wireless/" /etc/mesh.conf\nmesh reboot</pre>',
 '<p>Example — view current config:</p>',
-'<pre class="docs-pre">$ mesh config show\nadmin_password                  =\nacs                            = n\nauto_update                    = y\neud                            = wired\nipv4_network                   = 10.30.2.0/24\nlan_ap_channel                 = 36\nlan_ap_ssid                    = MANET-AP\nmesh_key                       = ********\nmesh_ssid                      = MESH\n...</pre>',
+'<pre class="docs-pre">$ mesh config show\nadmin_password                  =\nbattery_monitor                = n\neud                            = wired\nipv4_network                   = 10.30.2.0/24\nlan_ap_channel                 = 36\nlan_ap_ssid                    = MANET-AP\nmesh_key                       = ********\nmesh_ssid                      = MESH\n...</pre>',
 
 '<h3>Settings Reference</h3>',
 '<p>Complete list of all <code>/etc/mesh.conf</code> keys.</p>',
@@ -127,8 +126,7 @@ DOCS_TABS.config = [
 
 '<h4>Services</h4>',
 '<table class="docs-table"><thead><tr><th>Key</th><th>Values</th><th>UI</th><th>Description</th></tr></thead><tbody>',
-'<tr><td><code>acs</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Auto Channel Selection. When enabled, node-manager periodically scans for interference and coordinates channel changes across the mesh.</td></tr>',
-'<tr><td><code>auto_update</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Allow the node to accept over-the-air updates via the mesh.</td></tr>',
+'<tr><td><code>battery_monitor</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Enable battery monitoring via Waveshare UPS HAT (E) I2C interface.</td></tr>',
 '</tbody></table>',
 
 '<h4>Security</h4>',
@@ -146,7 +144,6 @@ DOCS_TABS.api = [
 '<tr><td>GET</td><td><code>/api/data</code></td><td>Full mesh topology — all nodes, edges, neighbors, gateways, TQ values</td></tr>',
 '<tr><td>GET</td><td><code>/api/local</code></td><td>This node\'s detailed state — hostname, IP, interfaces, GPS, battery, services</td></tr>',
 '<tr><td>GET</td><td><code>/api/peer/{ip}</code></td><td>Proxy to a peer node\'s <code>/api/local</code></td></tr>',
-'<tr><td>GET</td><td><code>/api/voice</code></td><td>Mesh voice service status</td></tr>',
 '<tr><td>GET</td><td><code>/api/admin/status</code></td><td>Config state — current config, pending changes, node ACKs</td></tr>',
 '<tr><td>GET</td><td><code>/api/services</code></td><td>All registered services with systemd status, category, and available actions</td></tr>',
 '<tr><td>GET</td><td><code>/api/mesh</code></td><td>Raw batman-adv data (bat0 info, gateways, neighbors, originators)</td></tr>',
@@ -198,11 +195,11 @@ DOCS_TABS.services = [
 
 '<h3>Core Mesh</h3>',
 '<table class="docs-table"><thead><tr><th>Service</th><th>Unit</th><th>Description</th></tr></thead><tbody>',
-'<tr><td>MANET Controller</td><td><code>manet-ctrl</code></td><td>Web UI (SPA), REST API, WebSocket terminal, voice relay. Single Go binary on port 80/443 (auto TLS). Hosts applet frontends and handles <code>.mesh</code> hostname redirects.</td></tr>',
+'<tr><td>MANET Controller</td><td><code>manet-ctrl</code></td><td>Web UI (SPA), REST API, WebSocket terminal. Single Go binary on port 80/443 (auto TLS). Hosts applet frontends and handles <code>.mesh</code> hostname redirects.</td></tr>',
 '<tr><td>Alfred</td><td><code>alfred</code></td><td>Distributed data store for batman-adv. Shares node state across the mesh via type 68 JSON records.</td></tr>',
 '<tr><td>Mesh Registry</td><td><code>mesh-registry</code></td><td>Collects local node info (hostname, IP, MAC, GPS, MCS rates, TQ) and publishes to Alfred. Reads remote node data to build the mesh-wide registry.</td></tr>',
-'<tr><td>Node Manager</td><td><code>node-manager</code></td><td>Radio state sync (ensures wpa_supplicant frequencies match config), static channel enforcement, gateway reconciliation, and service elections (MTX). 15s main loop.</td></tr>',
-'<tr><td>Mesh Manager</td><td><code>mesh-manager</code></td><td>IPv4 address allocation (chunk-based CIDR), <code>/etc/hosts</code> mesh hostname updates, <code>.mesh</code> DNS records via dnsmasq, gateway route management, default route fix, EUD DHCP pool config, and voice QoS setup. 30s periodic loop.</td></tr>',
+'<tr><td>Node Manager</td><td><code>node-manager</code></td><td>Radio state sync (ensures wpa_supplicant frequencies match config), static channel enforcement, and gateway reconciliation. 15s main loop.</td></tr>',
+'<tr><td>Mesh Manager</td><td><code>mesh-manager</code></td><td>IPv4 address allocation (chunk-based CIDR), <code>/etc/hosts</code> mesh hostname updates, <code>.mesh</code> DNS records via dnsmasq, gateway route management, default route fix, and EUD DHCP pool config. 30s periodic loop.</td></tr>',
 '<tr><td>Gateway Manager</td><td><code>gateway-manager</code></td><td>Detects internet-connected gateway node, manages NAT/masquerade rules, handles gateway election and failover across mesh.</td></tr>',
 '<tr><td>Boot Lobby</td><td><code>mesh-boot-lobby</code></td><td>Sets mesh interfaces to a lobby channel at boot for initial peer discovery.</td></tr>',
 '</tbody></table>',
@@ -216,13 +213,6 @@ DOCS_TABS.services = [
 '<tr><td>dnsmasq</td><td><code>dnsmasq</code></td><td>DHCP and DNS for EUD clients. Serves <code>.mesh</code> hostnames via auto-generated <code>address=</code> records. <code>local=/mesh/</code> prevents upstream forwarding.</td></tr>',
 '<tr><td>SAE Watchdog</td><td><code>sae-watchdog</code></td><td>Monitors mesh authentication health. Restarts wpa_supplicant on persistent SAE failures.</td></tr>',
 '</tbody></table>',
-
-'<h3>Voice & QoS</h3>',
-'<table class="docs-table"><thead><tr><th>Service</th><th>Unit</th><th>Description</th></tr></thead><tbody>',
-'<tr><td>Mesh Voice</td><td><code>mesh-voice</code></td><td>Push-to-talk voice over multicast RTP. Opus 48kHz/32kbps. Supports OpenVLM HID USB, GPIO evdev, always-on, and VOX PTT modes. Half-duplex with remote-active detection. 60ms jitter buffer for smooth playback.</td></tr>',
-'</tbody></table>',
-'<p><strong>Voice QoS:</strong> Voice packets are marked with DSCP EF (Expedited Forwarding, TOS 0xB8) on the UDP socket. batman-adv preserves this through encapsulation, mapping to WMM Access Category Voice (AC_VO) on the wireless interface — shortest contention window, highest air-time priority.</p>',
-'<p>Additionally, <code>mesh-manager</code> configures a <code>tc prio</code> qdisc on <code>br0</code> at startup that puts DSCP EF traffic and voice multicast (port 4370) in band 0 (highest priority). Bulk data goes to band 2. This ensures voice packets are dequeued before other traffic under load.</p>',
 
 '<h3>Applications & Applets</h3>',
 '<table class="docs-table"><thead><tr><th>Service</th><th>Unit</th><th>Description</th></tr></thead><tbody>',
