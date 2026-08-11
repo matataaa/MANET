@@ -160,7 +160,7 @@ function configRenderView(panel, cfg) {
 function configRenderEdit(panel, cfg) {
   const fields = [
     { label: 'Node Hostname', key: 'node_hostname', type: 'text', hint: 'Prefix — full hostname: {this}-{ssid}-{mac}', preview: true },
-    { label: 'EUD Mode', key: 'eud', type: 'select', options: ['wired', 'wireless', 'both', 'auto'] },
+    { label: 'EUD Mode', key: 'eud', type: 'select', options: ['wired', 'wireless', 'both', 'auto', 'none'] },
     { label: 'AP SSID', key: 'lan_ap_ssid', type: 'text' },
     { label: 'AP Key', key: 'lan_ap_key', type: 'password' },
     { label: 'AP Channel', key: 'lan_ap_channel', type: 'text', hint: 'e.g. 36 for 5GHz, 6 for 2.4GHz' },

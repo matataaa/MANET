@@ -311,6 +311,9 @@ case "$EUD_MODE" in
     "auto")
         log "EUD mode: auto (AP controlled by ethernet detection)"
         ;;
+    "none")
+        log "EUD mode: none (uplink gateway only, no EUD services)"
+        ;;
     *)
         log "Unknown EUD mode, defaulting to auto"
         EUD_MODE="auto"

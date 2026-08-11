@@ -13,6 +13,21 @@ function topoInit(container) {
   container.appendChild(tooltip);
   topoTooltip = tooltip;
 
+  var legend = document.createElement('div');
+  legend.className = 'topo-legend';
+  legend.innerHTML =
+    '<div class="topo-legend-title">LINK TYPE</div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#ef4444" stroke-width="3"/></svg><span>Direct</span></div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="1.5" stroke-dasharray="6,3"/></svg><span>Multi-hop</span></div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="1.5" stroke-dasharray="3,5"/></svg><span>Inferred</span></div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="4,6" opacity="0.4"/></svg><span>Stale</span></div>' +
+    '<div class="topo-legend-title" style="margin-top:6px">LINK QUALITY</div>' +
+    '<div class="topo-legend-row"><span class="topo-legend-dot" style="background:#22c55e"></span><span>Excellent</span></div>' +
+    '<div class="topo-legend-row"><span class="topo-legend-dot" style="background:#eab308"></span><span>Good</span></div>' +
+    '<div class="topo-legend-row"><span class="topo-legend-dot" style="background:#f97316"></span><span>Fair</span></div>' +
+    '<div class="topo-legend-row"><span class="topo-legend-dot" style="background:#ef4444"></span><span>Poor</span></div>';
+  container.appendChild(legend);
+
   const svg = d3.select(container).append('svg');
   topoSvg = svg;
 

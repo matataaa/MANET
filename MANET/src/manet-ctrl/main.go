@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -36,27 +37,96 @@ func handleTerminal(w http.ResponseWriter, r *http.Request) {
 
 	q := r.URL.Query()
 	target := q.Get("target")
+	protocol := q.Get("protocol")
+
+	if target != "" && protocol != "ssh" {
+		handleTerminalProxy(conn, target)
+		return
+	}
+
+	if target != "" && protocol == "ssh" {
+		handleTerminalSSH(conn, q)
+		return
+	}
+
+	handleTerminalLocal(conn)
+}
+
+func handleTerminalProxy(client *websocket.Conn, target string) {
+	remoteURL := fmt.Sprintf("ws://%s/ws/terminal", target)
+	dialer := websocket.Dialer{
+		ReadBufferSize:  16384,
+		WriteBufferSize: 16384,
+	}
+	remote, _, err := dialer.Dial(remoteURL, nil)
+	if err != nil {
+		log.Printf("terminal proxy dial %s: %v", target, err)
+		client.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\x1b[31mFailed to connect to %s: %v\x1b[0m\r\n", target, err)))
+		return
+	}
+	defer remote.Close()
+	log.Printf("terminal proxy connected to %s", target)
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		for {
+			msgType, msg, err := remote.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := client.WriteMessage(msgType, msg); err != nil {
+				return
+			}
+		}
+	}()
+
+	for {
+		msgType, msg, err := client.ReadMessage()
+		if err != nil {
+			break
+		}
+		if err := remote.WriteMessage(msgType, msg); err != nil {
+			break
+		}
+	}
+	<-done
+}
+
+func handleTerminalSSH(conn *websocket.Conn, q url.Values) {
+	target := q.Get("target")
 	user := q.Get("user")
 	if user == "" {
 		user = "root"
 	}
 	password := q.Get("password")
-
-	var cmd *exec.Cmd
-	if target != "" {
-		sshArgs := []string{"-tt",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "ConnectTimeout=5",
-			fmt.Sprintf("%s@%s", user, target),
-		}
-		if password != "" {
-			cmd = exec.Command("sshpass", append([]string{"-p", password, "ssh"}, sshArgs...)...)
-		} else {
-			cmd = exec.Command("ssh", sshArgs...)
-		}
-	} else {
-		cmd = exec.Command("bash", "-l")
+	if password == "" {
+		conf := loadKVFile(MeshConfFile)
+		password = conf["admin_password"]
 	}
+
+	sshArgs := []string{"-tt",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "ConnectTimeout=5",
+		fmt.Sprintf("%s@%s", user, target),
+	}
+	var cmd *exec.Cmd
+	if password != "" {
+		cmd = exec.Command("sshpass", append([]string{"-p", password, "ssh"}, sshArgs...)...)
+	} else {
+		cmd = exec.Command("ssh", sshArgs...)
+	}
+
+	handleTerminalPTY(conn, cmd, target)
+}
+
+func handleTerminalLocal(conn *websocket.Conn) {
+	cmd := exec.Command("bash", "-l")
+	handleTerminalPTY(conn, cmd, "")
+}
+
+func handleTerminalPTY(conn *websocket.Conn, cmd *exec.Cmd, target string) {
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "LANG=en_US.UTF-8")
 
 	ptmx, err := pty.Start(cmd)
@@ -303,6 +373,8 @@ func main() {
 
 	if err := ensureTLSCert(*tlsCert, *tlsKey); err != nil {
 		log.Printf("TLS cert generation failed: %v — HTTPS disabled", err)
+		log.Printf("manet-ctrl listening on :%s webroot=%s", *port, *webRoot)
+		log.Fatal(http.ListenAndServe(":"+*port, handler))
 	} else {
 		go func() {
 			tlsSrv := &http.Server{
@@ -317,8 +389,19 @@ func main() {
 				log.Printf("HTTPS listener failed: %v", err)
 			}
 		}()
-	}
 
-	log.Printf("manet-ctrl listening on :%s webroot=%s", *port, *webRoot)
-	log.Fatal(http.ListenAndServe(":"+*port, handler))
+		redirect := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			target := "https://" + r.Host + r.URL.RequestURI()
+			if *tlsPort != "443" {
+				host := r.Host
+				if h, _, found := strings.Cut(host, ":"); found {
+					host = h
+				}
+				target = "https://" + host + ":" + *tlsPort + r.URL.RequestURI()
+			}
+			http.Redirect(w, r, target, http.StatusMovedPermanently)
+		})
+		log.Printf("manet-ctrl HTTP :%s → HTTPS :%s", *port, *tlsPort)
+		log.Fatal(http.ListenAndServe(":"+*port, redirect))
+	}
 }

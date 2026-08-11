@@ -280,7 +280,7 @@ function termOnTargetChange() {
     document.getElementById('term-target').value = '';
     termCurrentTarget = '';
   });
-  termConnectWs(target, { protocol: 'ssh', user: 'radio', password: 'radio' });
+  termConnectWs(target, { protocol: 'proxy' });
 }
 
 function termShowCustomHostForm() {
@@ -466,8 +466,7 @@ function termMultiAddPane(target, label, user, password) {
   if (target !== '__local__') {
     var params = new URLSearchParams();
     params.set('target', target);
-    params.set('user', user || 'radio');
-    params.set('password', password || 'radio');
+    params.set('protocol', 'proxy');
     wsUrl += '?' + params;
   }
   var ws = new WebSocket(wsUrl);

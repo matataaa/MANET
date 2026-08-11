@@ -561,7 +561,9 @@ cat /var/lib/iface_map
 
 AP_INTERFACE=""
 
-if [[ "$eud" == "wireless" ]] || [[ "$eud" == "auto" ]]; then
+if [[ "$eud" == "none" ]]; then
+    echo "EUD mode is none - pure uplink/gateway node, skipping AP setup"
+elif [[ "$eud" == "wireless" ]] || [[ "$eud" == "auto" ]]; then
     echo "EUD mode is $eud - selecting AP interface..."
 
     # Priority 1: Use non-mesh interface if available (RPi 5 onboard)
