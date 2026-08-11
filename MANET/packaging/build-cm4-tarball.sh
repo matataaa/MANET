@@ -87,6 +87,11 @@ echo "Building mesh-registry for linux/arm64..."
     GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o mesh-registry .)
 install_file 0755 "$REPO_ROOT/MANET/cmd/mesh-registry/mesh-registry" "$STAGE/usr/local/bin/mesh-registry"
 
+echo "Building gateway-manager for linux/arm64..."
+(cd "$REPO_ROOT/MANET/cmd/gateway-manager" && \
+    GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o gateway-manager .)
+install_file 0755 "$REPO_ROOT/MANET/cmd/gateway-manager/gateway-manager" "$STAGE/usr/local/bin/gateway-manager"
+
 # Pre-built arm64 binaries
 install_file 0755 "$REPO_ROOT/MANET/binaries_arm64/alfred"             "$STAGE/usr/sbin/alfred"
 install_file 0755 "$REPO_ROOT/MANET/binaries_arm64/batctl"             "$STAGE/usr/sbin/batctl"
@@ -154,6 +159,7 @@ for unit in \
     sae-watchdog.service \
     ebtables-restore.service \
     batman-enslave-watch.service \
+    gateway-manager.service \
     manet-ctrl.service \
     mesh-registry.service
 do

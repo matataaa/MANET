@@ -77,6 +77,10 @@ func assembleAdminStatus() AdminStatus {
 		"mumble":            confGet(conf, "mumble", "n"),
 		"auto_update":       confGet(conf, "auto_update", "n"),
 		"admin_password":    conf["admin_password"],
+		"gateway":           confGet(conf, "gateway", "y"),
+		"gateway_nat":       confGet(conf, "gateway_nat", "y"),
+		"gateway_mss_clamp": confGet(conf, "gateway_mss_clamp", "y"),
+		"gateway_bandwidth": confGet(conf, "gateway_bandwidth", ""),
 	}
 
 	var adminNodes []AdminNode

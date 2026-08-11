@@ -442,6 +442,7 @@ var saveableKeys = map[string]bool{
 	"max_euds_per_node": true, "mesh_ssid": true, "mesh_key": true,
 	"ipv4_network": true, "regulatory_domain": true, "acs": true, "mtx": true,
 	"mumble": true, "auto_update": true, "admin_password": true,
+	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
 }
 
 func apiAdminSave(w http.ResponseWriter, r *http.Request) {
@@ -493,6 +494,12 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		}
 		setHostname(full)
 		applied["hostname"] = full
+	}
+
+	// Apply gateway config
+	if updates["gateway"] != "" || updates["gateway_nat"] != "" || updates["gateway_mss_clamp"] != "" || updates["gateway_bandwidth"] != "" {
+		runCmd(5*time.Second, "systemctl", "reload", "gateway-manager")
+		applied["gateway_reloaded"] = true
 	}
 
 	// Apply AP settings

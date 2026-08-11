@@ -48,6 +48,11 @@ echo "Building mesh-registry for linux/amd64..."
     GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o mesh-registry .)
 install_file 0755 "$REPO_ROOT/MANET/cmd/mesh-registry/mesh-registry" "$STAGE/usr/local/bin/mesh-registry"
 
+echo "Building gateway-manager for linux/amd64..."
+(cd "$REPO_ROOT/MANET/cmd/gateway-manager" && \
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o gateway-manager .)
+install_file 0755 "$REPO_ROOT/MANET/cmd/gateway-manager/gateway-manager" "$STAGE/usr/local/bin/gateway-manager"
+
 if [ -f "$REPO_ROOT/MANET/mesh-voice/bin/mesh-voice-linux-amd64" ]; then
     install_file 0755 "$REPO_ROOT/MANET/mesh-voice/bin/mesh-voice-linux-amd64" "$STAGE/usr/local/bin/mesh-voice"
 fi
@@ -163,6 +168,7 @@ mkdir -p "$STAGE/etc/systemd/system/multi-user.target.wants"
 for unit in \
     gateway-route-manager.service \
     sae-watchdog.service \
+    gateway-manager.service \
     manet-ctrl.service \
     mesh-registry.service
 do

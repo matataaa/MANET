@@ -828,7 +828,7 @@ var serviceRegistry = []serviceEntry{
 	{"chronyd", "Chrony NTP", []string{"chronyd", "chrony"}, "system", []string{"start", "stop", "restart"}, "Network time synchronisation"},
 	{"syncthing", "Syncthing", []string{"syncthing"}, "application", []string{"start", "stop", "restart"}, "File synchronisation"},
 	{"gps-reader", "GPS Reader", []string{"gps-reader"}, "system", []string{"start", "stop", "restart"}, "GPS position tracking"},
-	{"gateway-route", "Gateway Route Manager", []string{"gateway-route-manager"}, "network", []string{"restart"}, "Mesh gateway routing"},
+	{"gateway-manager", "Gateway Manager", []string{"gateway-manager"}, "network", []string{"restart", "reload"}, "Gateway routing, NAT, and bandwidth control"},
 	{"sae-watchdog", "SAE Watchdog", []string{"sae-watchdog"}, "network", []string{"start", "stop", "restart"}, "Mesh auth health monitor"},
 	{"battery-reader", "Battery Reader", []string{"battery-reader"}, "system", []string{"start", "stop", "restart"}, "Battery level monitor"},
 	{"cot-emitter", "CoT Emitter", []string{"cot-emitter"}, "system", []string{"start", "stop", "restart"}, "Cursor-on-Target position broadcast"},

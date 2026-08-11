@@ -62,6 +62,12 @@ function configRenderView(panel, cfg) {
       { label: 'AP Bandwidth', key: 'lan_ap_bw' },
       { label: 'Max EUDs/Node', key: 'max_euds_per_node' },
     ]},
+    { title: 'Gateway', fields: [
+      { label: 'Gateway Enabled', key: 'gateway', yesno: true },
+      { label: 'NAT Masquerade', key: 'gateway_nat', yesno: true },
+      { label: 'MSS Clamping', key: 'gateway_mss_clamp', yesno: true },
+      { label: 'Bandwidth Advertisement', key: 'gateway_bandwidth' },
+    ]},
     { title: 'Voice', voice: true, fields: [
       { label: 'PTT Mode', voiceKey: 'ptt_mode' },
       { label: 'Multicast Address', voiceKey: 'mcast_addr', fallback: '239.69.0.1' },
@@ -117,6 +123,14 @@ function configRenderEdit(panel, cfg) {
     { label: 'Mumble', key: 'mumble', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Admin Password', key: 'admin_password', type: 'password' },
+    { section: 'Gateway' },
+    { label: 'Gateway Enabled', key: 'gateway', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}], hint: 'Allow this node to act as a mesh gateway' },
+    { label: 'NAT Masquerade', key: 'gateway_nat', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
+    { label: 'MSS Clamping', key: 'gateway_mss_clamp', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
+    { label: 'Bandwidth', key: 'gateway_bandwidth', type: 'select', options: [
+      {v:'',l:'Auto (batman default)'},{v:'2M/2M',l:'2M/2M'},{v:'5M/5M',l:'5M/5M'},{v:'10M/10M',l:'10M/10M'},
+      {v:'20M/20M',l:'20M/20M'},{v:'50M/50M',l:'50M/50M'},{v:'100M/100M',l:'100M/100M'}
+    ] },
     { section: 'Voice' },
     { label: 'PTT Mode', key: 'voice_ptt_mode', type: 'select', options: [
       {v:'always',l:'Always On'},{v:'gpio',l:'GPIO Button'},{v:'openvlm',l:'OpenVLM HID'},{v:'vox',l:'VOX (auto)'}
@@ -180,7 +194,8 @@ function configRenderEdit(panel, cfg) {
 
 async function configSave() {
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','mesh_ssid','mesh_key',
-    'ipv4_network','regulatory_domain','acs','mtx','mumble','auto_update','admin_password'];
+    'ipv4_network','regulatory_domain','acs','mtx','mumble','auto_update','admin_password',
+    'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth'];
   const config = {};
   meshFields.forEach(f => {
     const el = document.getElementById('cfg-f-' + f);
