@@ -245,7 +245,7 @@ func lookupGatewayIP(gwMAC string) string {
 }
 
 // ============================================================
-// IP Manager (mesh-ip-manager.sh)
+// IP Manager
 // ============================================================
 
 type ipManager struct {
@@ -585,7 +585,7 @@ func (im *ipManager) run() {
 }
 
 // ============================================================
-// Hosts Updater (mesh-hosts-update.sh)
+// Hosts Updater
 // ============================================================
 
 func updateHosts() {
@@ -707,7 +707,7 @@ func getLocalBr0IP() string {
 }
 
 // ============================================================
-// Gateway Route Manager (gateway-route-manager.sh + mesh-default-route-fix.sh)
+// Gateway Route Manager
 // ============================================================
 
 func getGatewayMAC() string {

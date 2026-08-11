@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -146,9 +148,31 @@ func writeAtomic(path string, data any) {
 	os.Rename(tmp, path)
 }
 
+func readMeshConf(key string) string {
+	f, err := os.Open("/etc/mesh.conf")
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, key+"=") {
+			return strings.TrimPrefix(line, key+"=")
+		}
+	}
+	return ""
+}
+
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("[battery-reader] ")
+
+	if readMeshConf("battery_monitor") != "y" {
+		log.Printf("battery_monitor not enabled in /etc/mesh.conf — exiting")
+		os.Exit(0)
+	}
+
 	log.Printf("Starting — I2C bus %d MCU addr 0x%02X", i2cBus, mcuAddr)
 
 	bus, err := openBus()

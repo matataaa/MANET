@@ -7,14 +7,14 @@ function hardwareActivate() {
     panel.innerHTML =
       '<div class="hw-wrap">' +
         '<div class="svc-bar"><button class="cfg-btn" id="hw-refresh">Refresh</button></div>' +
+        '<h3 class="hw-section-title">SYSTEM</h3>' +
+        '<div id="hw-system" class="svc-grid"></div>' +
         '<h3 class="hw-section-title">RADIOS</h3>' +
         '<div id="hw-radios" class="svc-grid"></div>' +
         '<h3 class="hw-section-title">NETWORK INTERFACES</h3>' +
         '<div id="hw-ifaces" class="svc-grid"></div>' +
         '<h3 class="hw-section-title">GPS</h3>' +
         '<div id="hw-gps" class="svc-grid"></div>' +
-        '<h3 class="hw-section-title">SYSTEM</h3>' +
-        '<div id="hw-system" class="svc-grid"></div>' +
       '</div>';
     document.getElementById('hw-refresh').addEventListener('click', hardwareUpdate);
     hwInitialized = true;

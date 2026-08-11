@@ -94,9 +94,9 @@ function renderDashApplets() {
     section.innerHTML = '<div class="card-header">APPLETS</div>' +
       applets.map(function(a) {
         var dot = a.status === 'running' ? 'on' : 'off';
-        return '<div class="dash-applet-row" onclick="openApplet(\'' + escHtml(a.name) + '\')">' +
+        return '<div class="dash-applet-row" onclick="openApplet(\'' + escHtml(a.name) + '\')" data-applet-badge="' + escHtml(a.name) + '">' +
           '<span class="voice-dot ' + dot + '"></span>' +
-          '<span class="dash-applet-name">' + escHtml(a.name) + '</span>' +
+          '<span class="dash-applet-name">' + escHtml(a.label || a.name) + '</span>' +
           '<span class="dash-applet-launch">Open</span>' +
         '</div>';
       }).join('');

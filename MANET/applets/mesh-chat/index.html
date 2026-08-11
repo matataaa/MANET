@@ -26,8 +26,15 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .compose-row{display:flex;align-items:center;gap:8px}
 .compose-to{display:flex;align-items:center;gap:6px;flex-shrink:0}
 .compose-to label{font-size:11px;font-weight:600;color:var(--muted)}
-.compose-to select{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;font-family:var(--font);max-width:160px}
-.compose-to select:focus{outline:none;border-color:var(--accent)}
+.to-picker{position:relative}
+.to-picker-btn{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;font-family:var(--font);cursor:pointer;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+.to-picker-btn:hover,.to-picker-btn.open{border-color:var(--accent)}
+.to-picker-dd{display:none;position:absolute;top:100%;left:0;margin-top:4px;background:var(--surface);border:1px solid var(--border);border-radius:8px;min-width:180px;max-height:200px;overflow-y:auto;z-index:50;box-shadow:0 4px 12px rgba(0,0,0,.4);padding:4px 0}
+.to-picker-dd.show{display:block}
+.to-picker-dd label{display:flex;align-items:center;gap:8px;padding:6px 12px;font-size:12px;cursor:pointer}
+.to-picker-dd label:hover{background:rgba(255,255,255,.05)}
+.to-picker-dd label input{accent-color:var(--accent)}
+.to-picker-dd .to-sep{border-top:1px solid var(--border);margin:2px 0}
 .compose-input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:13px;font-family:var(--font);outline:none;min-width:0}
 .compose-input:focus{border-color:var(--accent)}
 .compose-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:4px;line-height:1;flex-shrink:0}
@@ -60,17 +67,19 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .msg-file .f-dl:hover{opacity:.85}
 
 .msg-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:4px;padding-right:2px}
-.msg-act{background:none;border:none;color:var(--muted);font-size:10px;cursor:pointer;padding:2px 6px;border-radius:4px;font-family:var(--font)}
-.msg-act:hover{background:rgba(255,255,255,.06);color:var(--text)}
-.msg-act.del:hover{color:var(--bad)}
+.msg-act{background:none;border:1px solid var(--border);color:var(--muted);font-size:10px;cursor:pointer;padding:3px 8px;border-radius:4px;font-family:var(--font)}
+.msg-act:hover{background:rgba(255,255,255,.06);color:var(--text);border-color:var(--text)}
+.msg-act.del{color:var(--bad);border-color:rgba(239,68,68,.3)}
+.msg-act.del:hover{background:rgba(239,68,68,.12);border-color:var(--bad)}
 
 .upload-bar{position:fixed;top:0;left:0;height:3px;background:var(--accent);transition:width .2s;z-index:100}
 
 .day-divider{font-size:10px;color:var(--muted);text-align:center;padding:10px 0 4px;font-weight:600;border-bottom:1px solid var(--border)}
 
-.clear-bar{padding:8px 16px;text-align:center;border-bottom:1px solid var(--border);background:var(--surface)}
-.clear-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:4px 12px;font-size:10px;cursor:pointer;font-family:var(--font)}
-.clear-btn:hover{border-color:var(--bad);color:var(--bad)}
+.clear-bar{padding:8px 16px;display:flex;justify-content:center;gap:8px;border-bottom:1px solid var(--border);background:var(--surface)}
+.bar-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:4px 12px;font-size:10px;cursor:pointer;font-family:var(--font)}
+.bar-btn:hover{border-color:var(--accent);color:var(--text)}
+.bar-btn.bar-del:hover{border-color:var(--bad);color:var(--bad)}
 </style>
 </head>
 <body>
@@ -88,7 +97,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
     <div class="compose-row">
       <div class="compose-to">
         <label>To:</label>
-        <select id="to-select"><option value="">All Nodes</option></select>
+        <div class="to-picker" id="to-picker">
+          <div class="to-picker-btn" id="to-btn">All Nodes</div>
+          <div class="to-picker-dd" id="to-dropdown"></div>
+        </div>
       </div>
       <input class="compose-input" id="msg-input" type="text" placeholder="Message all nodes..." autocomplete="off" disabled>
       <input type="file" id="file-input" hidden>
@@ -96,7 +108,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
       <button class="send-btn" id="send-btn" disabled>Send</button>
     </div>
   </div>
-  <div class="clear-bar"><button class="clear-btn" id="clear-btn">Clear All Messages</button></div>
+  <div class="clear-bar">
+    <button class="bar-btn" id="read-all-btn">Read All</button>
+    <button class="bar-btn bar-del" id="clear-btn">Delete All</button>
+  </div>
   <div id="inbox"></div>
 </div>
 
@@ -105,7 +120,9 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
   var inboxEl = document.getElementById('inbox');
   var inputEl = document.getElementById('msg-input');
   var sendBtn = document.getElementById('send-btn');
-  var toSelect = document.getElementById('to-select');
+  var toBtn = document.getElementById('to-btn');
+  var toDropdown = document.getElementById('to-dropdown');
+  var selectedTo = [];
   var connDot = document.getElementById('conn-dot');
   var peerCountEl = document.getElementById('peer-count');
   var unreadBadge = document.getElementById('unread-badge');
@@ -113,6 +130,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
   var attachBtn = document.getElementById('attach-btn');
   var fileInput = document.getElementById('file-input');
   var clearBtn = document.getElementById('clear-btn');
+  var readAllBtn = document.getElementById('read-all-btn');
 
   var ws = null;
   var reconnTimer = null;
@@ -158,10 +176,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 
   function fileUrl(msg) {
     if (!msg.file) return '#';
-    if (msg.from === myHostname || !msg.from_ip) {
-      return PROXY + '/files/' + msg.file.id;
-    }
-    return '/api/peer/' + msg.from_ip + '/api/applets/mesh-chat/proxy/files/' + msg.file.id;
+    return PROXY + '/files/' + msg.file.id;
   }
 
   function recipLabel(msg) {
@@ -261,21 +276,66 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
     var others = peerList.filter(function(p) { return p.hostname !== myHostname; });
     peerCountEl.textContent = others.length + ' peer' + (others.length !== 1 ? 's' : '');
 
-    var cur = toSelect.value;
-    toSelect.innerHTML = '<option value="">All Nodes</option>';
     others.sort(function(a,b) { return a.hostname.localeCompare(b.hostname); });
-    for (var i = 0; i < others.length; i++) {
-      var opt = document.createElement('option');
-      opt.value = others[i].hostname;
-      opt.textContent = others[i].hostname;
-      toSelect.appendChild(opt);
-    }
-    toSelect.value = cur;
+    selectedTo = selectedTo.filter(function(h) {
+      return others.some(function(p) { return p.hostname === h; });
+    });
+    rebuildToDropdown(others);
+    updateToDisplay();
   }
 
-  function updatePlaceholder() {
-    var v = toSelect.value;
-    inputEl.placeholder = v ? 'DM to ' + v + '...' : 'Message all nodes...';
+  function rebuildToDropdown(others) {
+    toDropdown.innerHTML = '';
+    var allLabel = document.createElement('label');
+    var allCb = document.createElement('input');
+    allCb.type = 'checkbox';
+    allCb.checked = selectedTo.length === 0;
+    allCb.onchange = function() { selectedTo = []; rebuildToDropdown(others); updateToDisplay(); };
+    allLabel.appendChild(allCb);
+    allLabel.appendChild(document.createTextNode(' All Nodes'));
+    toDropdown.appendChild(allLabel);
+    if (others.length > 0) {
+      var sep = document.createElement('div');
+      sep.className = 'to-sep';
+      toDropdown.appendChild(sep);
+    }
+    for (var i = 0; i < others.length; i++) {
+      (function(hostname) {
+        var lbl = document.createElement('label');
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = selectedTo.indexOf(hostname) >= 0;
+        cb.onchange = function() {
+          if (cb.checked) {
+            if (selectedTo.indexOf(hostname) < 0) selectedTo.push(hostname);
+          } else {
+            selectedTo = selectedTo.filter(function(h) { return h !== hostname; });
+          }
+          rebuildToDropdown(others);
+          updateToDisplay();
+        };
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode(' ' + hostname));
+        toDropdown.appendChild(lbl);
+      })(others[i].hostname);
+    }
+  }
+
+  function updateToDisplay() {
+    if (selectedTo.length === 0) {
+      toBtn.textContent = 'All Nodes';
+      inputEl.placeholder = 'Message all nodes...';
+    } else if (selectedTo.length === 1) {
+      toBtn.textContent = selectedTo[0];
+      inputEl.placeholder = 'DM to ' + selectedTo[0] + '...';
+    } else {
+      toBtn.textContent = selectedTo.length + ' recipients';
+      inputEl.placeholder = 'Message ' + selectedTo.length + ' nodes...';
+    }
+  }
+
+  function getRecipients() {
+    return selectedTo.slice();
   }
 
   // --- API calls ---
@@ -309,7 +369,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
   function sendMessage() {
     var body = inputEl.value.trim();
     if (!body) return;
-    var to = toSelect.value ? [toSelect.value] : [];
+    var to = getRecipients();
     fetch(PROXY + '/send', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -322,8 +382,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
   function uploadFile(file) {
     var form = new FormData();
     form.append('file', file);
-    var to = toSelect.value;
-    if (to) form.append('to', to);
+    var to = getRecipients();
+    for (var i = 0; i < to.length; i++) form.append('to', to[i]);
 
     var bar = document.createElement('div');
     bar.className = 'upload-bar';
@@ -356,6 +416,14 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
     if (!confirm('Delete all messages?')) return;
     fetch(PROXY + '/clear', {method:'POST'}).then(function() {
       allMessages = [];
+      renderInbox();
+      updateUnreadBadge();
+    }).catch(function() {});
+  }
+
+  function doReadAll() {
+    fetch(PROXY + '/read-all', {method:'POST'}).then(function() {
+      for (var i = 0; i < allMessages.length; i++) allMessages[i].read = true;
       renderInbox();
       updateUnreadBadge();
     }).catch(function() {});
@@ -427,6 +495,13 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
           updateUnreadBadge();
           return;
         }
+        if (evt.event === 'file_error') {
+          var fname = evt.data.name || evt.data.file_id;
+          if (window.parent && window.parent.notify) {
+            window.parent.notify('File Transfer Failed', 'Could not download: ' + fname, {type: 'error'});
+          }
+          return;
+        }
       } catch(err) {}
     };
 
@@ -444,10 +519,21 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 
   sendBtn.onclick = sendMessage;
   inputEl.onkeydown = function(e) { if (e.key === 'Enter') sendMessage(); };
-  toSelect.onchange = updatePlaceholder;
+  toBtn.onclick = function(e) {
+    e.stopPropagation();
+    var open = toDropdown.classList.contains('show');
+    toDropdown.classList.toggle('show', !open);
+    toBtn.classList.toggle('open', !open);
+  };
+  document.addEventListener('click', function() {
+    toDropdown.classList.remove('show');
+    toBtn.classList.remove('open');
+  });
+  toDropdown.addEventListener('click', function(e) { e.stopPropagation(); });
   syncBtn.onclick = doSync;
   attachBtn.onclick = function() { fileInput.click(); };
   clearBtn.onclick = doClear;
+  readAllBtn.onclick = doReadAll;
   fileInput.onchange = function() {
     if (fileInput.files.length > 0) { uploadFile(fileInput.files[0]); fileInput.value = ''; }
   };

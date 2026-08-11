@@ -73,7 +73,7 @@ function nodesRender() {
     switch (nodesSortCol) {
       case 'hostname': va = a.hostname || ''; vb = b.hostname || ''; break;
       case 'ip': va = a.ip || ''; vb = b.ip || ''; break;
-      case 'dns': va = (a.hostname || '') + '.local'; vb = (b.hostname || '') + '.local'; break;
+      case 'dns': va = (a.hostname || '') + '.mesh'; vb = (b.hostname || '') + '.mesh'; break;
       case 'tq': va = a.is_me ? 999 : (a.tq || -1); vb = b.is_me ? 999 : (b.tq || -1); break;
       case 'hop_count': va = a.hop_count || 99; vb = b.hop_count || 99; break;
       case 'battery': va = a.battery ? a.battery.percentage : -1; vb = b.battery ? b.battery.percentage : -1; break;
@@ -125,7 +125,7 @@ function nodesRender() {
     return '<tr>' +
       '<td class="col-host">' + escHtml(n.hostname || n.id) + '</td>' +
       '<td>' + escHtml(n.ip || '--') + '</td>' +
-      '<td style="color:var(--muted)">' + escHtml((n.hostname || '') + '.local') + '</td>' +
+      '<td style="color:var(--muted)">' + escHtml((n.hostname || '') + '.mesh') + '</td>' +
       '<td class="col-tq">' + tqCell + '</td>' +
       '<td>' + (n.is_me ? '0' : (n.hop_count || '--')) + '</td>' +
       '<td>' + (svcs.length ? svcs.join(' ') : '--') + '</td>' +

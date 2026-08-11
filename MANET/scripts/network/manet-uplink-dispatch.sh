@@ -280,8 +280,8 @@ EOF
     cp /etc/radvd-gateway.conf /etc/radvd.conf 2>/dev/null || true
     systemctl restart radvd 2>/dev/null || true
     ensure_eud_services
-    /usr/local/bin/mesh-ip-manager.sh 2>/dev/null || true
-    systemctl restart gateway-route-manager.service 2>/dev/null || true
+    systemctl restart mesh-manager 2>/dev/null || true
+    systemctl restart gateway-manager 2>/dev/null || true
 
     log "Promoted $iface as MANET gateway (${ip}, gw=${gw:-none})"
 }
@@ -304,8 +304,8 @@ demote_gateway() {
     cp /etc/radvd-mesh.conf /etc/radvd.conf 2>/dev/null || true
     systemctl restart radvd 2>/dev/null || true
     ensure_eud_services
-    /usr/local/bin/mesh-ip-manager.sh 2>/dev/null || true
-    systemctl restart gateway-route-manager.service 2>/dev/null || true
+    systemctl restart mesh-manager 2>/dev/null || true
+    systemctl restart gateway-manager 2>/dev/null || true
 
     log "Demoted MANET gateway${old_iface:+ on $old_iface}"
 }

@@ -3,7 +3,7 @@
 # Tourguide Manager
 # ==============================================================================
 # Handles tourguide election, radio hopping, broadcasting, and partition detection
-# Called by node-manager.sh during tourguide windows
+# Called by node-manager during tourguide windows
 # ==============================================================================
 
 CONTROL_IFACE="br0"

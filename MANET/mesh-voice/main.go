@@ -74,7 +74,7 @@ func run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("opus encoder: %w", err)
 	}
 	encoder.SetBitrate(bitrate)
-	encoder.SetComplexity(10)
+	encoder.SetComplexity(5)
 	encoder.SetInBandFEC(true)
 	encoder.SetPacketLossPerc(5)
 
@@ -136,11 +136,15 @@ func run(ctx context.Context, cfg Config) error {
 		for {
 			select {
 			case down := <-pttCh:
-				if down && !remoteActive.Load() {
-					broadcasting.Store(true)
-					pttState.setActive(true)
-					pttState.setTX(true)
-					log.Println("TX: start")
+				if down {
+					if remoteActive.Load() {
+						log.Println("TX: blocked (half-duplex, remote active)")
+					} else {
+						broadcasting.Store(true)
+						pttState.setActive(true)
+						pttState.setTX(true)
+						log.Println("TX: start")
+					}
 				} else {
 					broadcasting.Store(false)
 					pttState.setActive(false)
@@ -156,6 +160,7 @@ func run(ctx context.Context, cfg Config) error {
 	// RTP sequence number
 	var seqNum uint16
 	ssrc := uint32(os.Getpid() & 0xFFFFFFFF)
+	var lastRxTime atomic.Int64
 
 	// miniaudio context
 	malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
@@ -167,7 +172,7 @@ func run(ctx context.Context, cfg Config) error {
 
 	var wg sync.WaitGroup
 
-	// === TX: capture → encode → multicast ===
+	// === TX: capture → channel → encoder goroutine → multicast ===
 	canCapture := false
 	captureCfg := malgo.DefaultDeviceConfig(malgo.Capture)
 	captureCfg.Capture.Format = malgo.FormatS16
@@ -175,9 +180,7 @@ func run(ctx context.Context, cfg Config) error {
 	captureCfg.SampleRate = sampleRate
 	captureCfg.PeriodSizeInFrames = uint32(frameSize)
 
-	pcmBuf := make([]int16, 0, frameSize*4)
-	encBuf := make([]byte, encBufSize)
-	var pcmMu sync.Mutex
+	captureCh := make(chan []int16, 8)
 
 	captureCallbacks := malgo.DeviceCallbacks{
 		Data: func(outputSamples, inputSamples []byte, framecount uint32) {
@@ -189,31 +192,44 @@ func run(ctx context.Context, cfg Config) error {
 			for i := 0; i < nSamples; i++ {
 				samples[i] = int16(inputSamples[i*2]) | int16(inputSamples[i*2+1])<<8
 			}
-
-			pcmMu.Lock()
-			pcmBuf = append(pcmBuf, samples...)
-			for len(pcmBuf) >= frameSize {
-				frame := make([]int16, frameSize)
-				copy(frame, pcmBuf[:frameSize])
-				pcmBuf = pcmBuf[frameSize:]
-				pcmMu.Unlock()
-
-				n, err := encoder.Encode(frame, encBuf)
-				if err != nil {
-					log.Printf("encode error: %v", err)
-					pcmMu.Lock()
-					continue
-				}
-
-				pkt := buildRTPPacket(seqNum, ssrc, encBuf[:n])
-				seqNum++
-
-				txConn.Write(pkt)
-				pcmMu.Lock()
+			select {
+			case captureCh <- samples:
+			default:
 			}
-			pcmMu.Unlock()
 		},
 	}
+
+	// Encoder goroutine — keeps encoding off the audio callback thread
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		pcmBuf := make([]int16, 0, frameSize*4)
+		encBuf := make([]byte, encBufSize)
+		for {
+			select {
+			case samples, ok := <-captureCh:
+				if !ok {
+					return
+				}
+				pcmBuf = append(pcmBuf, samples...)
+				for len(pcmBuf) >= frameSize {
+					frame := pcmBuf[:frameSize]
+					pcmBuf = append([]int16(nil), pcmBuf[frameSize:]...)
+
+					n, err := encoder.Encode(frame, encBuf)
+					if err != nil {
+						log.Printf("encode error: %v", err)
+						continue
+					}
+					pkt := buildRTPPacket(seqNum, ssrc, encBuf[:n])
+					seqNum++
+					txConn.Write(pkt)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	captureDevice, err := malgo.InitDevice(malgoCtx.Context, captureCfg, captureCallbacks)
 	if err != nil {
@@ -234,40 +250,56 @@ func run(ctx context.Context, cfg Config) error {
 		broadcasting.Store(false)
 	}
 
-	// === RX: multicast → decode → playback ===
+	// === RX: multicast → decode → jitter buffer → playback ===
 	playbackCfg := malgo.DefaultDeviceConfig(malgo.Playback)
 	playbackCfg.Playback.Format = malgo.FormatS16
 	playbackCfg.Playback.Channels = channels
 	playbackCfg.SampleRate = sampleRate
 	playbackCfg.PeriodSizeInFrames = uint32(frameSize)
 
-	playBuf := make(chan []int16, 20)
+	const jitterFrames = 3 // ~60ms pre-buffer before playback starts
+	var jbMu sync.Mutex
+	jitterBuf := make([][]int16, 0, 32)
+	var jbPlaying atomic.Bool
 
 	playbackCallbacks := malgo.DeviceCallbacks{
 		Data: func(outputSamples, inputSamples []byte, framecount uint32) {
-			need := int(framecount)
-			written := 0
-			for written < need {
-				select {
-				case frame := <-playBuf:
-					for i, s := range frame {
-						if written+i >= need {
-							break
-						}
-						idx := (written + i) * 2
-						if idx+1 < len(outputSamples) {
-							outputSamples[idx] = byte(s)
-							outputSamples[idx+1] = byte(s >> 8)
-						}
-					}
-					written += len(frame)
-				default:
-					// Silence
-					for i := written * 2; i < len(outputSamples); i++ {
+			jbMu.Lock()
+			if !jbPlaying.Load() {
+				if len(jitterBuf) < jitterFrames {
+					jbMu.Unlock()
+					for i := range outputSamples {
 						outputSamples[i] = 0
 					}
 					return
 				}
+				jbPlaying.Store(true)
+			}
+
+			need := int(framecount)
+			written := 0
+			for written < need && len(jitterBuf) > 0 {
+				frame := jitterBuf[0]
+				jitterBuf = jitterBuf[1:]
+				for i, s := range frame {
+					if written+i >= need {
+						break
+					}
+					idx := (written + i) * 2
+					if idx+1 < len(outputSamples) {
+						outputSamples[idx] = byte(s)
+						outputSamples[idx+1] = byte(s >> 8)
+					}
+				}
+				written += len(frame)
+			}
+			if len(jitterBuf) == 0 {
+				jbPlaying.Store(false)
+			}
+			jbMu.Unlock()
+
+			for i := written * 2; i < len(outputSamples); i++ {
+				outputSamples[i] = 0
 			}
 		},
 	}
@@ -306,17 +338,16 @@ func run(ctx context.Context, cfg Config) error {
 				continue
 			}
 
-			// Parse RTP header
 			pktSSRC := uint32(rxBuf[8])<<24 | uint32(rxBuf[9])<<16 | uint32(rxBuf[10])<<8 | uint32(rxBuf[11])
 			if pktSSRC == ssrc {
-				continue // skip own packets
+				continue
 			}
 
 			payload := rxBuf[12:n]
 
-			// Half-duplex: mark remote active
 			remoteActive.Store(true)
 			pttState.setRX(true)
+			lastRxTime.Store(time.Now().UnixMilli())
 
 			samples, err := decoder.Decode(payload, pcmOut)
 			if err != nil {
@@ -327,11 +358,11 @@ func run(ctx context.Context, cfg Config) error {
 			frame := make([]int16, samples)
 			copy(frame, pcmOut[:samples])
 
-			select {
-			case playBuf <- frame:
-			default:
-				// drop if buffer full
+			jbMu.Lock()
+			if len(jitterBuf) < 32 {
+				jitterBuf = append(jitterBuf, frame)
 			}
+			jbMu.Unlock()
 		}
 	}()
 
@@ -339,16 +370,19 @@ func run(ctx context.Context, cfg Config) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(200 * time.Millisecond)
+		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				remoteActive.Store(false)
-				pttState.setRX(false)
+				if time.Now().UnixMilli()-lastRxTime.Load() > 500 {
+					remoteActive.Store(false)
+					pttState.setRX(false)
+				}
 			}
+		}
 	}()
 
 	log.Printf("mesh-voice running on %s → %s:%d", cfg.Iface, cfg.McastAddr, cfg.McastPort)

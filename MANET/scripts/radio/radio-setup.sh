@@ -205,19 +205,7 @@ systemctl enable ssh 2>/dev/null || true
 systemctl restart ssh 2>/dev/null || true
 
 sleep 0.5
-echo "testing acs variable"
-if [[ -n "$acs" ]]; then
-    echo "acs defined as $acs"
-    sleep 0.5
-    if [[ "$acs" == "Y" ]]; then
-        echo " > This mesh will channel hop ..."
-        cp /usr/local/bin/node-manager-acs.sh /usr/local/bin/node-manager.sh
-    else
-        echo " > This mesh will remain on a static channel ..."
-        cp /usr/local/bin/node-manager-static.sh /usr/local/bin/node-manager.sh
-    fi
-
-fi
+echo "ACS mode: ${acs:-N} (handled by node-manager binary)"
 
 sleep 2
 
@@ -1409,7 +1397,7 @@ Wants=alfred.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/node-manager.sh
+ExecStart=/usr/local/bin/node-manager
 Restart=on-failure
 RestartSec=15
 
@@ -1466,28 +1454,25 @@ systemctl enable ethernet-autodetect.service
 
 cp /root/regulatory.db /lib/firmware/
 
-cat <<- EOF > /etc/systemd/system/gateway-route-manager.service
+cat <<- EOF > /etc/systemd/system/gateway-manager.service
 [Unit]
-Description=Mesh Gateway Route Manager
-Documentation=man:batctl(8)
+Description=Mesh Gateway Manager
 After=network.target node-manager.service
 Wants=node-manager.service
-ConditionPathExists=/usr/local/bin/gateway-route-manager.sh
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/gateway-route-manager.sh
+ExecStart=/usr/local/bin/gateway-manager
 Restart=always
 RestartSec=10
-User=root
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=gateway-route-manager
+SyslogIdentifier=gateway-manager
 
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl enable gateway-route-manager
+systemctl enable gateway-manager
 
 cat <<- EOF > /etc/systemd/system/mesh-shutdown.service
 [Unit]
@@ -1539,29 +1524,7 @@ systemctl enable cpu-powersave
 
 
 
-cat << EOF > /etc/systemd/system/mesh-hosts-update.service
-[Unit]
-Description=Update /etc/hosts from mesh registry
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/mesh-hosts-update.sh
-EOF
-
-cat << EOF > /etc/systemd/system/mesh-hosts-update.timer
-[Unit]
-Description=Refresh mesh hosts periodically
-
-[Timer]
-OnBootSec=60
-OnUnitActiveSec=120
-
-[Install]
-WantedBy=timers.target
-EOF
-
-systemctl enable mesh-hosts-update.timer
+# mesh-hosts-update is now handled by mesh-manager binary
 
 
 # ============================================================================
@@ -1667,7 +1630,7 @@ if ! grep -q '^i2c-dev$' /etc/modules 2>/dev/null; then
     echo " > i2c-dev added to /etc/modules"
 fi
 
-# Install smbus and i2c-tools for battery-reader.py and diagnostics
+# Install i2c-tools for battery-reader and diagnostics
 apt update -qq && apt install -y python3-smbus i2c-tools || true
 
 systemctl enable battery-reader.service

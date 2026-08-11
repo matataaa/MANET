@@ -175,7 +175,7 @@ function topoUpdate(data) {
     .attr('dy', d => d.r + 16)
     .attr('fill', d => d.stale ? '#6e7681' : (isDarkTheme() ? '#f8f6ef' : '#02000d'));
 
-  nodeAll.style('cursor', d => (d.is_me || !d.ip) ? 'grab' : 'pointer');
+  nodeAll.style('cursor', d => d.ip ? 'pointer' : 'grab');
 
   // Tooltip
   const tooltip = topoTooltip;
@@ -183,13 +183,13 @@ function topoUpdate(data) {
     .on('mouseover', (event, d) => {
       let html = '<div class="tt-host">' + escHtml(d.hostname || d.id) + '</div>';
       if (d.ip) html += '<div class="tt-row"><span class="tt-label">IP</span>' + escHtml(d.ip) + '</div>';
-      html += '<div class="tt-row"><span class="tt-label">DNS</span>' + escHtml((d.hostname || '') + '.local') + '</div>';
+      html += '<div class="tt-row"><span class="tt-label">DNS</span>' + escHtml((d.hostname || '') + '.mesh') + '</div>';
       if (!d.is_me && d.tq != null) html += '<div class="tt-row"><span class="tt-label">TQ</span>' + d.tq + ' (' + tqPct(d.tq) + '%)</div>';
       if (d.hop_count) html += '<div class="tt-row"><span class="tt-label">Hops</span>' + d.hop_count + '</div>';
       if (d.is_gateway) html += '<div class="tt-row"><span class="tt-label">Role</span>Gateway</div>';
       if (d.limp) html += '<div class="tt-row"><span class="tt-label">State</span><span style="color:var(--bad)">LIMP MODE</span></div>';
       if (d.battery) html += '<div class="tt-row"><span class="tt-label">Batt</span>' + d.battery.percentage + '%</div>';
-      if (!d.is_me && d.ip) html += '<div class="tt-row" style="opacity:0.6;font-size:11px;margin-top:4px">Click for options</div>';
+      if (d.ip) html += '<div class="tt-row" style="opacity:0.6;font-size:11px;margin-top:4px">Click for options</div>';
       tooltip.innerHTML = html;
       tooltip.classList.add('visible');
     })
@@ -217,7 +217,7 @@ function topoUpdate(data) {
     .on('end', (event, d) => {
       if (!event.active) topoSim.alphaTarget(0);
       if (!d.is_me) { d.fx = null; d.fy = null; }
-      if (!topoDragMoved && !d.is_me && d.ip) {
+      if (!topoDragMoved && d.ip) {
         topoShowNodeMenu(event.sourceEvent, d);
       }
     })
@@ -277,11 +277,17 @@ function topoShowNodeMenu(mouseEvent, d) {
     });
   });
   setTimeout(function() {
-    document.addEventListener('click', topoDismissMenu, { once: true });
-  }, 0);
+    document.addEventListener('pointerdown', topoDismissHandler, true);
+  }, 10);
+}
+
+function topoDismissHandler(e) {
+  if (e.target.closest && e.target.closest('.topo-node-menu')) return;
+  topoDismissMenu();
 }
 
 function topoDismissMenu() {
+  document.removeEventListener('pointerdown', topoDismissHandler, true);
   var old = document.querySelector('.topo-node-menu');
   if (old) old.remove();
 }

@@ -411,6 +411,76 @@ func handleIncomingMessage(data []byte) {
 	wsEvent("message", msg)
 	wsEvent("unread", map[string]int{"count": unreadCount()})
 	log.Printf("rx %s from %s", msg.Type, msg.From)
+	if msg.File != nil {
+		go autoFetchFile(msg)
+	}
+}
+
+// --- File replication ---
+
+func autoFetchFile(msg Message) {
+	if msg.File == nil || msg.File.ID == "" {
+		return
+	}
+	localPath := filepath.Join(filesDir(), msg.File.ID)
+	if _, err := os.Stat(localPath); err == nil {
+		return
+	}
+	sources := fileSources(msg)
+	for _, ip := range sources {
+		if fetchFileFrom(ip, msg.File.ID, localPath) {
+			log.Printf("fetched file %s from %s", msg.File.ID, ip)
+			return
+		}
+	}
+	log.Printf("failed to fetch file %s from any source", msg.File.ID)
+	wsEvent("file_error", map[string]string{"id": msg.ID, "file_id": msg.File.ID, "name": msg.File.Name})
+}
+
+func fileSources(msg Message) []string {
+	mu.Lock()
+	defer mu.Unlock()
+	var direct []string
+	var other []string
+	for _, p := range peers {
+		if p.IP == msg.FromIP {
+			continue
+		}
+		if hasFileCandidate(p, msg) {
+			direct = append(direct, p.IP)
+		}
+	}
+	if msg.FromIP != "" {
+		other = append(other, msg.FromIP)
+	}
+	return append(direct, other...)
+}
+
+func hasFileCandidate(p *Peer, msg Message) bool {
+	if len(msg.To) == 0 {
+		return true
+	}
+	return contains(msg.To, p.Hostname)
+}
+
+func fetchFileFrom(peerIP, fileID, localPath string) bool {
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://%s:%d/files/%s", peerIP, cfg.Port, fileID))
+	if err != nil || resp.StatusCode != 200 {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return false
+	}
+	defer resp.Body.Close()
+	os.MkdirAll(filesDir(), 0755)
+	f, err := os.Create(localPath)
+	if err != nil {
+		return false
+	}
+	_, err = io.Copy(f, io.LimitReader(resp.Body, maxFileSize))
+	f.Close()
+	return err == nil
 }
 
 // --- Peer delivery ---
@@ -564,6 +634,18 @@ func handleMessageAction(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
+	found := false
+	for _, m := range messages {
+		if m.ID == id && !deletedSet[id] {
+			found = true
+			break
+		}
+	}
+	if !found {
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "message not found"})
+		return
+	}
+
 	if r.Method == "DELETE" || (r.Method == "POST" && action == "delete") {
 		deletedSet[id] = true
 		saveState()
@@ -663,8 +745,12 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	dst.Close()
 
 	var to []string
-	if t := r.FormValue("to"); t != "" {
-		to = strings.Split(t, ",")
+	if vals, ok := r.MultipartForm.Value["to"]; ok {
+		for _, v := range vals {
+			if v != "" {
+				to = append(to, v)
+			}
+		}
 	}
 
 	msg := Message{
@@ -694,7 +780,42 @@ func handleFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", 404)
 		return
 	}
-	http.ServeFile(w, r, filepath.Join(filesDir(), name))
+	localPath := filepath.Join(filesDir(), name)
+	if _, err := os.Stat(localPath); err == nil {
+		http.ServeFile(w, r, localPath)
+		return
+	}
+	mu.Lock()
+	var senderIP string
+	for _, m := range messages {
+		if m.File != nil && m.File.ID == name && m.FromIP != "" {
+			senderIP = m.FromIP
+			break
+		}
+	}
+	mu.Unlock()
+	if senderIP == "" {
+		http.Error(w, "not found", 404)
+		return
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://%s:%d/files/%s", senderIP, cfg.Port, name))
+	if err != nil {
+		http.Error(w, "file unavailable", 502)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		http.Error(w, "file unavailable", 502)
+		return
+	}
+	for k, vals := range resp.Header {
+		for _, v := range vals {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 func handleUnread(w http.ResponseWriter, r *http.Request) {
@@ -774,6 +895,7 @@ func handleDeliver(w http.ResponseWriter, r *http.Request) {
 	wsEvent("message", msg)
 	wsEvent("unread", map[string]int{"count": unreadCount()})
 	log.Printf("delivered %s from %s", msg.Type, msg.From)
+	go autoFetchFile(msg)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
@@ -788,12 +910,36 @@ func handleDeleteAll(w http.ResponseWriter, r *http.Request) {
 	for _, m := range messages {
 		deletedSet[m.ID] = true
 	}
+	messages = nil
 	saveState()
 	wsEvent("clear", nil)
 	wsEvent("unread", map[string]int{"count": 0})
 	mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+func handleReadAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	mu.Lock()
+	count := 0
+	for i := range messages {
+		if !messages[i].Read && messages[i].From != hostname && !deletedSet[messages[i].ID] {
+			messages[i].Read = true
+			readSet[messages[i].ID] = true
+			count++
+		}
+	}
+	if count > 0 {
+		saveState()
+	}
+	wsEvent("unread", map[string]int{"count": 0})
+	mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "marked": count})
 }
 
 // --- Delivery helper ---
@@ -893,6 +1039,7 @@ func main() {
 	mux.HandleFunc("/config", handleConfig)
 	mux.HandleFunc("/deliver", handleDeliver)
 	mux.HandleFunc("/clear", handleDeleteAll)
+	mux.HandleFunc("/read-all", handleReadAll)
 
 	listen := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	log.Printf("mesh-chat v3: host=%s ip=%s listen=%s mcast=%s", hostname, meshIP, listen, cfg.MulticastAddr)

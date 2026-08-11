@@ -5,7 +5,7 @@ Wants=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/share/manet/applets/mesh-chat/mesh-chat -config /etc/mesh-chat.conf
+ExecStart=/usr/local/bin/mesh-chat
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

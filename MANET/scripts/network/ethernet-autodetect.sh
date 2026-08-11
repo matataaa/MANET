@@ -288,7 +288,7 @@ if [ "$CARRIER" != "1" ]; then
         fi
 
         # Reconfigure ebtables (wlan1 should allow DHCP)
-        /usr/local/bin/mesh-ip-manager.sh
+        systemctl restart mesh-manager 2>/dev/null || true
 
 
 
@@ -476,7 +476,7 @@ if [ "$DETECTED_MODE" == "gateway" ]; then
     fi
 
     # Reconfigure ebtables and dnsmasq (handles wlan1 role changes)
-    /usr/local/bin/mesh-ip-manager.sh
+    systemctl restart mesh-manager 2>/dev/null || true
 
     # Save state
     cat > /var/run/ethernet_detection_state <<EOF
@@ -577,7 +577,7 @@ elif [ "$DETECTED_MODE" == "wired-eud" ]; then
     nft flush chain ip nat postrouting 2>/dev/null || true
 
     # Reconfigure ebtables and dnsmasq (handles wlan1 role + end0 addition)
-    /usr/local/bin/mesh-ip-manager.sh
+    systemctl restart mesh-manager 2>/dev/null || true
 
     # Save state
     cat > /var/run/ethernet_detection_state <<EOF
