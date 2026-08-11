@@ -2,3 +2,16 @@
 *.deb
 .DS_Store
 .cursor/mesh-nodes.env
+
+# Compiled Go binaries
+MANET/src/battery-reader/battery-reader
+MANET/src/cot-emitter/cot-emitter
+MANET/src/gateway-manager/gateway-manager
+MANET/src/gps-reader/gps-reader
+MANET/src/halow-mcs-summary/halow-mcs-summary
+MANET/src/manet-ctrl/manet-ctrl
+MANET/src/mesh-chat/mesh-chat
+MANET/src/mesh-manager/mesh-manager
+MANET/src/mesh-radio-state/mesh-radio-state
+MANET/src/mesh-registry/mesh-registry
+MANET/src/node-manager/node-manager
