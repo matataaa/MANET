@@ -85,6 +85,44 @@ mm6108 v1.16.4 radio nodes:
 Both gateway (v2024.2) and nodes (v2025.4) use compat version 15 and
 interoperate. Install `batman-adv` and `batctl` from packages.
 
+## l2 socket / bat0 enslavement ordering
+
+wpa_supplicant_s1g opens a raw l2 socket on wlan0 to send and receive SAE
+authentication frames. If wlan0 is enslaved to bat0 before SAE peering
+completes, bat0 intercepts the socket and wpa_supplicant can no longer
+receive auth responses. The gateway gets stuck retransmitting SAE commits
+with no reply, and the mesh never forms.
+
+**The fix**: never enslave wlan0 to bat0 until at least one peer reaches
+`mesh plink: ESTAB` in `iw dev wlan0 station dump`. The boot script
+(`halow-mesh-start.sh`) polls for this for up to 60 seconds.
+
+Any restart of wpa_supplicant while wlan0 is enslaved has the same problem.
+Use `halow-mesh-restart.sh` which detaches from bat0 first, restarts wpa,
+waits for ESTAB, then re-enslaves.
+
+## Mesh watchdog
+
+`halow-mesh-watchdog.service` runs a loop that checks `batctl bat0 n` every
+60 seconds. If zero batman neighbors are seen for 3 consecutive checks
+(3 minutes), it triggers `halow-mesh-restart.sh` for a clean recovery.
+It also restarts the mesh if wpa_supplicant_s1g is not running.
+
+### Gateway scripts
+
+| Script | Purpose |
+|--------|---------|
+| `/usr/local/bin/halow-mesh-start.sh` | Boot-time setup: load modules, start wpa, wait for ESTAB, enslave to bat0 |
+| `/usr/local/bin/halow-mesh-restart.sh` | Clean restart: detach bat0, kill wpa, restart, wait for ESTAB, re-enslave |
+| `/usr/local/bin/halow-mesh-watchdog.sh` | Watchdog loop: detect zero neighbors and trigger restart |
+
+### Gateway services
+
+| Service | Type | Description |
+|---------|------|-------------|
+| `halow-mesh.service` | oneshot | Runs `halow-mesh-start.sh` at boot |
+| `halow-mesh-watchdog.service` | simple | Runs the watchdog, auto-restarts on failure |
+
 ## Quick setup
 
 ```sh
@@ -105,8 +143,15 @@ cp wpa_supplicant-s1g-wlan0.service /etc/systemd/system/
 cp morse_cli /usr/local/bin/
 chmod +x /usr/local/bin/morse_cli
 
+# Install mesh scripts
+cp halow-mesh-start.sh halow-mesh-restart.sh halow-mesh-watchdog.sh /usr/local/bin/
+chmod +x /usr/local/bin/halow-mesh-*.sh
+
+# Install services
+cp halow-mesh.service halow-mesh-watchdog.service /etc/systemd/system/
+
 # Enable and start
 modprobe morse
 systemctl daemon-reload
-systemctl enable --now wpa_supplicant-s1g-wlan0
+systemctl enable --now halow-mesh halow-mesh-watchdog
 ```

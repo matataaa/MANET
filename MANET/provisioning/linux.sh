@@ -891,8 +891,6 @@ lan_ap_key=${LAN_AP_KEY}
 lan_ap_channel=100
 lan_ap_bw=80
 max_euds_per_node=${MAX_EUDS_PER_NODE}
-mtx=${INSTALL_MEDIAMTX}
-mumble=${INSTALL_MUMBLE}
 mesh_ssid=${MESH_SSID}
 mesh_key=${MESH_SAE_KEY}
 ipv4_network=${LAN_CIDR_BLOCK}
@@ -959,8 +957,6 @@ EOF
         sed -i "s|__LAN_AP_SSID__|${LAN_AP_SSID}|g" "$TEMP_PROVISION_SCRIPT"
         sed -i "s|__LAN_AP_KEY__|${LAN_AP_KEY}|g" "$TEMP_PROVISION_SCRIPT"
         sed -i "s|__MAX_EUDS_PER_NODE__|${MAX_EUDS_PER_NODE}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__INSTALL_MEDIAMTX__|${INSTALL_MEDIAMTX}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__INSTALL_MUMBLE__|${INSTALL_MUMBLE}|g" "$TEMP_PROVISION_SCRIPT"
         sed -i "s|__MESH_SSID__|${MESH_SSID}|g" "$TEMP_PROVISION_SCRIPT"
         sed -i "s|__MESH_SAE_KEY__|${MESH_SAE_KEY}|g" "$TEMP_PROVISION_SCRIPT"
         sed -i "s|__LAN_CIDR_BLOCK__|${LAN_CIDR_BLOCK}|g" "$TEMP_PROVISION_SCRIPT"
@@ -1056,8 +1052,6 @@ flash_rpi() {
             -e "s|__LAN_AP_SSID__|${LAN_AP_SSID}|g" \
             -e "s|__LAN_AP_KEY__|${LAN_AP_KEY}|g" \
             -e "s|__MAX_EUDS_PER_NODE__|${MAX_EUDS_PER_NODE}|g" \
-            -e "s|__INSTALL_MEDIAMTX__|${INSTALL_MEDIAMTX}|g" \
-            -e "s|__INSTALL_MUMBLE__|${INSTALL_MUMBLE}|g" \
             -e "s|__MESH_SSID__|${MESH_SSID}|g" \
             -e "s|__MESH_SAE_KEY__|${MESH_SAE_KEY}|g" \
             -e "s|__LAN_CIDR_BLOCK__|${LAN_CIDR_BLOCK}|g" \

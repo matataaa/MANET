@@ -1,0 +1,13 @@
+[Unit]
+Description=HaLow Mesh Watchdog
+After=halow-mesh.service
+Requires=halow-mesh.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/halow-mesh-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

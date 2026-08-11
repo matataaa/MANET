@@ -418,6 +418,40 @@ func assembleStatusData() StatusData {
 		}
 	}
 
+	// Build peer-to-peer edges from registry neighbor data
+	for _, n := range nodes {
+		if n.IsMe {
+			continue
+		}
+		rn := findRegistryNode(registry, n.AllMACs)
+		if rn == nil {
+			continue
+		}
+		peerNeighbors := strings.Split(rn["DIRECT_NEIGHBORS"], ",")
+		for _, nbMAC := range peerNeighbors {
+			nbMAC = strings.TrimSpace(nbMAC)
+			if nbMAC == "" {
+				continue
+			}
+			nbNodeID, ok := macToNodeID[nbMAC]
+			if !ok || nbNodeID == selfID || nbNodeID == n.ID {
+				continue
+			}
+			dup := false
+			for _, e := range edges {
+				s := e.Source
+				t := e.Target
+				if (s == n.ID && t == nbNodeID) || (s == nbNodeID && t == n.ID) {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				edges = append(edges, Edge{Source: n.ID, Target: nbNodeID, Type: "direct"})
+			}
+		}
+	}
+
 	// Gateway count: from gateways or registry fallback
 	gwCount := len(gateways)
 	if gwCount == 0 {
@@ -488,6 +522,18 @@ func resolveHopCount(n Node, origMap map[string]BatOriginator, macToNodeID map[s
 		}
 	}
 	return 0
+}
+
+func findRegistryNode(registry map[string]RegistryNode, allMACs []string) RegistryNode {
+	for _, rn := range registry {
+		rnMAC := normMAC(rn["MAC_ADDRESS"])
+		for _, m := range allMACs {
+			if m == rnMAC {
+				return rn
+			}
+		}
+	}
+	return nil
 }
 
 func getPeerLocalData(peerIP string, timeout time.Duration) map[string]interface{} {

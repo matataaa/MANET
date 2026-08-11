@@ -190,14 +190,6 @@ ask_questions() {
         MAX_EUDS_PER_NODE=0
     fi
 
-    read -p "Install MediaMTX Server? (Y/n): " INSTALL_MEDIAMTX
-    INSTALL_MEDIAMTX=${INSTALL_MEDIAMTX:-y}
-    if [ "$INSTALL_MEDIAMTX" = "y" ] || [ "$INSTALL_MEDIAMTX" = "Y" ]; then INSTALL_MEDIAMTX="y"; else INSTALL_MEDIAMTX="n"; fi
-
-    read -p "Install Mumble Server (murmur)? (Y/n): " INSTALL_MUMBLE
-    INSTALL_MUMBLE=${INSTALL_MUMBLE:-y}
-    if [ "$INSTALL_MUMBLE" = "y" ] || [ "$INSTALL_MUMBLE" = "Y" ]; then INSTALL_MUMBLE="y"; else INSTALL_MUMBLE="n"; fi
-
     read -p "Enter global MESH SSID Name: " MESH_SSID
 
     while true; do
@@ -299,8 +291,6 @@ EUD_CONNECTION="$EUD_CONNECTION"
 LAN_AP_SSID="$LAN_AP_SSID"
 LAN_AP_KEY="$LAN_AP_KEY"
 MAX_EUDS_PER_NODE="$MAX_EUDS_PER_NODE"
-INSTALL_MEDIAMTX="$INSTALL_MEDIAMTX"
-INSTALL_MUMBLE="$INSTALL_MUMBLE"
 REGULATORY_DOMAIN="$REGULATORY_DOMAIN"
 HALOW_REGULATORY_DOMAIN="$HALOW_REGULATORY_DOMAIN"
 MESH_SSID="$MESH_SSID"
@@ -329,8 +319,6 @@ load_config() {
         echo "  LAN AP Key: $LAN_AP_KEY"
         echo "  Max EUDs per node: $MAX_EUDS_PER_NODE"
     fi
-    echo "  Install MediaMTX: $INSTALL_MEDIAMTX"
-    echo "  Install Mumble: $INSTALL_MUMBLE"
     echo "  Regulatory Domain: $REGULATORY_DOMAIN"
     echo "  HaLow Regulatory Region: $HALOW_REGULATORY_DOMAIN"
     echo "  Mesh SSID: $MESH_SSID"
@@ -444,8 +432,6 @@ build_image() {
         -e "s|__LAN_AP_SSID__|${LAN_AP_SSID}|g" \
         -e "s|__LAN_AP_KEY__|${LAN_AP_KEY}|g" \
         -e "s|__MAX_EUDS_PER_NODE__|${MAX_EUDS_PER_NODE}|g" \
-        -e "s|__INSTALL_MEDIAMTX__|${INSTALL_MEDIAMTX}|g" \
-        -e "s|__INSTALL_MUMBLE__|${INSTALL_MUMBLE}|g" \
         -e "s|__MESH_SSID__|${MESH_SSID}|g" \
         -e "s|__MESH_SAE_KEY__|${MESH_SAE_KEY}|g" \
         -e "s|__LAN_CIDR_BLOCK__|${LAN_CIDR_BLOCK}|g" \

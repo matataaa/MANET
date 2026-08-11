@@ -55,6 +55,7 @@ type NodeInfo struct {
 	Wifi5TxMCS   string `json:"wifi_5_tx_mcs,omitempty"`
 	Wifi5RxMCS   string `json:"wifi_5_rx_mcs,omitempty"`
 	TQAverage    string `json:"tq_average,omitempty"`
+	Neighbors    string `json:"neighbors,omitempty"`
 }
 
 func main() {
@@ -126,6 +127,7 @@ func collectLocal() NodeInfo {
 		Wifi5TxMCS:   mcs["WLAN1_TX_MCS"],
 		Wifi5RxMCS:   mcs["WLAN1_RX_MCS"],
 		TQAverage:    getTQAverage(),
+		Neighbors:    getDirectNeighbors(),
 	}
 }
 
@@ -226,6 +228,7 @@ func writeNode(b *strings.Builder, n NodeInfo) {
 	w("WIFI_5_TX_MCS", n.Wifi5TxMCS)
 	w("WIFI_5_RX_MCS", n.Wifi5RxMCS)
 	w("TQ_AVERAGE", n.TQAverage)
+	w("DIRECT_NEIGHBORS", n.Neighbors)
 	fmt.Fprintln(b)
 }
 
@@ -441,6 +444,21 @@ func collectMCS() map[string]string {
 		}
 	}
 	return result
+}
+
+func getDirectNeighbors() string {
+	out, err := exec.Command(batctlBin, "n").Output()
+	if err != nil {
+		return ""
+	}
+	var macs []string
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && strings.Contains(fields[0], ":") {
+			macs = append(macs, fields[0])
+		}
+	}
+	return strings.Join(macs, ",")
 }
 
 func getTQAverage() string {
