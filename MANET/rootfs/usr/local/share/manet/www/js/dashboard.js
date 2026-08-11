@@ -72,9 +72,7 @@ function renderDashDaemons() {
       var cDot = c.last_error && c.last_error !== 'no GPS fix' ? 'off' : 'on';
       items.push('<div class="dash-daemon-row"><span class="voice-dot ' + cDot + '"></span>' +
         '<span class="dash-daemon-name">CoT</span>' +
-        '<span class="dash-daemon-val">' + cotVal +
-        ' <a href="/api/atak-package" class="atak-setup-btn" title="Download ATAK data package">ATAK Setup</a>' +
-        '</span></div>');
+        '<span class="dash-daemon-val">' + cotVal + '</span></div>');
     }
 
     if (!items.length) { el.style.display = 'none'; return; }
@@ -151,7 +149,7 @@ function renderDashNodeList(nodes) {
     if (n.applets && n.applets.length) {
       n.applets.forEach(function(a) {
         var cls = a.status === 'running' ? 'badge-applet-on' : 'badge-applet-off';
-        badges.push('<span class="badge ' + cls + '" data-applet-badge="' + escHtml(a.name) + '">' + escHtml(a.label || a.name) + '</span>');
+        badges.push('<span class="badge ' + cls + '">' + escHtml(a.label || a.name) + '</span>');
       });
     }
     if (n.limp) badges.push('<span class="badge badge-limp">LIMP</span>');

@@ -1,7 +1,9 @@
 package main
 
 import (
+	cryptoRand "crypto/rand"
 	"encoding/binary"
+	"hash/crc32"
 	"log"
 	"net"
 	"net/http"
@@ -13,16 +15,26 @@ import (
 )
 
 const (
-	voiceMcastAddr = "239.69.0.1"
-	voiceMcastPort = 4370
+	voiceMcastAddr  = "239.69.0.1"
+	voiceMcastPort  = 4370
 	voiceMcastIface = "br0"
 )
 
 var (
-	voiceClients    = make(map[*websocket.Conn]uint32)
-	voiceClientsMu  sync.RWMutex
-	voiceSSRCSeq    uint32 = 0xF0000000
+	voiceClients   = make(map[*websocket.Conn]uint32)
+	voiceClientsMu sync.RWMutex
+	voiceSSRCSeq   uint32
 )
+
+func init() {
+	var seed [2]byte
+	cryptoRand.Read(seed[:])
+	base := uint32(seed[0])<<8 | uint32(seed[1])
+	if iface, err := net.InterfaceByName(voiceMcastIface); err == nil && len(iface.HardwareAddr) >= 4 {
+		base ^= crc32.ChecksumIEEE(iface.HardwareAddr)
+	}
+	voiceSSRCSeq = base << 16
+}
 
 func handleVoiceWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)

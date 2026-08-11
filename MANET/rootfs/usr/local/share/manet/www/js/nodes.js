@@ -108,7 +108,7 @@ function nodesRender() {
     if (n.applets && n.applets.length) {
       n.applets.forEach(function(a) {
         var cls = a.status === 'running' ? 'badge-applet-on' : 'badge-applet-off';
-        svcs.push('<span class="badge ' + cls + '" data-applet-badge="' + escHtml(a.name) + '">' + escHtml(a.label || a.name) + '</span>');
+        svcs.push('<span class="badge ' + cls + '">' + escHtml(a.label || a.name) + '</span>');
       });
     }
     if (n.limp) svcs.push('<span class="badge badge-limp">LIMP</span>');
