@@ -118,12 +118,9 @@
 
 /* Applet badge */
 .applet-badge {
-  position: absolute;
-  top: -6px;
-  right: -6px;
   min-width: 16px;
   height: 16px;
-  padding: 0 4px;
+  padding: 0 5px;
   border-radius: 999px;
   background: var(--bad);
   color: #ffffff;
@@ -132,7 +129,7 @@
   line-height: 16px;
   text-align: center;
   pointer-events: none;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
+  flex-shrink: 0;
 }
 
 /* Responsive */

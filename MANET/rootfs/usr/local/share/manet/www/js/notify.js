@@ -136,11 +136,9 @@
         if (!badge) {
           badge = document.createElement('span');
           badge.className = 'applet-badge';
-          // Ensure parent is positioned for absolute badge
-          if (getComputedStyle(el).position === 'static') {
-            el.style.position = 'relative';
-          }
-          el.appendChild(badge);
+          var launch = el.querySelector('.dash-applet-launch');
+          if (launch) el.insertBefore(badge, launch);
+          else el.appendChild(badge);
         }
         badge.textContent = count > 99 ? '99+' : count;
       } else {

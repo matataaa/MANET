@@ -79,6 +79,15 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 
 .upload-bar{position:fixed;top:0;left:0;height:3px;background:var(--accent);transition:width .2s;z-index:100}
 
+.dialog-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;display:flex;align-items:center;justify-content:center}
+.dialog-box{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;max-width:320px;width:90%;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.dialog-msg{font-size:13px;margin-bottom:16px;color:var(--text)}
+.dialog-actions{display:flex;justify-content:flex-end;gap:8px}
+.dialog-btn{border:1px solid var(--border);border-radius:6px;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);background:none;color:var(--text)}
+.dialog-btn:hover{border-color:var(--accent)}
+.dialog-btn.danger{background:var(--bad);border-color:var(--bad);color:#fff}
+.dialog-btn.danger:hover{opacity:.85}
+
 .day-divider{font-size:10px;color:var(--muted);text-align:center;padding:10px 0 4px;font-weight:600;border-bottom:1px solid var(--border)}
 
 .clear-bar{padding:8px 16px;display:flex;justify-content:center;gap:8px;border-bottom:1px solid var(--border);background:var(--surface)}
@@ -433,12 +442,32 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
   }
 
   function doClear() {
-    if (!confirm('Delete all messages?')) return;
-    fetch(PROXY + '/clear', {method:'POST'}).then(function() {
-      allMessages = [];
-      renderInbox();
-      updateUnreadBadge();
-    }).catch(function() {});
+    showDialog('Delete all messages?', function() {
+      fetch(PROXY + '/clear', {method:'POST'}).then(function() {
+        allMessages = [];
+        renderInbox();
+        updateUnreadBadge();
+      }).catch(function() {});
+    });
+  }
+
+  function showDialog(msg, onConfirm) {
+    var overlay = document.createElement('div');
+    overlay.className = 'dialog-overlay';
+    overlay.innerHTML = '<div class="dialog-box"><div class="dialog-msg">' + esc(msg) + '</div>' +
+      '<div class="dialog-actions"><button class="dialog-btn" id="dlg-cancel">Cancel</button>' +
+      '<button class="dialog-btn danger" id="dlg-confirm">Delete</button></div></div>';
+    document.body.appendChild(overlay);
+    var cancelBtn = overlay.querySelector('#dlg-cancel');
+    var confirmBtn = overlay.querySelector('#dlg-confirm');
+    cancelBtn.onclick = function() { overlay.remove(); };
+    confirmBtn.onclick = function() { overlay.remove(); onConfirm(); };
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') { e.preventDefault(); overlay.remove(); }
+      if (e.key === 'Enter') { e.preventDefault(); overlay.remove(); onConfirm(); }
+    });
+    cancelBtn.focus();
   }
 
   function doReadAll() {

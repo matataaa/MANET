@@ -101,6 +101,7 @@ function renderDashApplets() {
         '</div>';
       }).join('');
     side.appendChild(section);
+    pollAppletBadges();
   }).catch(function() {});
 }
 

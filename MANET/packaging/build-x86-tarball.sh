@@ -7,73 +7,75 @@ set -euo pipefail
 
 OUT="${1:-x86-install.tar.gz}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOTFS="$REPO_ROOT/rootfs"
+SRC="$REPO_ROOT/src"
 STAGE="$(mktemp -d)"
 
-cleanup() {
-    rm -rf "$STAGE"
-}
+cleanup() { rm -rf "$STAGE"; }
 trap cleanup EXIT
 
 install_tree() {
-    local src="$1"
-    local dst="$2"
-    if [ -d "$src" ]; then
-        mkdir -p "$dst"
-        cp -a "$src"/. "$dst"/
-    fi
+    local src="$1" dst="$2"
+    [ -d "$src" ] || return 0
+    mkdir -p "$dst"
+    cp -a "$src"/. "$dst"/
 }
 
 install_file() {
-    local mode="$1"
-    local src="$2"
-    local dst="$3"
+    local mode="$1" src="$2" dst="$3"
     if [ -f "$src" ]; then
         mkdir -p "$(dirname "$dst")"
         install -m "$mode" "$src" "$dst"
+    else
+        echo "WARNING: missing $src" >&2
     fi
 }
 
-mkdir -p "$STAGE/usr/local/bin" "$STAGE/etc/systemd/system"
+# ---------------------------------------------------------------------------
+#  Rootfs overlay — scripts, services, configs, web UI
+# ---------------------------------------------------------------------------
+install_tree "$ROOTFS/usr" "$STAGE/usr"
+install_tree "$ROOTFS/etc" "$STAGE/etc"
 
-# --- Cross-compile Go services for amd64 ---
-echo "Building manet-ctrl for linux/amd64..."
-(cd "$REPO_ROOT/MANET/cmd/manet-ctrl" && \
-    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o manet-ctrl .)
-install_file 0755 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl" "$STAGE/usr/local/bin/manet-ctrl"
-install_file 0644 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl.service" "$STAGE/etc/systemd/system/manet-ctrl.service"
+chmod -R a+rX "$STAGE/usr/local/bin"
+find "$STAGE/usr/local/bin" -type f \
+    \( -name '*.sh' -o -name '*.py' -o -name 'mesh' \) \
+    -exec chmod 0755 {} +
 
-echo "Building mesh-registry for linux/amd64..."
-(cd "$REPO_ROOT/MANET/cmd/mesh-registry" && \
-    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o mesh-registry .)
-install_file 0755 "$REPO_ROOT/MANET/cmd/mesh-registry/mesh-registry" "$STAGE/usr/local/bin/mesh-registry"
+# ---------------------------------------------------------------------------
+#  Cross-compile Go services for amd64
+# ---------------------------------------------------------------------------
+GO_SERVICES=(
+    battery-reader
+    cot-emitter
+    gateway-manager
+    gps-reader
+    halow-mcs-summary
+    manet-ctrl
+    mesh-chat
+    mesh-manager
+    mesh-radio-state
+    mesh-registry
+    node-manager
+)
 
-echo "Building gateway-manager for linux/amd64..."
-(cd "$REPO_ROOT/MANET/cmd/gateway-manager" && \
-    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o gateway-manager .)
-install_file 0755 "$REPO_ROOT/MANET/cmd/gateway-manager/gateway-manager" "$STAGE/usr/local/bin/gateway-manager"
+for svc in "${GO_SERVICES[@]}"; do
+    echo "Building $svc for linux/amd64..."
+    (cd "$SRC/$svc" && \
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "$svc" .)
+    install -m 0755 "$SRC/$svc/$svc" "$STAGE/usr/local/bin/$svc"
+done
 
-if [ -f "$REPO_ROOT/MANET/mesh-voice/bin/mesh-voice-linux-amd64" ]; then
-    install_file 0755 "$REPO_ROOT/MANET/mesh-voice/bin/mesh-voice-linux-amd64" "$STAGE/usr/local/bin/mesh-voice"
+# mesh-voice — use pre-built binary if available
+if [ -f "$SRC/mesh-voice/bin/mesh-voice-linux-amd64" ]; then
+    install_file 0755 "$SRC/mesh-voice/bin/mesh-voice-linux-amd64" "$STAGE/usr/local/bin/mesh-voice"
 fi
 
-# --- Scripts — all subdirs flatten into /usr/local/bin ---
-for subdir in core elections radio network system; do
-    install_tree "$REPO_ROOT/MANET/scripts/$subdir" "$STAGE/usr/local/bin"
-done
-chmod -R a+rX "$STAGE/usr/local/bin"
-find "$STAGE/usr/local/bin" -type f \( -name '*.sh' -o -name '*.py' -o -name 'mesh' \) -exec chmod 0755 {} +
-
-# --- Web frontend ---
-install_tree "$REPO_ROOT/MANET/www" "$STAGE/usr/local/share/manet/www"
-
-# --- Systemd units ---
-install_tree "$REPO_ROOT/MANET/systemd" "$STAGE/etc/systemd/system"
-
-# --- System config (mesh.conf defaults, avahi, sudoers) ---
-install_tree "$REPO_ROOT/MANET/etc" "$STAGE/etc"
-
-# --- Networkd configs (bat0, br0 bridge) ---
+# ---------------------------------------------------------------------------
+#  Networkd configs (bat0, br0 bridge) — x86 nodes don't get these from
+#  firstrun.sh.template, so we bundle them here.
+# ---------------------------------------------------------------------------
 mkdir -p "$STAGE/etc/systemd/network"
 
 cat > "$STAGE/etc/systemd/network/10-bat0.network" <<'EOF'
@@ -128,16 +130,13 @@ LLMNR=no
 MulticastDNS=no
 EOF
 
-# --- Networkd-dispatcher hooks ---
-if [ -d "$REPO_ROOT/MANET/networkd-dispatcher" ]; then
-    mkdir -p \
-        "$STAGE/etc/networkd-dispatcher/carrier.d" \
-        "$STAGE/etc/networkd-dispatcher/routable.d" \
-        "$STAGE/etc/networkd-dispatcher/off.d" \
-        "$STAGE/etc/networkd-dispatcher/no-carrier.d" \
-        "$STAGE/etc/networkd-dispatcher/degraded.d"
+# ---------------------------------------------------------------------------
+#  networkd-dispatcher hooks
+# ---------------------------------------------------------------------------
+NDDIR="$STAGE/etc/networkd-dispatcher"
+mkdir -p "$NDDIR"/{carrier,routable,off,no-carrier,degraded}.d
 
-    cat > "$STAGE/etc/networkd-dispatcher/carrier.d/50-ethernet-detect" <<'EOF'
+cat > "$NDDIR/carrier.d/50-ethernet-detect" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 /usr/local/bin/manet-uplink-dispatch.sh carrier "${IFACE:-}"
@@ -146,42 +145,42 @@ if grep -qi '^auto_update=1' /etc/mesh.conf 2>/dev/null && ping -c 1 -W 2 -I "$I
 fi
 EOF
 
-    cat > "$STAGE/etc/networkd-dispatcher/routable.d/50-manet-uplink" <<'EOF'
+cat > "$NDDIR/routable.d/50-manet-uplink" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 /usr/local/bin/manet-uplink-dispatch.sh routable "${IFACE:-}"
 EOF
 
-    install_file 0755 "$REPO_ROOT/MANET/networkd-dispatcher/off" \
-        "$STAGE/etc/networkd-dispatcher/off.d/50-gateway-disable"
-    install_file 0755 "$REPO_ROOT/MANET/networkd-dispatcher/off" \
-        "$STAGE/etc/networkd-dispatcher/no-carrier.d/50-gateway-disable"
-    install_file 0755 "$REPO_ROOT/MANET/networkd-dispatcher/off" \
-        "$STAGE/etc/networkd-dispatcher/degraded.d/50-gateway-disable"
-    chmod 0755 \
-        "$STAGE/etc/networkd-dispatcher/carrier.d/50-ethernet-detect" \
-        "$STAGE/etc/networkd-dispatcher/routable.d/50-manet-uplink"
-fi
+install -m 0755 "$ROOTFS/etc/networkd-dispatcher/off" "$NDDIR/off.d/50-gateway-disable"
+install -m 0755 "$ROOTFS/etc/networkd-dispatcher/off" "$NDDIR/no-carrier.d/50-gateway-disable"
+install -m 0755 "$ROOTFS/etc/networkd-dispatcher/off" "$NDDIR/degraded.d/50-gateway-disable"
+chmod 0755 "$NDDIR/carrier.d/50-ethernet-detect" "$NDDIR/routable.d/50-manet-uplink"
 
-# --- Enable key services ---
+# Remove flat networkd-dispatcher source files
+rm -f "$NDDIR"/{carrier,degraded,no-carrier,off,routable,README.md} 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+#  Systemd enable symlinks
+# ---------------------------------------------------------------------------
 mkdir -p "$STAGE/etc/systemd/system/multi-user.target.wants"
 for unit in \
-    gateway-route-manager.service \
-    sae-watchdog.service \
+    ebtables-restore.service \
     gateway-manager.service \
     manet-ctrl.service \
-    mesh-registry.service
+    mesh-registry.service \
+    node-manager.service \
+    sae-watchdog.service
 do
     if [ -f "$STAGE/etc/systemd/system/$unit" ]; then
-        ln -s "../$unit" "$STAGE/etc/systemd/system/multi-user.target.wants/$unit"
+        ln -sf "../$unit" "$STAGE/etc/systemd/system/multi-user.target.wants/$unit"
     fi
 done
 
-if [ -f "$STAGE/etc/sudoers.d/perf" ]; then
-    chmod 0440 "$STAGE/etc/sudoers.d/perf"
-fi
+[ -f "$STAGE/etc/sudoers.d/perf" ] && chmod 0440 "$STAGE/etc/sudoers.d/perf"
 
-# --- Build tarball ---
+# ---------------------------------------------------------------------------
+#  Pack
+# ---------------------------------------------------------------------------
 mkdir -p "$(dirname "$OUT")"
 tar --owner=0 --group=0 --numeric-owner -czf "$OUT" -C "$STAGE" .
 echo "Built x86 tarball: $OUT ($(du -h "$OUT" | cut -f1))"
