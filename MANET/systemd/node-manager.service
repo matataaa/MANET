@@ -1,0 +1,14 @@
+[Unit]
+Description=Mesh Node Manager
+After=network-online.target alfred.service
+Wants=network-online.target alfred.service
+
+[Service]
+Type=simple
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/usr/local/bin/node-manager.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

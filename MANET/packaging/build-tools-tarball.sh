@@ -28,7 +28,10 @@ install_tree() {
 
 install_file() {
     local mode="$1" src="$2" dst="$3"
-    [ -f "$src" ] && install -D -m "$mode" "$src" "$dst"
+    if [ -f "$src" ]; then
+        mkdir -p "$(dirname "$dst")"
+        install -m "$mode" "$src" "$dst"
+    fi
 }
 
 mkdir -p "$STAGE/usr/local/bin" "$STAGE/etc"

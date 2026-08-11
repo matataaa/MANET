@@ -1,0 +1,13 @@
+[Unit]
+Description=Mesh Voice PTT over multicast
+After=network.target batman-enslave.service
+Wants=batman-enslave.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mesh-voice -iface br0 -ptt always
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

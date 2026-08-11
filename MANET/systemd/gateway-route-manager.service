@@ -1,0 +1,14 @@
+[Unit]
+Description=Mesh Gateway Route Manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/usr/local/bin/gateway-route-manager.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

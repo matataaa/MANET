@@ -144,7 +144,7 @@ func run(ctx context.Context, cfg Config) error {
 	ssrc := uint32(os.Getpid() & 0xFFFFFFFF)
 
 	// miniaudio context
-	malgoCtx, err := malgo.AllocatedContext(nil, malgo.ContextConfig{}, nil)
+	malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return fmt.Errorf("malgo context: %w", err)
 	}
@@ -349,7 +349,7 @@ func timerChan(ms int) <-chan struct{} {
 	go func() {
 		syscall.Select(0, nil, nil, nil, &syscall.Timeval{
 			Sec:  int64(ms / 1000),
-			Usec: int32((ms % 1000) * 1000),
+			Usec: int64((ms % 1000) * 1000),
 		})
 		close(ch)
 	}()

@@ -2,6 +2,7 @@
 let configInitialized = false;
 let configEditing = false;
 let configData = null;
+let configVoiceData = null;
 
 function configActivate() {
   const panel = document.getElementById('tab-config');
@@ -14,8 +15,9 @@ function configActivate() {
 
 async function configFetch() {
   try {
-    const r = await fetch('/api/admin/status');
-    configData = await r.json();
+    const [adminR, voiceR] = await Promise.all([fetch('/api/admin/status'), fetch('/api/voice')]);
+    configData = await adminR.json();
+    configVoiceData = await voiceR.json();
     configRender();
   } catch(e) {
     document.getElementById('tab-config').innerHTML = '<div class="loading-msg">Failed to load config</div>';
@@ -56,7 +58,15 @@ function configRenderView(panel, cfg) {
       { label: 'EUD Mode', key: 'eud' },
       { label: 'AP SSID', key: 'lan_ap_ssid' },
       { label: 'AP Key', key: 'lan_ap_key', masked: true },
+      { label: 'AP Channel', key: 'lan_ap_channel' },
+      { label: 'AP Bandwidth', key: 'lan_ap_bw' },
       { label: 'Max EUDs/Node', key: 'max_euds_per_node' },
+    ]},
+    { title: 'Voice', voice: true, fields: [
+      { label: 'PTT Mode', voiceKey: 'ptt_mode' },
+      { label: 'Multicast Address', voiceKey: 'mcast_addr', fallback: '239.69.0.1' },
+      { label: 'Port', voiceKey: 'port', fallback: '4370' },
+      { label: 'Interface', voiceKey: 'interface', fallback: 'br0' },
     ]},
   ];
 
@@ -65,11 +75,16 @@ function configRenderView(panel, cfg) {
   sections.forEach(sec => {
     html += '<div class="card cfg-section"><div class="cfg-section-title">' + sec.title + '</div>';
     sec.fields.forEach(f => {
-      let val = f.computed ? f.computed() : (cfg[f.key] || '--');
+      let val;
+      if (f.voiceKey) {
+        val = (configVoiceData && configVoiceData[f.voiceKey]) || f.fallback || '--';
+      } else {
+        val = f.computed ? f.computed() : (cfg[f.key] || '--');
+      }
       let cls = 'cfg-value';
       if (f.masked && val !== '--') { val = '••••••••'; cls += ' masked'; }
       if (f.yesno) val = val === 'y' ? 'Enabled' : 'Disabled';
-      html += '<div class="cfg-row"><div class="cfg-label">' + f.label + '</div><div class="' + cls + '">' + escHtml(val) + '</div></div>';
+      html += '<div class="cfg-row"><div class="cfg-label">' + f.label + '</div><div class="' + cls + '">' + escHtml(String(val)) + '</div></div>';
     });
     html += '</div>';
   });
@@ -90,6 +105,8 @@ function configRenderEdit(panel, cfg) {
     { label: 'EUD Mode', key: 'eud', type: 'select', options: ['wired', 'wireless', 'both', 'auto'] },
     { label: 'AP SSID', key: 'lan_ap_ssid', type: 'text' },
     { label: 'AP Key', key: 'lan_ap_key', type: 'password' },
+    { label: 'AP Channel', key: 'lan_ap_channel', type: 'text', hint: 'e.g. 36 for 5GHz, 6 for 2.4GHz' },
+    { label: 'AP Bandwidth', key: 'lan_ap_bw', type: 'select', options: ['20', '40', '80'] },
     { label: 'Max EUDs/Node', key: 'max_euds_per_node', type: 'text' },
     { label: 'Mesh SSID', key: 'mesh_ssid', type: 'text' },
     { label: 'Mesh Key', key: 'mesh_key', type: 'password' },
@@ -100,10 +117,22 @@ function configRenderEdit(panel, cfg) {
     { label: 'Mumble', key: 'mumble', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Admin Password', key: 'admin_password', type: 'password' },
+    { section: 'Voice' },
+    { label: 'PTT Mode', key: 'voice_ptt_mode', type: 'select', options: [
+      {v:'always',l:'Always On'},{v:'gpio',l:'GPIO Button'},{v:'openvlm',l:'OpenVLM HID'},{v:'vox',l:'VOX (auto)'}
+    ], voiceKey: 'ptt_mode', fallback: 'always' },
+    { label: 'Multicast Address', key: 'voice_mcast_addr', type: 'text', voiceKey: 'mcast_addr', fallback: '239.69.0.1' },
+    { label: 'Port', key: 'voice_port', type: 'text', voiceKey: 'port', fallback: '4370' },
+    { label: 'Interface', key: 'voice_iface', type: 'text', voiceKey: 'interface', fallback: 'br0' },
   ];
 
   let html = '<div class="card"><div class="cfg-section-title">Edit Configuration</div>';
   fields.forEach(f => {
+    if (f.section) {
+      html += '</div><div class="card"><div class="cfg-section-title">' + f.section + '</div>';
+      return;
+    }
+    const curVal = f.voiceKey ? ((configVoiceData && configVoiceData[f.voiceKey]) || f.fallback || '') : (cfg[f.key] || '');
     html += '<div class="cfg-row"><div class="cfg-label">' + f.label;
     if (f.hint) html += '<span class="hint">' + f.hint + '</span>';
     html += '</div>';
@@ -112,12 +141,12 @@ function configRenderEdit(panel, cfg) {
       f.options.forEach(opt => {
         const val = typeof opt === 'object' ? opt.v : opt;
         const label = typeof opt === 'object' ? opt.l : opt;
-        const sel = cfg[f.key] === val ? ' selected' : '';
+        const sel = curVal === val ? ' selected' : '';
         html += '<option value="' + val + '"' + sel + '>' + label + '</option>';
       });
       html += '</select>';
     } else {
-      html += '<input class="cfg-input" type="' + f.type + '" id="cfg-f-' + f.key + '" value="' + escHtml(cfg[f.key] || '') + '">';
+      html += '<input class="cfg-input" type="' + f.type + '" id="cfg-f-' + f.key + '" value="' + escHtml(curVal) + '">';
       if (f.preview) html += '<div class="cfg-hostname-preview" id="cfg-hostname-preview"></div>';
     }
     html += '</div>';
@@ -150,21 +179,37 @@ function configRenderEdit(panel, cfg) {
 }
 
 async function configSave() {
-  const fields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','max_euds_per_node','mesh_ssid','mesh_key',
+  const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','mesh_ssid','mesh_key',
     'ipv4_network','regulatory_domain','acs','mtx','mumble','auto_update','admin_password'];
   const config = {};
-  fields.forEach(f => {
+  meshFields.forEach(f => {
     const el = document.getElementById('cfg-f-' + f);
     if (el) config[f] = el.value;
   });
+
+  const voiceCfg = {
+    action: 'configure',
+    ptt_mode: (document.getElementById('cfg-f-voice_ptt_mode') || {}).value || 'always',
+    mcast_addr: (document.getElementById('cfg-f-voice_mcast_addr') || {}).value || '239.69.0.1',
+    port: (document.getElementById('cfg-f-voice_port') || {}).value || '4370',
+    interface: (document.getElementById('cfg-f-voice_iface') || {}).value || 'br0',
+  };
+
   try {
-    const r = await fetch('/api/admin/save', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({config})
-    });
-    const result = await r.json();
-    if (result.ok) { configEditing = false; configFetch(); }
-    else alert('Save failed: ' + (result.error || 'unknown'));
+    const [meshR, voiceR] = await Promise.all([
+      fetch('/api/admin/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({config}) }),
+      fetch('/api/voice', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(voiceCfg) })
+    ]);
+    const meshResult = await meshR.json();
+    const voiceResult = await voiceR.json();
+    if (meshResult.ok && voiceResult.ok) {
+      configEditing = false;
+      configFetch();
+    } else {
+      const errors = [];
+      if (!meshResult.ok) errors.push('Mesh: ' + (meshResult.error || 'unknown'));
+      if (!voiceResult.ok) errors.push('Voice: ' + (voiceResult.error || 'unknown'));
+      alert('Save failed: ' + errors.join(', '));
+    }
   } catch(e) { alert('Save failed: ' + e.message); }
 }

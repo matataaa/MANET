@@ -229,6 +229,7 @@ func main() {
 	// WebSocket
 	mux.HandleFunc("/ws/terminal", handleTerminal)
 	mux.HandleFunc("/ws/logs", handleLogs)
+	mux.HandleFunc("/ws/voice", handleVoiceWS)
 
 	// Status APIs
 	mux.HandleFunc("/api/data", apiData)

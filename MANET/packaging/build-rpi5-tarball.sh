@@ -34,7 +34,8 @@ install_file() {
     local src="$2"
     local dst="$3"
     if [ -f "$src" ]; then
-        install -D -m "$mode" "$src" "$dst"
+        mkdir -p "$(dirname "$dst")"
+        install -m "$mode" "$src" "$dst"
     fi
 }
 
@@ -47,9 +48,13 @@ done
 chmod -R a+rX "$STAGE/usr/local/bin"
 find "$STAGE/usr/local/bin" -type f \( -name '*.sh' -o -name '*.py' -o -name 'morse_cli' -o -name 'chronyc' -o -name 'mesh' \) -exec chmod 0755 {} +
 
-# Go binary + service
+# Cross-compile Go services for arm64
+echo "Building manet-ctrl for linux/arm64..."
+(cd "$REPO_ROOT/MANET/cmd/manet-ctrl" && \
+    GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o manet-ctrl .)
 install_file 0755 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl" "$STAGE/usr/local/bin/manet-ctrl"
 install_file 0644 "$REPO_ROOT/MANET/cmd/manet-ctrl/manet-ctrl.service" "$STAGE/etc/systemd/system/manet-ctrl.service"
+install_file 0755 "$REPO_ROOT/MANET/mesh-voice/bin/mesh-voice-linux-arm64" "$STAGE/usr/local/bin/mesh-voice"
 
 # Pre-built arm64 binaries
 install_file 0755 "$REPO_ROOT/MANET/binaries_arm64/alfred" "$STAGE/usr/sbin/alfred"
@@ -109,12 +114,13 @@ for unit in \
     ethernet-autodetect.service \
     manet-txpower.service \
     mesh-default-route-fix.service \
-    perf-dashboard.service \
     sae-watchdog.service \
-    ebtables-restore.service
+    ebtables-restore.service \
+    manet-ctrl.service \
+    node-manager.service
 do
     if [ -f "$STAGE/etc/systemd/system/$unit" ]; then
-        ln -s "../$unit" "$STAGE/etc/systemd/system/multi-user.target.wants/$unit"
+        ln -sf "../$unit" "$STAGE/etc/systemd/system/multi-user.target.wants/$unit"
     fi
 done
 

@@ -103,7 +103,78 @@ func apiPeer(w http.ResponseWriter, r *http.Request) {
 }
 
 func apiVoice(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		apiVoiceConfig(w, r)
+		return
+	}
 	writeJSON(w, 200, getVoiceStatus())
+}
+
+func apiVoiceConfig(w http.ResponseWriter, r *http.Request) {
+	body := readBody(r)
+	action := jsonStr(body, "action", "")
+
+	if action == "start" || action == "stop" || action == "restart" {
+		ok, errMsg := serviceAction("mesh-voice", action)
+		writeJSON(w, 200, map[string]interface{}{"ok": ok, "error": errMsg})
+		return
+	}
+
+	if action != "configure" {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "unknown action"})
+		return
+	}
+
+	ptt := jsonStr(body, "ptt_mode", "always")
+	iface := jsonStr(body, "interface", "br0")
+	addr := jsonStr(body, "mcast_addr", "239.69.0.1")
+	port := jsonStr(body, "port", "4370")
+
+	validPTT := map[string]bool{"always": true, "gpio": true, "openvlm": true, "vox": true}
+	if !validPTT[ptt] {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "invalid ptt_mode"})
+		return
+	}
+	if !regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}$`).MatchString(iface) {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "invalid interface"})
+		return
+	}
+	if net.ParseIP(addr) == nil || !strings.HasPrefix(addr, "239.") {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "invalid multicast address"})
+		return
+	}
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 1024 || portNum > 65535 {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "invalid port"})
+		return
+	}
+
+	execLine := fmt.Sprintf("/usr/local/bin/mesh-voice -iface %s -addr %s -port %s -ptt %s", iface, addr, port, ptt)
+
+	unit := fmt.Sprintf(`[Unit]
+Description=Mesh Voice PTT over multicast
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=%s
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+`, execLine)
+
+	if err := os.WriteFile("/etc/systemd/system/mesh-voice.service", []byte(unit), 0644); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+
+	exec.Command("systemctl", "daemon-reload").Run()
+	exec.Command("systemctl", "restart", "mesh-voice").Run()
+
+	writeJSON(w, 200, map[string]interface{}{"ok": true})
 }
 
 func apiAdminStatus(w http.ResponseWriter, r *http.Request) {

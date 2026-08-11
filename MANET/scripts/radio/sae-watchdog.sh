@@ -10,10 +10,14 @@
 # re-adds the interfaces.
 #
 
-STANDARD_MESH_INTERFACES=""
+ALL_MESH_INTERFACES=""
 if [ -s /var/lib/mesh_if ]; then
-    STANDARD_MESH_INTERFACES=$(cat /var/lib/mesh_if | tr '\n' ' ')
+    ALL_MESH_INTERFACES=$(cat /var/lib/mesh_if | tr '\n' ' ')
 fi
+if [ -s /var/lib/halow_if ]; then
+    ALL_MESH_INTERFACES="$ALL_MESH_INTERFACES $(cat /var/lib/halow_if | tr '\n' ' ')"
+fi
+ALL_MESH_INTERFACES=$(echo "$ALL_MESH_INTERFACES" | xargs)
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] - SAE-WATCHDOG: $*"
@@ -46,14 +50,16 @@ restart_mesh() {
     log "Triggered by: $reason"
     log "Restarting wpa_supplicant for all standard mesh interfaces..."
 
-    for iface in $STANDARD_MESH_INTERFACES; do
+    for iface in $ALL_MESH_INTERFACES; do
+        local unit
+        unit="$(service_unit_for_iface "$iface")"
         if ! radio_iface_enabled "$iface"; then
-            log "Skipping wpa_supplicant@${iface}.service (radio-state says down)"
+            log "Skipping $unit (radio-state says down)"
             continue
         fi
-        systemctl restart "wpa_supplicant@${iface}.service" 2>/dev/null && \
-            log "Restarted wpa_supplicant@${iface}.service" || \
-            log "WARNING: failed to restart wpa_supplicant@${iface}.service"
+        systemctl restart "$unit" 2>/dev/null && \
+            log "Restarted $unit" || \
+            log "WARNING: failed to restart $unit"
     done
 
     # Give wpa_supplicant time to re-establish mesh point mode before batman-enslave
@@ -69,18 +75,18 @@ restart_mesh() {
 # Only restart if bat0 is actually missing mesh interfaces — avoids
 # thrashing on a healthy node that just happens to see a blocked peer.
 bat0_has_all_interfaces() {
-    for iface in $STANDARD_MESH_INTERFACES; do
+    for iface in $ALL_MESH_INTERFACES; do
         radio_iface_enabled "$iface" || continue
         batctl if 2>/dev/null | grep -q "^${iface}:" || return 1
     done
     return 0
 }
 
-log "Starting SAE watchdog (monitoring: ${STANDARD_MESH_INTERFACES:-all wpa_supplicant@wlan*.service})"
+log "Starting SAE watchdog (monitoring: ${ALL_MESH_INTERFACES:-all wpa_supplicant@wlan*.service})"
 
 # Monitor journald for SAE block events across enabled mesh interfaces
 JOURNAL_ARGS=()
-for iface in $STANDARD_MESH_INTERFACES; do
+for iface in $ALL_MESH_INTERFACES; do
     radio_iface_enabled "$iface" || continue
     JOURNAL_ARGS+=("-fu" "$(service_unit_for_iface "$iface")")
 done

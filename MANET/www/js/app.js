@@ -8,6 +8,7 @@ let booted = false;
 
 // Tab routing
 function switchTab(tab) {
+  if (activeTab === 'voice' && tab !== 'voice' && typeof voiceDeactivate === 'function') voiceDeactivate();
   activeTab = tab;
   document.querySelectorAll('#tab-nav .tab').forEach(el => {
     el.classList.toggle('active', el.dataset.tab === tab);
