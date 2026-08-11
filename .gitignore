@@ -1,3 +1,4 @@
 *.img
 *.deb
+.DS_Store
 .cursor/mesh-nodes.env
