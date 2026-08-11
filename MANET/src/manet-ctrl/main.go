@@ -375,11 +375,13 @@ func main() {
 	// WebSocket
 	mux.HandleFunc("/ws/terminal", handleTerminal)
 	mux.HandleFunc("/ws/logs", handleLogs)
+	mux.HandleFunc("/ws/voice", handleVoiceWS)
 
 	// Status APIs
 	mux.HandleFunc("/api/data", apiData)
 	mux.HandleFunc("/api/local", apiLocal)
 	mux.HandleFunc("/api/peer/", apiPeer)
+	mux.HandleFunc("/api/voice", apiVoice)
 	mux.HandleFunc("/api/admin/status", apiAdminStatus)
 	mux.HandleFunc("/api/daemons", apiDaemons)
 	mux.HandleFunc("/api/atak-package", apiATAKPackage)
@@ -393,6 +395,7 @@ func main() {
 	mux.HandleFunc("/api/services/", apiServiceAction)
 	mux.HandleFunc("/api/mesh", apiMesh)
 	mux.HandleFunc("/api/qos", apiQoS)
+	mux.HandleFunc("/api/registry", apiRegistry)
 
 	// Control APIs
 	mux.HandleFunc("/api/control/interface", apiControlInterface)

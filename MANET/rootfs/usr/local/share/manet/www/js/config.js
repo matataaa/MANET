@@ -2,6 +2,7 @@
 let configInitialized = false;
 let configEditing = false;
 let configData = null;
+let configVoiceData = null;
 let configTarget = null;
 
 function configBaseUrl() {
@@ -20,6 +21,7 @@ function configActivate() {
       configTarget = this.value || null;
       configEditing = false;
       configData = null;
+      configVoiceData = null;
       configFetch();
     });
     configInitialized = true;
@@ -55,6 +57,10 @@ async function configFetch() {
     var base = configBaseUrl();
     const adminR = await fetch(base + '/api/admin/status');
     configData = await adminR.json();
+    try {
+      const voiceR = await fetch(base + '/api/voice');
+      configVoiceData = await voiceR.json();
+    } catch(e) { configVoiceData = null; }
     configRender();
   } catch(e) {
     document.getElementById('cfg-content').innerHTML =
@@ -114,6 +120,12 @@ function configRenderView(panel, cfg) {
     { title: 'Access', fields: [
       { label: 'Admin Key', key: 'admin_password', masked: true },
     ]},
+    { title: 'Voice', voice: true, fields: [
+      { label: 'PTT Mode', voiceKey: 'ptt_mode' },
+      { label: 'Multicast Address', voiceKey: 'mcast_addr', fallback: '239.69.0.1' },
+      { label: 'Port', voiceKey: 'port', fallback: '4370' },
+      { label: 'Interface', voiceKey: 'interface', fallback: 'br0' },
+    ]},
   ];
 
   let html = '<div>';
@@ -122,7 +134,11 @@ function configRenderView(panel, cfg) {
     html += '<div class="card cfg-section"><div class="cfg-section-title">' + sec.title + '</div>';
     sec.fields.forEach(f => {
       let val;
-      val = f.computed ? f.computed() : (cfg[f.key] || '--');
+      if (f.voiceKey) {
+        val = (configVoiceData && configVoiceData[f.voiceKey]) || f.fallback || '--';
+      } else {
+        val = f.computed ? f.computed() : (cfg[f.key] || '--');
+      }
       let cls = 'cfg-value';
       if (f.masked && val !== '--') { val = '••••••••'; cls += ' masked'; }
       if (f.fmt) val = f.fmt(val);
@@ -176,6 +192,13 @@ function configRenderEdit(panel, cfg) {
       {v:'',l:'Auto (batman default)'},{v:'2M/2M',l:'2M/2M'},{v:'5M/5M',l:'5M/5M'},{v:'10M/10M',l:'10M/10M'},
       {v:'20M/20M',l:'20M/20M'},{v:'50M/50M',l:'50M/50M'},{v:'100M/100M',l:'100M/100M'}
     ] },
+    { section: 'Voice' },
+    { label: 'PTT Mode', key: 'voice_ptt_mode', type: 'select', options: [
+      {v:'always',l:'Always On'},{v:'gpio',l:'GPIO Button'},{v:'openvlm',l:'OpenVLM HID'},{v:'vox',l:'VOX (auto)'}
+    ], voiceKey: 'ptt_mode', fallback: 'always' },
+    { label: 'Multicast Address', key: 'voice_mcast_addr', type: 'text', voiceKey: 'mcast_addr', fallback: '239.69.0.1' },
+    { label: 'Port', key: 'voice_port', type: 'text', voiceKey: 'port', fallback: '4370' },
+    { label: 'Interface', key: 'voice_iface', type: 'text', voiceKey: 'interface', fallback: 'br0' },
   ];
 
   let html = '<div class="card"><div class="cfg-section-title">Edit Configuration' + (configTarget ? ' — ' + escHtml(configTarget) : '') + '</div>';
@@ -184,7 +207,7 @@ function configRenderEdit(panel, cfg) {
       html += '</div><div class="card"><div class="cfg-section-title">' + f.section + '</div>';
       return;
     }
-    const curVal = cfg[f.key] || '';
+    const curVal = f.voiceKey ? ((configVoiceData && configVoiceData[f.voiceKey]) || f.fallback || '') : (cfg[f.key] || '');
     html += '<div class="cfg-row"><div class="cfg-label">' + f.label;
     if (f.hint) html += '<span class="hint">' + f.hint + '</span>';
     html += '</div>';
@@ -246,15 +269,30 @@ async function configSave() {
     if (el) config[f] = el.value;
   });
 
+  const voiceCfg = {
+    action: 'configure',
+    ptt_mode: (document.getElementById('cfg-f-voice_ptt_mode') || {}).value || 'always',
+    mcast_addr: (document.getElementById('cfg-f-voice_mcast_addr') || {}).value || '239.69.0.1',
+    port: (document.getElementById('cfg-f-voice_port') || {}).value || '4370',
+    interface: (document.getElementById('cfg-f-voice_iface') || {}).value || 'br0',
+  };
+
   var base = configBaseUrl();
   try {
-    const meshR = await fetch(base + '/api/admin/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({config}) });
+    const [meshR, voiceR] = await Promise.all([
+      fetch(base + '/api/admin/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({config}) }),
+      fetch(base + '/api/voice', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(voiceCfg) })
+    ]);
     const meshResult = await meshR.json();
-    if (meshResult.ok) {
+    const voiceResult = await voiceR.json();
+    if (meshResult.ok && voiceResult.ok) {
       configEditing = false;
       configFetch();
     } else {
-      alert('Save failed: ' + (meshResult.error || 'unknown'));
+      const errors = [];
+      if (!meshResult.ok) errors.push('Mesh: ' + (meshResult.error || 'unknown'));
+      if (!voiceResult.ok) errors.push('Voice: ' + (voiceResult.error || 'unknown'));
+      alert('Save failed: ' + errors.join(', '));
     }
   } catch(e) { alert('Save failed: ' + e.message); }
 }

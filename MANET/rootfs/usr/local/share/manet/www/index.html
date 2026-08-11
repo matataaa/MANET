@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/css/dashboard.css">
 <link rel="stylesheet" href="/css/nodes.css">
 <link rel="stylesheet" href="/css/config.css">
+<link rel="stylesheet" href="/css/voice.css">
 <link rel="stylesheet" href="/css/perf.css">
 <link rel="stylesheet" href="/css/services.css">
 <link rel="stylesheet" href="/css/mesh.css">
@@ -34,6 +35,7 @@
       <a href="#config" class="tab" data-tab="config">Config</a>
       <a href="#hardware" class="tab" data-tab="hardware">Hardware</a>
       <a href="#mesh" class="tab" data-tab="mesh">Mesh</a>
+      <a href="#voice" class="tab" data-tab="voice">Voice</a>
       <a href="#services" class="tab" data-tab="services">Services</a>
       <div class="nav-more">
         <button class="tab nav-more-btn" id="nav-more-btn">More <span class="nav-more-arrow">&#9662;</span></button>
@@ -42,6 +44,7 @@
           <a href="#terminal" class="tab" data-tab="terminal">Terminal</a>
           <a href="#applets" class="tab" data-tab="applets">Applets</a>
           <a href="#docs" class="tab" data-tab="docs">Docs</a>
+          <a href="#registry" class="tab" data-tab="registry">Registry</a>
         </div>
       </div>
     </nav>
@@ -67,11 +70,13 @@
     <section id="tab-nodes" class="tab-panel"></section>
     <section id="tab-config" class="tab-panel"></section>
     <section id="tab-hardware" class="tab-panel"></section>
+    <section id="tab-voice" class="tab-panel"></section>
     <section id="tab-perf" class="tab-panel"></section>
     <section id="tab-services" class="tab-panel"></section>
     <section id="tab-terminal" class="tab-panel"></section>
     <section id="tab-applets" class="tab-panel"></section>
     <section id="tab-docs" class="tab-panel"></section>
+    <section id="tab-registry" class="tab-panel"></section>
   </main>
   <div id="toast-container" class="toast-container"></div>
 </div>
@@ -83,12 +88,14 @@
 <script src="/js/dashboard.js"></script>
 <script src="/js/nodes.js"></script>
 <script src="/js/config.js"></script>
+<script src="/js/voice.js"></script>
 <script src="/js/perf.js"></script>
 <script src="/js/hardware.js"></script>
 <script src="/js/services.js"></script>
 <script src="/js/mesh.js"></script>
 <script src="/js/applets.js"></script>
 <script src="/js/docs.js"></script>
+<script src="/js/registry.js"></script>
 <script src="/vendor/xterm.min.js"></script>
 <script src="/vendor/xterm-addon-fit.min.js"></script>
 <script src="/js/terminal.js"></script>

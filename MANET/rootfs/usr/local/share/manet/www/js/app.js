@@ -9,8 +9,9 @@ let _lastBadgeCounts = {};
 
 // Tab routing
 function switchTab(tab) {
+  if (activeTab === 'voice' && tab !== 'voice' && typeof voiceDeactivate === 'function') voiceDeactivate();
   activeTab = tab;
-  var moreTabs = ['perf', 'terminal', 'applets', 'docs'];
+  var moreTabs = ['perf', 'terminal', 'applets', 'docs', 'registry'];
   document.querySelectorAll('#tab-nav .tab[data-tab]').forEach(el => {
     el.classList.toggle('active', el.dataset.tab === tab);
   });
@@ -28,11 +29,13 @@ function onTabActivated(tab) {
   else if (tab === 'nodes') nodesActivate();
   else if (tab === 'config') configActivate();
   else if (tab === 'hardware') hardwareActivate();
+  else if (tab === 'voice') voiceActivate();
   else if (tab === 'perf') perfActivate();
   else if (tab === 'services') servicesActivate();
   else if (tab === 'terminal') terminalActivate();
   else if (tab === 'applets') appletsActivate();
   else if (tab === 'docs') docsActivate();
+  else if (tab === 'registry') registryActivate();
 }
 
 // Hash routing
@@ -42,7 +45,7 @@ function routeFromHash() {
   const parts = raw.split('/');
   let tab = parts[0];
   const sub = parts.slice(1).join('/');
-  const valid = ['dashboard', 'mesh', 'nodes', 'config', 'hardware', 'perf', 'services', 'terminal', 'applets', 'docs'];
+  const valid = ['dashboard', 'mesh', 'nodes', 'config', 'hardware', 'voice', 'perf', 'services', 'terminal', 'applets', 'docs', 'registry'];
   switchTab(valid.includes(tab) ? tab : 'dashboard');
   if (tab === 'applets' && sub && !document.querySelector('.applet-iframe-overlay')) {
     var subParts = sub.split('/');
