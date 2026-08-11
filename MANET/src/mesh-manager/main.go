@@ -838,9 +838,9 @@ func setupVoiceQoS() {
 	}
 
 	for _, iface := range ifaces {
-		exec.Command("tc", "qdisc", "del", "dev", iface, "root").Run()
+		exec.Command("/usr/sbin/tc", "qdisc", "del", "dev", iface, "root").Run()
 
-		if out, err := run(5*time.Second, "tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "prio",
+		if out, err := run(5*time.Second, "/usr/sbin/tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "prio",
 			"bands", "3", "priomap",
 			"1", "2", "2", "2", "1", "2", "0", "0",
 			"1", "1", "1", "1", "1", "1", "1", "1"); err != nil {
@@ -849,7 +849,7 @@ func setupVoiceQoS() {
 		}
 
 		// DSCP EF (0xb8) → band 0 (highest priority)
-		if out, err := run(5*time.Second, "tc", "filter", "add", "dev", iface, "parent", "1:0",
+		if out, err := run(5*time.Second, "/usr/sbin/tc", "filter", "add", "dev", iface, "parent", "1:0",
 			"protocol", "ip", "prio", "1", "u32",
 			"match", "ip", "tos", "0xb8", "0xfc",
 			"flowid", "1:1"); err != nil {
@@ -857,7 +857,7 @@ func setupVoiceQoS() {
 		}
 
 		// Voice multicast port 4370 → band 0 (catch unmarked voice too)
-		if out, err := run(5*time.Second, "tc", "filter", "add", "dev", iface, "parent", "1:0",
+		if out, err := run(5*time.Second, "/usr/sbin/tc", "filter", "add", "dev", iface, "parent", "1:0",
 			"protocol", "ip", "prio", "2", "u32",
 			"match", "ip", "dport", "4370", "0xffff",
 			"flowid", "1:1"); err != nil {

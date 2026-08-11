@@ -104,6 +104,13 @@
   font-variant-numeric: tabular-nums; color: var(--text);
 }
 
+.atak-setup-btn {
+  display: inline-block; margin-left: 8px; padding: 2px 8px;
+  font-size: 10px; font-weight: 700; text-decoration: none;
+  color: var(--bg); background: var(--accent); border-radius: 4px;
+}
+.atak-setup-btn:hover { opacity: 0.85; }
+
 /* Dashboard applets */
 .dash-applets-section { margin-top: 12px; }
 .dash-applet-row {

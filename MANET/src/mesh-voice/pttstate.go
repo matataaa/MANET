@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"sync"
+	"time"
 )
 
 const pttStateFile = "/run/mesh-voice-ptt.json"
@@ -63,4 +64,8 @@ func (s *PTTState) write() {
 
 func (s *PTTState) cleanup() {
 	os.Remove(pttStateFile)
+}
+
+func timerChan(ms int) <-chan time.Time {
+	return time.After(time.Duration(ms) * time.Millisecond)
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1194,4 +1196,52 @@ func applyWPAConfig(conf map[string]string) {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func apiATAKPackage(w http.ResponseWriter, r *http.Request) {
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "MANET"
+	}
+
+	uid := "manet-mesh-" + hostname
+
+	pref := `<?xml version='1.0' standalone='yes'?>
+<preferences>
+    <preference version="1" name="cot_streams">
+        <entry key="count" class="class java.lang.Integer">1</entry>
+        <entry key="description0" class="class java.lang.String">MANET Mesh</entry>
+        <entry key="enabled0" class="class java.lang.Boolean">true</entry>
+        <entry key="connectString0" class="class java.lang.String">239.2.3.1:6969:udp</entry>
+    </preference>
+</preferences>`
+
+	manifest := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<MissionPackageManifest version="2">
+    <Configuration>
+        <Parameter name="uid" value="%s"/>
+        <Parameter name="name" value="MANET Mesh CoT"/>
+    </Configuration>
+    <Contents>
+        <Content ignore="false" zipEntry="config/manet-mesh.pref">
+            <Parameter name="name" value="MANET Mesh Network Input"/>
+        </Content>
+    </Contents>
+</MissionPackageManifest>`, uid)
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+
+	mf, _ := zw.Create("MANIFEST/manifest.xml")
+	mf.Write([]byte(manifest))
+
+	pf, _ := zw.Create("config/manet-mesh.pref")
+	pf.Write([]byte(pref))
+
+	zw.Close()
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="MANET-Mesh-CoT.zip"`)
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	w.Write(buf.Bytes())
 }

@@ -6,21 +6,16 @@ The project transforms hardware like a Rock3a or a Raspberry Pi CM4 (recommended
 
 ## Key Features
 
-* **Advanced Mesh Networking**:
-    * Utilizes `batman-adv` (BATMAN V algorithm) for Layer 2 routing.
-    * Supports standard 802.11ax/ac/n (2.4GHz/5GHz) and long-range 802.11ah (Wi-Fi HaLow).
-    * **Auto-Channel Selection (ACS)**: Decentralized scanning and election to avoid interference.
-    * **Limp Mode**: Detects jamming/interference and automatically downgrades bitrates to maintain connectivity.
-* **Zero-Conf Architecture**:
-    * **Distributed IPv4 Management**: Nodes automatically claim non-conflicting IP chunks for connected clients (EUDs).
-    * **IPv6 Support**: SLAAC for mesh infrastructure and auto-configured gateways.
-    * **EUD Support**: Connect End User Devices (phones/laptops) via Ethernet or a local WiFi Access Point.
-* **Resilience & Healing**:
-    * **Tourguide System**: Detects network partitions and "guides" isolated clusters back to the main mesh.
-    * **Quorum Checking**: Monitors network health and resets isolated nodes to a "Lobby" state to re-establish connections.
-* **Decentralized Services**:
-    * **Service Elections**: Nodes elect hosts for services like **MediaMTX** (video streaming) based on mesh centrality (TQ).
-    * **Distributed NTP**: Time synchronization across the mesh without internet access.
+* **Mesh Networking**: batman-adv (BATMAN_V) L2 routing over 802.11ah HaLow (sub-GHz, long range) and standard 802.11ax/ac/n radios. Self-forming, self-healing mesh with SAE (WPA3) authentication.
+* **Zero-Configuration**: Distributed IPv4 allocation, automatic gateway detection with NAT failover, `.mesh` DNS for all devices, mesh-wide hostname resolution.
+* **Web Interface**: Single-page dashboard with topology visualization, node management, live terminal, performance testing, service controls, and built-in documentation. HTTPS with auto-generated TLS.
+* **Push-to-Talk Voice**: Opus codec over multicast RTP with hardware PTT (OpenVLM USB, GPIO), web PTT, half-duplex detection, jitter buffer, and QoS (DSCP EF + WMM AC_VO + tc prio qdisc).
+* **Applet System**: Installable mesh applications with DNS integration — applets declare `.mesh` hostnames that auto-redirect to their frontend.
+* **EUD Support**: Connect phones/laptops via 5 GHz WiFi AP or Ethernet. DHCP, DNS, and applet hostnames all work transparently for connected devices.
+* **Situational Awareness**: GPS integration with CoT/ATAK blue-force tracking, mesh-wide position sharing.
+* **CLI Tool**: `mesh` command for status, node listing, config, radio info, services, and performance testing.
+
+See [docs/features.md](docs/features.md) for the complete feature list.
 
 ## Repository Structure
 
@@ -77,6 +72,7 @@ The nodes support connecting external devices (End User Devices) in three ways:
 This project is a fork of [very-srs/MANET](https://github.com/very-srs/MANET) with additional contributions from [quietprotocol/MANET](https://github.com/quietprotocol/MANET).
 
 ## Documentation
+* [Feature List](docs/features.md)
+* [Node Architecture](docs/node-architecture.md)
 * [Provisioning Guide](MANET/provisioning/README.md)
-* [Node Tools Documentation](MANET/node_tools/README.md)
 * [Binary Details](MANET/binaries_arm64/README.md)

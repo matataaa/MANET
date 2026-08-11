@@ -24,7 +24,7 @@ const (
 	defaultMulticastAddr = "239.255.50.50:9800"
 	maxMessages          = 1000
 	maxMsgBytes          = 65536
-	maxFileSize          = 10 << 20
+	maxFileSize          = 100 << 20
 	presenceInterval     = 15 * time.Second
 	peerTimeout          = 90 * time.Second
 	deliveryTimeout      = 5 * time.Second
@@ -44,9 +44,10 @@ type Message struct {
 }
 
 type FileMeta struct {
-	Name string `json:"name"`
-	Size int64  `json:"size"`
-	ID   string `json:"id"`
+	Name  string `json:"name"`
+	Size  int64  `json:"size"`
+	ID    string `json:"id"`
+	Local bool   `json:"local"`
 }
 
 type Peer struct {
@@ -74,7 +75,46 @@ var (
 	seenIDs    = map[string]bool{}
 	peers      = map[string]*Peer{}
 	clients    = map[*websocket.Conn]bool{}
+
+	fetchMu       sync.Mutex
+	fetchProgress = map[string]*FileProgress{}
 )
+
+type FileProgress struct {
+	FileID   string `json:"file_id"`
+	Name     string `json:"name"`
+	Total    int64  `json:"total"`
+	Received int64  `json:"received"`
+	Done     bool   `json:"done"`
+	Error    string `json:"error,omitempty"`
+}
+
+type progressWriter struct {
+	fileID string
+	name   string
+	total  int64
+	n      int64
+	last   int64
+	dst    *os.File
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	n, err := pw.dst.Write(p)
+	pw.n += int64(n)
+	if pw.n-pw.last > pw.total/20+1024 || err != nil {
+		pw.last = pw.n
+		fetchMu.Lock()
+		if fp, ok := fetchProgress[pw.fileID]; ok {
+			fp.Received = pw.n
+		}
+		fetchMu.Unlock()
+		wsEvent("file_progress", map[string]interface{}{
+			"file_id": pw.fileID, "name": pw.name,
+			"total": pw.total, "received": pw.n,
+		})
+	}
+	return n, err
+}
 
 func genID() string {
 	b := make([]byte, 8)
@@ -426,15 +466,35 @@ func autoFetchFile(msg Message) {
 	if _, err := os.Stat(localPath); err == nil {
 		return
 	}
+	fp := &FileProgress{FileID: msg.File.ID, Name: msg.File.Name, Total: msg.File.Size}
+	fetchMu.Lock()
+	fetchProgress[msg.File.ID] = fp
+	fetchMu.Unlock()
+	wsEvent("file_progress", map[string]interface{}{
+		"file_id": msg.File.ID, "name": msg.File.Name,
+		"total": msg.File.Size, "received": 0,
+	})
+
+	ok := false
 	sources := fileSources(msg)
 	for _, ip := range sources {
-		if fetchFileFrom(ip, msg.File.ID, localPath) {
+		if fetchFileFrom(ip, msg.File.ID, msg.File.Name, localPath) {
 			log.Printf("fetched file %s from %s", msg.File.ID, ip)
-			return
+			ok = true
+			break
 		}
 	}
-	log.Printf("failed to fetch file %s from any source", msg.File.ID)
-	wsEvent("file_error", map[string]string{"id": msg.ID, "file_id": msg.File.ID, "name": msg.File.Name})
+
+	fetchMu.Lock()
+	delete(fetchProgress, msg.File.ID)
+	fetchMu.Unlock()
+
+	if ok {
+		wsEvent("file_ready", map[string]string{"file_id": msg.File.ID, "name": msg.File.Name})
+	} else {
+		log.Printf("failed to fetch file %s from any source", msg.File.ID)
+		wsEvent("file_error", map[string]string{"id": msg.ID, "file_id": msg.File.ID, "name": msg.File.Name})
+	}
 }
 
 func fileSources(msg Message) []string {
@@ -463,8 +523,9 @@ func hasFileCandidate(p *Peer, msg Message) bool {
 	return contains(msg.To, p.Hostname)
 }
 
-func fetchFileFrom(peerIP, fileID, localPath string) bool {
-	client := &http.Client{Timeout: 30 * time.Second}
+func fetchFileFrom(peerIP, fileID, fileName, localPath string) bool {
+	transport := &http.Transport{ResponseHeaderTimeout: 30 * time.Second}
+	client := &http.Client{Transport: transport}
 	resp, err := client.Get(fmt.Sprintf("http://%s:%d/files/%s", peerIP, cfg.Port, fileID))
 	if err != nil || resp.StatusCode != 200 {
 		if resp != nil {
@@ -473,12 +534,17 @@ func fetchFileFrom(peerIP, fileID, localPath string) bool {
 		return false
 	}
 	defer resp.Body.Close()
+	total := resp.ContentLength
+	if total <= 0 {
+		total = maxFileSize
+	}
 	os.MkdirAll(filesDir(), 0755)
 	f, err := os.Create(localPath)
 	if err != nil {
 		return false
 	}
-	_, err = io.Copy(f, io.LimitReader(resp.Body, maxFileSize))
+	pw := &progressWriter{fileID: fileID, name: fileName, total: total, dst: f}
+	_, err = io.Copy(pw, io.LimitReader(resp.Body, maxFileSize))
 	f.Close()
 	return err == nil
 }
@@ -605,6 +671,10 @@ func handleGetMessages(w http.ResponseWriter, r *http.Request) {
 		if readSet[m.ID] {
 			m.Read = true
 		}
+		if m.File != nil && m.File.ID != "" {
+			_, err := os.Stat(filepath.Join(filesDir(), m.File.ID))
+			m.File.Local = err == nil
+		}
 		if len(m.To) == 0 || contains(m.To, hostname) || m.From == hostname {
 			out = append(out, m)
 		}
@@ -729,7 +799,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 	if hdr.Size > maxFileSize {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "max 10MB"})
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "max 100MB"})
 		return
 	}
 
@@ -780,42 +850,21 @@ func handleFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", 404)
 		return
 	}
+	fetchMu.Lock()
+	_, fetching := fetchProgress[name]
+	fetchMu.Unlock()
+	if fetching {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(409)
+		json.NewEncoder(w).Encode(map[string]string{"error": "file is still downloading to this node"})
+		return
+	}
 	localPath := filepath.Join(filesDir(), name)
 	if _, err := os.Stat(localPath); err == nil {
 		http.ServeFile(w, r, localPath)
 		return
 	}
-	mu.Lock()
-	var senderIP string
-	for _, m := range messages {
-		if m.File != nil && m.File.ID == name && m.FromIP != "" {
-			senderIP = m.FromIP
-			break
-		}
-	}
-	mu.Unlock()
-	if senderIP == "" {
-		http.Error(w, "not found", 404)
-		return
-	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://%s:%d/files/%s", senderIP, cfg.Port, name))
-	if err != nil {
-		http.Error(w, "file unavailable", 502)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		http.Error(w, "file unavailable", 502)
-		return
-	}
-	for k, vals := range resp.Header {
-		for _, v := range vals {
-			w.Header().Add(k, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	http.Error(w, "not found", 404)
 }
 
 func handleUnread(w http.ResponseWriter, r *http.Request) {

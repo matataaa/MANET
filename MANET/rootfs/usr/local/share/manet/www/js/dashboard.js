@@ -72,7 +72,9 @@ function renderDashDaemons() {
       var cDot = c.last_error && c.last_error !== 'no GPS fix' ? 'off' : 'on';
       items.push('<div class="dash-daemon-row"><span class="voice-dot ' + cDot + '"></span>' +
         '<span class="dash-daemon-name">CoT</span>' +
-        '<span class="dash-daemon-val">' + cotVal + '</span></div>');
+        '<span class="dash-daemon-val">' + cotVal +
+        ' <a href="/api/atak-package" class="atak-setup-btn" title="Download ATAK data package">ATAK Setup</a>' +
+        '</span></div>');
     }
 
     if (!items.length) { el.style.display = 'none'; return; }

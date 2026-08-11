@@ -65,6 +65,11 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .msg-file .f-size{color:var(--muted);font-size:10px;flex-shrink:0}
 .msg-file .f-dl{background:var(--accent);color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:600;cursor:pointer;text-decoration:none;flex-shrink:0}
 .msg-file .f-dl:hover{opacity:.85}
+.msg-file .f-dl.disabled{opacity:.4;pointer-events:none}
+.msg-file .f-unavail{background:var(--border);color:var(--muted);cursor:default}
+.f-progress{width:100%;height:4px;background:rgba(255,255,255,.08);border-radius:2px;margin-top:4px;overflow:hidden}
+.f-progress-bar{height:100%;background:var(--accent);border-radius:2px;transition:width .3s}
+.f-status{font-size:10px;color:var(--muted);margin-top:2px}
 
 .msg-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:4px;padding-right:2px}
 .msg-act{background:none;border:1px solid var(--border);color:var(--muted);font-size:10px;cursor:pointer;padding:3px 8px;border-radius:4px;font-family:var(--font)}
@@ -137,6 +142,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
   var myHostname = '';
   var peerList = [];
   var allMessages = [];
+  var fetchingFiles = {};
 
   var PROXY = '/api/applets/mesh-chat/proxy';
 
@@ -221,10 +227,24 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
       }
 
       if (m.file) {
-        html += '<div class="msg-file">';
+        var fp = fetchingFiles[m.file.id];
+        var isFetching = !!fp;
+        var isLocal = m.file.local && !isFetching;
+        html += '<div class="msg-file" data-file-id="' + esc(m.file.id) + '">';
         html += '<span class="f-name">' + esc(m.file.name) + '</span>';
         html += '<span class="f-size">' + fmtSize(m.file.size) + '</span>';
-        html += '<a class="f-dl" href="' + fileUrl(m) + '" target="_blank" download>Download</a>';
+        if (isFetching) {
+          html += '<span class="f-dl disabled">Syncing...</span>';
+        } else if (isLocal) {
+          html += '<a class="f-dl" href="' + fileUrl(m) + '" download="' + esc(m.file.name) + '">Download</a>';
+        } else {
+          html += '<span class="f-dl f-unavail">Not synced</span>';
+        }
+        if (isFetching) {
+          var pct = fp.total > 0 ? Math.round(fp.received / fp.total * 100) : 0;
+          html += '<div class="f-progress"><div class="f-progress-bar" style="width:' + pct + '%"></div></div>';
+          html += '<div class="f-status">' + fmtSize(fp.received) + ' / ' + fmtSize(fp.total) + ' (' + pct + '%)</div>';
+        }
         html += '</div>';
       }
 
@@ -495,10 +515,65 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
           updateUnreadBadge();
           return;
         }
+        if (evt.event === 'file_progress') {
+          fetchingFiles[evt.data.file_id] = {received: evt.data.received, total: evt.data.total};
+          var el = document.querySelector('[data-file-id="' + evt.data.file_id + '"]');
+          if (el) {
+            var pct = evt.data.total > 0 ? Math.round(evt.data.received / evt.data.total * 100) : 0;
+            var bar = el.querySelector('.f-progress-bar');
+            var stat = el.querySelector('.f-status');
+            var dl = el.querySelector('.f-dl');
+            if (bar) { bar.style.width = pct + '%'; }
+            else {
+              var pb = document.createElement('div'); pb.className = 'f-progress';
+              pb.innerHTML = '<div class="f-progress-bar" style="width:' + pct + '%"></div>';
+              el.appendChild(pb);
+              var st = document.createElement('div'); st.className = 'f-status'; el.appendChild(st);
+            }
+            if (stat) stat.textContent = fmtSize(evt.data.received) + ' / ' + fmtSize(evt.data.total) + ' (' + pct + '%)';
+            if (dl) { dl.classList.add('disabled'); dl.textContent = 'Syncing...'; }
+          }
+          return;
+        }
+        if (evt.event === 'file_ready') {
+          delete fetchingFiles[evt.data.file_id];
+          for (var i = 0; i < allMessages.length; i++) {
+            if (allMessages[i].file && allMessages[i].file.id === evt.data.file_id) {
+              allMessages[i].file.local = true;
+            }
+          }
+          var el = document.querySelector('[data-file-id="' + evt.data.file_id + '"]');
+          if (el) {
+            var bar = el.querySelector('.f-progress');
+            var stat = el.querySelector('.f-status');
+            var dl = el.querySelector('.f-dl');
+            if (bar) bar.remove();
+            if (stat) stat.remove();
+            if (dl) {
+              var a = document.createElement('a');
+              a.className = 'f-dl';
+              a.href = PROXY + '/files/' + evt.data.file_id;
+              a.download = evt.data.name || '';
+              a.textContent = 'Download';
+              dl.replaceWith(a);
+            }
+          }
+          return;
+        }
         if (evt.event === 'file_error') {
+          delete fetchingFiles[evt.data.file_id];
           var fname = evt.data.name || evt.data.file_id;
           if (window.parent && window.parent.notify) {
-            window.parent.notify('File Transfer Failed', 'Could not download: ' + fname, {type: 'error'});
+            window.parent.notify('File Sync Failed', 'Could not sync: ' + fname, {type: 'error'});
+          }
+          var el = document.querySelector('[data-file-id="' + (evt.data.file_id || '') + '"]');
+          if (el) {
+            var bar = el.querySelector('.f-progress');
+            var stat = el.querySelector('.f-status');
+            var dl = el.querySelector('.f-dl');
+            if (bar) bar.remove();
+            if (stat) stat.remove();
+            if (dl) { dl.className = 'f-dl f-unavail'; dl.textContent = 'Not synced'; }
           }
           return;
         }
