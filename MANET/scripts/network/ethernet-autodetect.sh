@@ -90,7 +90,7 @@ GATEWAY_CONFIG="${NETWORKD_DIR}/20-end0-gateway.network.off"
 ACTIVE_CONFIG="${NETWORKD_DIR}/20-${ETH_IFACE}.network"
 
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] - ETH-DETECT: $1" | systemd-cat -t ethernet-autodetect
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - ETH-DETECT: %s\n' -1 "$1" >&2
 }
 
 run_no_carrier_cleanup() {

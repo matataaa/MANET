@@ -93,6 +93,12 @@ function renderDashNodeList(nodes) {
     if (n.mumble) badges.push('<span class="badge badge-svc">MUMBLE</span>');
     if (n.mediamtx) badges.push('<span class="badge badge-svc">MTX</span>');
     if (n.ntp) badges.push('<span class="badge badge-svc">NTP</span>');
+    if (n.applets && n.applets.length) {
+      n.applets.forEach(function(a) {
+        var cls = a.status === 'running' ? 'badge-applet-on' : 'badge-applet-off';
+        badges.push('<span class="badge ' + cls + '">' + escHtml(a.label || a.name) + '</span>');
+      });
+    }
     if (n.limp) badges.push('<span class="badge badge-limp">LIMP</span>');
     if (n.is_me) badges.push('<span class="self-node-badge">THIS NODE</span>');
 

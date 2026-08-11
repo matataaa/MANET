@@ -68,8 +68,8 @@ function voiceRender() {
 
     html += '<div class="voice-indicators">';
     html += '<div class="voice-ind"><span class="voice-dot ' + (cc ? 'on' : 'off') + '"></span>Connected</div>';
-    html += '<div class="voice-ind"><span class="voice-dot ' + (voiceClient.transmitting ? 'tx' : 'off') + '" id="voice-tx-dot"></span><span id="voice-tx-label">' + (voiceClient.transmitting ? 'Transmitting' : 'TX Idle') + '</span></div>';
-    html += '<div class="voice-ind"><span class="voice-dot ' + (voiceClient.receiving ? 'rx' : 'off') + '" id="voice-rx-dot"></span><span id="voice-rx-label">' + (voiceClient.receiving ? 'Receiving' : 'RX Silent') + '</span></div>';
+    html += '<div class="voice-ind"><span class="voice-dot ' + (voiceClient.transmitting ? 'tx' : 'off') + '" id="voice-tx-dot"></span><span id="voice-tx-label">' + (voiceClient.transmitting ? 'TX Web' : 'TX Web Idle') + '</span></div>';
+    html += '<div class="voice-ind"><span class="voice-dot ' + (voiceClient.receiving ? 'rx' : 'off') + '" id="voice-rx-dot"></span><span id="voice-rx-label">' + (voiceClient.receiving ? 'RX Web' : 'RX Web Silent') + '</span></div>';
     html += '</div>';
 
     html += '<div class="voice-disconnect-wrap">';
@@ -100,8 +100,8 @@ function voiceRender() {
 
   // TX/RX indicators
   html += '<div class="voice-indicators" id="hw-txrx">';
-  html += '<div class="voice-ind"><span class="voice-dot ' + (d.tx ? 'tx' : 'off') + '" id="hw-tx-dot"></span><span id="hw-tx-label">' + (d.tx ? 'Transmitting' : 'TX Idle') + '</span></div>';
-  html += '<div class="voice-ind"><span class="voice-dot ' + (d.rx ? 'rx' : 'off') + '" id="hw-rx-dot"></span><span id="hw-rx-label">' + (d.rx ? 'Receiving' : 'RX Silent') + '</span></div>';
+  html += '<div class="voice-ind"><span class="voice-dot ' + (d.tx ? 'tx' : 'off') + '" id="hw-tx-dot"></span><span id="hw-tx-label">' + (d.tx ? 'TX PTT' : 'TX PTT Idle') + '</span></div>';
+  html += '<div class="voice-ind"><span class="voice-dot ' + (d.rx ? 'rx' : 'off') + '" id="hw-rx-dot"></span><span id="hw-rx-label">' + (d.rx ? 'RX PTT' : 'RX PTT Silent') + '</span></div>';
   html += '</div>';
 
   html += '<div class="status-row"><div class="status-label">Service</div><div class="status-value">';
@@ -175,9 +175,9 @@ function voiceUpdateHWIndicators() {
   var rxDot = document.getElementById('hw-rx-dot');
   var rxLabel = document.getElementById('hw-rx-label');
   if (txDot) txDot.className = 'voice-dot ' + (d.tx ? 'tx' : 'off');
-  if (txLabel) txLabel.textContent = d.tx ? 'Transmitting' : 'TX Idle';
+  if (txLabel) txLabel.textContent = d.tx ? 'TX PTT' : 'TX PTT Idle';
   if (rxDot) rxDot.className = 'voice-dot ' + (d.rx ? 'rx' : 'off');
-  if (rxLabel) rxLabel.textContent = d.rx ? 'Receiving' : 'RX Silent';
+  if (rxLabel) rxLabel.textContent = d.rx ? 'RX PTT' : 'RX PTT Silent';
 }
 
 function voiceBindPTT() {
@@ -323,8 +323,8 @@ async function voiceClientStart() {
       }
     };
 
-    ws.onclose = function() { voiceClientCleanup(); voiceRender(); };
-    ws.onerror = function() { voiceClientCleanup(); voiceRender(); };
+    ws.onclose = function() { voiceClientCleanup(); if (activeTab === 'voice') voiceRender(); };
+    ws.onerror = function() { voiceClientCleanup(); if (activeTab === 'voice') voiceRender(); };
 
     voiceClient = {
       ws: ws, ctx: ctx, stream: stream, encoder: encoder, decoder: decoder,
@@ -343,7 +343,7 @@ async function voiceClientStart() {
 
     ws.onopen = function() {
       voiceClient.connected = true;
-      voiceRender();
+      if (activeTab === 'voice') voiceRender();
     };
 
   } catch(e) {
@@ -386,8 +386,8 @@ function voiceUpdateClientIndicators() {
   var pttBtn = document.getElementById('voice-ptt-btn');
 
   if (txDot) txDot.className = 'voice-dot ' + (voiceClient.transmitting ? 'tx' : 'off');
-  if (txLabel) txLabel.textContent = voiceClient.transmitting ? 'Transmitting' : 'TX Idle';
+  if (txLabel) txLabel.textContent = voiceClient.transmitting ? 'TX Web' : 'TX Web Idle';
   if (rxDot) rxDot.className = 'voice-dot ' + (voiceClient.receiving ? 'rx' : 'off');
-  if (rxLabel) rxLabel.textContent = voiceClient.receiving ? 'Receiving' : 'RX Silent';
+  if (rxLabel) rxLabel.textContent = voiceClient.receiving ? 'RX Web' : 'RX Web Silent';
   if (pttBtn) pttBtn.classList.toggle('active', voiceClient.transmitting);
 }

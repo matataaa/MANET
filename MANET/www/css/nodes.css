@@ -29,3 +29,10 @@
   font-family: var(--font); font-size: 12px;
 }
 .nodes-search input:focus { outline: none; border-color: var(--accent2); }
+.node-act-btn {
+  font-size: 11px; padding: 2px 8px; margin-right: 4px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--surface); color: var(--accent2);
+  cursor: pointer; font-weight: 700; font-family: var(--font);
+}
+.node-act-btn:hover { background: var(--accent2); color: #fff; }

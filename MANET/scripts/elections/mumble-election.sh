@@ -32,7 +32,7 @@ MY_MAC=$(cat "/sys/class/net/${CONTROL_IFACE}/address" 2>/dev/null || true)
 LOCK_FILE="/var/run/mumble-election.lock"
 
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] - MUMBLE-ELECTION: $1" | systemd-cat -t mumble-election
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - MUMBLE-ELECTION: %s\n' -1 "$1" >&2
 }
 
 # --- Dependency Checks ---

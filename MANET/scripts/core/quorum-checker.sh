@@ -12,7 +12,7 @@ STALE_NODE_THRESHOLD=600
 QUORUM_THRESHOLD=0.5
 
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] - QUORUM: $1" | systemd-cat -t quorum-checker
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - QUORUM: %s\n' -1 "$1" >&2
 }
 
 [ ! -f "$REGISTRY_STATE_FILE" ] && exit 0

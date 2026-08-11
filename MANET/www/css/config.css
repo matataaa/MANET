@@ -1,3 +1,12 @@
+.cfg-target-bar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+}
+.cfg-target-bar select {
+  background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; font-family: var(--font);
+  font-size: 12px; font-weight: 700; min-width: 220px;
+}
+.cfg-target-bar select:focus { outline: none; border-color: var(--accent2); }
 .config-layout {
   display: block; max-width: 720px;
 }

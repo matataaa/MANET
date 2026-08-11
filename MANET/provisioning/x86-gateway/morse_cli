@@ -1,0 +1,18 @@
+#!/bin/sh
+# Stub morse_cli for mm8108 v2.0 gateway (Lunpid mm8108 USB dongle)
+# The 2.0 firmware/driver handles mesh config via nl80211 natively.
+# Sending vendor commands conflicts with the driver's internal state.
+cmd=""
+shift_next=0
+for arg in "$@"; do
+    if [ "$shift_next" = 1 ]; then
+        shift_next=0
+        continue
+    fi
+    case "$arg" in
+        -i) shift_next=1 ;;
+        *) cmd="$arg"; break ;;
+    esac
+done
+echo "${cmd:-unknown}: ok (stub)" >&2
+exit 0

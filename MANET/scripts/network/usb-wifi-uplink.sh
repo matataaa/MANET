@@ -10,9 +10,7 @@ ACTION="${1:-reconcile}"
 IFACE="${2:-}"
 
 log() {
-    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] - USB-WIFI-UPLINK: $*"
-    echo "$msg" >&2
-    echo "$msg" | systemd-cat -t usb-wifi-uplink
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - USB-WIFI-UPLINK: %s\n' -1 "$*" >&2
 }
 
 ensure_default_config() {

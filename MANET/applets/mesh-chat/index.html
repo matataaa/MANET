@@ -6,91 +6,279 @@
 <title>Mesh Chat</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--text:#e4e4e7;--muted:#6b7280;--accent:#3b82f6;--self:#2563eb;--other:#374151}
-body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column}
-#header{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;background:var(--surface)}
-#header h1{font-size:15px;font-weight:600}
-#header .status{font-size:12px;color:var(--muted)}
-#header .dot{width:8px;height:8px;border-radius:50%;background:#ef4444;display:inline-block}
-#header .dot.connected{background:#22c55e}
-#messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:6px}
-.msg{max-width:75%;padding:8px 12px;border-radius:12px;font-size:14px;line-height:1.4;word-break:break-word}
+:root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--text:#e4e4e7;--muted:#6b7280;--accent:#3b82f6;--self:#1d4ed8;--other:#374151;--dm:#4c1d95;--dm-self:#5b21b6;--online:#22c55e;--offline:#6b7280;--font:-apple-system,system-ui,'Segoe UI',sans-serif}
+body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+#header{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;background:var(--surface);flex-shrink:0}
+#header h1{font-size:14px;font-weight:700;white-space:nowrap}
+.conn-status{font-size:11px;display:flex;align-items:center;gap:5px}
+.dot{width:7px;height:7px;border-radius:50%;background:#ef4444;flex-shrink:0}
+.dot.on{background:var(--online)}
+.peers-btn{margin-left:auto;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font);position:relative;white-space:nowrap}
+.peers-btn:hover{border-color:var(--accent)}
+.peers-panel{display:none;position:absolute;top:100%;right:0;margin-top:6px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:6px 0;min-width:180px;z-index:10;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.peers-panel.open{display:block}
+.peer-row{padding:6px 14px;font-size:12px;display:flex;align-items:center;gap:8px}
+.peer-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.peer-dot.on{background:var(--online)}
+.peer-dot.off{background:var(--offline)}
+.peer-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.peer-ip{color:var(--muted);font-size:10px}
+
+#channel-bar{padding:6px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;background:var(--bg);flex-shrink:0}
+#channel-bar select{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px;font-family:var(--font);flex:1;max-width:240px}
+#channel-bar select:focus{outline:none;border-color:var(--accent)}
+.sync-btn{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:4px 10px;font-size:10px;font-weight:700;cursor:pointer;font-family:var(--font);text-transform:uppercase;letter-spacing:.3px}
+.sync-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+#messages{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:3px}
+.day-sep{text-align:center;font-size:10px;color:var(--muted);padding:8px 0 4px;font-weight:600}
+
+.msg{max-width:80%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.45;word-break:break-word;position:relative}
 .msg.self{align-self:flex-end;background:var(--self);border-bottom-right-radius:4px}
 .msg.other{align-self:flex-start;background:var(--other);border-bottom-left-radius:4px}
-.msg .from{font-size:11px;font-weight:600;color:var(--accent);margin-bottom:2px}
-.msg.self .from{color:#93c5fd}
-.msg .meta{font-size:10px;color:var(--muted);margin-top:4px}
-.system{text-align:center;font-size:12px;color:var(--muted);padding:4px}
-#input-bar{padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;background:var(--surface)}
-#input-bar input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:14px;outline:none}
-#input-bar input:focus{border-color:var(--accent)}
-#input-bar button{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;font-weight:600;cursor:pointer}
-#input-bar button:disabled{opacity:.4;cursor:default}
+.msg.dm-in{align-self:flex-start;background:var(--dm);border-bottom-left-radius:4px}
+.msg.dm-out{align-self:flex-end;background:var(--dm-self);border-bottom-right-radius:4px}
+.msg-head{display:flex;align-items:baseline;gap:6px;margin-bottom:2px}
+.msg-from{font-size:11px;font-weight:700;color:#60a5fa}
+.msg.self .msg-from,.msg.dm-out .msg-from{color:#93c5fd}
+.msg-dm-tag{font-size:9px;font-weight:700;color:#c084fc;background:rgba(192,132,252,.15);padding:1px 5px;border-radius:3px}
+.msg-text{white-space:pre-wrap}
+.msg-meta{font-size:11px;color:rgba(255,255,255,.4);margin-top:3px}
+
+.msg-file{margin-top:4px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:10px}
+.file-icon{font-size:20px;flex-shrink:0}
+.file-info{flex:1;min-width:0}
+.file-name{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-size{font-size:10px;color:var(--muted)}
+.file-dl{background:var(--accent);color:#fff;border:none;border-radius:5px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font);text-decoration:none;white-space:nowrap}
+.file-dl:hover{opacity:.85}
+
+.system{text-align:center;font-size:11px;color:var(--muted);padding:6px}
+
+#input-bar{padding:10px 16px;border-top:1px solid var(--border);display:flex;gap:8px;background:var(--surface);flex-shrink:0;align-items:center}
+.attach-btn{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:2px 4px;line-height:1}
+.attach-btn:hover{color:var(--accent)}
+#input-bar input[type="text"]{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:13px;font-family:var(--font);outline:none}
+#input-bar input[type="text"]:focus{border-color:var(--accent)}
+#send-btn{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font)}
+#send-btn:disabled{opacity:.35;cursor:default}
+.upload-progress{position:fixed;top:0;left:0;height:3px;background:var(--accent);transition:width .2s;z-index:100}
 </style>
 </head>
 <body>
 <div id="header">
   <h1>Mesh Chat</h1>
-  <span class="status"><span id="dot" class="dot"></span> <span id="conn-status">Connecting...</span></span>
+  <span class="conn-status"><span id="dot" class="dot"></span> <span id="conn-label">Connecting</span></span>
+  <button class="peers-btn" id="peers-btn">0 online</button>
+  <div class="peers-panel" id="peers-panel"></div>
+</div>
+<div id="channel-bar">
+  <select id="channel"><option value="">All Nodes</option></select>
+  <button class="sync-btn" id="sync-btn">Sync</button>
 </div>
 <div id="messages"></div>
 <div id="input-bar">
-  <input id="msg-input" type="text" placeholder="Type a message..." autocomplete="off" disabled>
+  <button class="attach-btn" id="attach-btn" title="Send file">&#128206;</button>
+  <input type="file" id="file-input" hidden>
+  <input id="msg-input" type="text" placeholder="Message all nodes..." autocomplete="off" disabled>
   <button id="send-btn" disabled>Send</button>
 </div>
+
 <script>
 (function() {
   var messagesEl = document.getElementById('messages');
   var inputEl = document.getElementById('msg-input');
   var sendBtn = document.getElementById('send-btn');
   var dotEl = document.getElementById('dot');
-  var statusEl = document.getElementById('conn-status');
+  var connLabel = document.getElementById('conn-label');
+  var channelEl = document.getElementById('channel');
+  var peersBtn = document.getElementById('peers-btn');
+  var peersPanel = document.getElementById('peers-panel');
+  var syncBtn = document.getElementById('sync-btn');
+  var attachBtn = document.getElementById('attach-btn');
+  var fileInput = document.getElementById('file-input');
+
   var ws = null;
   var myHostname = null;
-  var reconnectTimer = null;
+  var reconnTimer = null;
+  var peerList = [];
+  var allMessages = [];
+  var lastDaySep = '';
 
-  function scrollBottom() {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
-
-  function fmtTime(unix) {
-    var d = new Date(unix * 1000);
-    return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-  }
-
-  function addMessage(msg) {
-    var isSelf = msg.from === myHostname;
-    var div = document.createElement('div');
-    div.className = 'msg ' + (isSelf ? 'self' : 'other');
-    div.innerHTML = '<div class="from">' + escHtml(msg.from) + '</div>' +
-                    escHtml(msg.text) +
-                    '<div class="meta">' + fmtTime(msg.time) + '</div>';
-    messagesEl.appendChild(div);
-    scrollBottom();
-  }
-
-  function addSystem(text) {
-    var div = document.createElement('div');
-    div.className = 'system';
-    div.textContent = text;
-    messagesEl.appendChild(div);
-    scrollBottom();
-  }
-
-  function escHtml(s) {
+  function esc(s) {
     var d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
   }
 
+  function fmtSize(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
+    return (b/(1024*1024)).toFixed(1) + ' MB';
+  }
+
+  function fmtTime(unix) {
+    var d = new Date(unix * 1000);
+    var now = new Date();
+    var hm = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12: false});
+
+    var diffMs = now - d;
+    var diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffDays === 0) return hm;
+    if (diffDays === 1) return 'Yesterday ' + hm;
+    return d.toLocaleDateString([], {month:'short', day:'numeric'}) + ' ' + hm;
+  }
+
+  function daySep(unix) {
+    var d = new Date(unix * 1000);
+    var now = new Date();
+    var key = d.toDateString();
+    if (key === lastDaySep) return '';
+    lastDaySep = key;
+    if (key === now.toDateString()) return 'Today';
+    var y = new Date(now); y.setDate(y.getDate()-1);
+    if (key === y.toDateString()) return 'Yesterday';
+    return d.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
+  }
+
+  function fileUrl(fi) {
+    if (!fi) return '#';
+    var localProxy = '/api/applets/mesh-chat/proxy/files/' + fi.id;
+    if (!fi.sender_ip || fi.sender_ip === myIP()) return localProxy;
+    return 'http://' + fi.sender_ip + '/api/applets/mesh-chat/proxy/files/' + fi.id;
+  }
+
+  function myIP() {
+    for (var i = 0; i < peerList.length; i++) {
+      if (peerList[i].hostname === myHostname) return peerList[i].ip;
+    }
+    return '';
+  }
+
+  function renderMsg(msg) {
+    var isSelf = msg.from === myHostname;
+    var isDM = !!msg.to;
+    var cls = 'msg ';
+    if (isDM) cls += isSelf ? 'dm-out' : 'dm-in';
+    else cls += isSelf ? 'self' : 'other';
+
+    var sep = daySep(msg.time);
+    var html = '';
+    if (sep) html += '<div class="day-sep">' + sep + '</div>';
+
+    html += '<div class="' + cls + '">';
+    html += '<div class="msg-head"><span class="msg-from">' + esc(msg.from) + '</span>';
+    if (isDM) {
+      var label = isSelf ? 'DM to ' + esc(msg.to) : 'DM';
+      html += '<span class="msg-dm-tag">' + label + '</span>';
+    }
+    html += '</div>';
+
+    if (msg.type === 'file' && msg.file) {
+      html += '<div class="msg-file">';
+      html += '<span class="file-icon">&#128196;</span>';
+      html += '<div class="file-info"><div class="file-name">' + esc(msg.file.name) + '</div>';
+      html += '<div class="file-size">' + fmtSize(msg.file.size) + '</div></div>';
+      html += '<a class="file-dl" href="' + fileUrl(msg.file) + '" target="_blank" download>Download</a>';
+      html += '</div>';
+    }
+
+    if (msg.text) html += '<div class="msg-text">' + esc(msg.text) + '</div>';
+    html += '<div class="msg-meta">' + fmtTime(msg.time) + '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  function renderAll() {
+    var ch = channelEl.value;
+    lastDaySep = '';
+    var filtered = allMessages.filter(function(m) {
+      if (m.type !== 'text' && m.type !== 'file') return false;
+      if (!ch) return !m.to;
+      return (m.to === ch && m.from === myHostname) ||
+             (m.from === ch && m.to === myHostname) ||
+             (m.from === ch && !m.to) ||
+             (m.to === ch && !m.to);
+    });
+    var html = '';
+    for (var i = 0; i < filtered.length; i++) {
+      html += renderMsg(filtered[i]);
+    }
+    if (!html) html = '<div class="system">No messages' + (ch ? ' with ' + esc(ch) : '') + '</div>';
+    messagesEl.innerHTML = html;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function addMsg(msg) {
+    for (var i = 0; i < allMessages.length; i++) {
+      if (allMessages[i].id && allMessages[i].id === msg.id) return;
+    }
+    allMessages.push(msg);
+
+    var ch = channelEl.value;
+    var show = false;
+    if (!ch) show = !msg.to;
+    else show = (msg.to === ch && msg.from === myHostname) ||
+                (msg.from === ch && msg.to === myHostname) ||
+                (msg.from === ch && !msg.to);
+
+    if (show && (msg.type === 'text' || msg.type === 'file')) {
+      var sep = daySep(msg.time);
+      var html = '';
+      if (sep) html += '<div class="day-sep">' + sep + '</div>';
+      html += renderMsg(msg);
+      var tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      while (tmp.firstChild) messagesEl.appendChild(tmp.firstChild);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+  }
+
+  function updatePeers(list) {
+    peerList = list || [];
+    var online = peerList.length;
+    peersBtn.textContent = online + ' online';
+
+    var html = '';
+    peerList.sort(function(a,b) { return a.hostname.localeCompare(b.hostname); });
+    for (var i = 0; i < peerList.length; i++) {
+      var p = peerList[i];
+      var isSelf = p.hostname === myHostname;
+      html += '<div class="peer-row">';
+      html += '<span class="peer-dot on"></span>';
+      html += '<span class="peer-name">' + esc(p.hostname) + (isSelf ? ' (you)' : '') + '</span>';
+      html += '<span class="peer-ip">' + esc(p.ip || '') + '</span>';
+      html += '</div>';
+    }
+    peersPanel.innerHTML = html;
+
+    var cur = channelEl.value;
+    channelEl.innerHTML = '<option value="">All Nodes</option>';
+    for (var i = 0; i < peerList.length; i++) {
+      if (peerList[i].hostname === myHostname) continue;
+      var opt = document.createElement('option');
+      opt.value = peerList[i].hostname;
+      opt.textContent = peerList[i].hostname;
+      channelEl.appendChild(opt);
+    }
+    channelEl.value = cur;
+  }
+
+  function updatePlaceholder() {
+    var ch = channelEl.value;
+    if (ch) inputEl.placeholder = 'DM to ' + ch + '...';
+    else inputEl.placeholder = 'Message all nodes...';
+  }
+
   function connect() {
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var wsUrl = proto + '//' + location.host + '/api/applets/mesh-chat/proxy/ws';
-    ws = new WebSocket(wsUrl);
+    ws = new WebSocket(proto + '//' + location.host + '/api/applets/mesh-chat/proxy/ws');
 
     ws.onopen = function() {
-      dotEl.className = 'dot connected';
-      statusEl.textContent = 'Connected';
+      dotEl.className = 'dot on';
+      connLabel.textContent = 'Connected';
       inputEl.disabled = false;
       sendBtn.disabled = false;
       inputEl.focus();
@@ -98,41 +286,97 @@ body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:v
 
     ws.onmessage = function(e) {
       try {
-        var msg = JSON.parse(e.data);
-        if (!myHostname && msg.from) {
+        var data = JSON.parse(e.data);
+        if (data.type === 'peers') {
+          updatePeers(data.peers);
+          return;
+        }
+        if (!myHostname) {
           fetch('/api/local').then(function(r){return r.json()}).then(function(d){
             myHostname = d.hostname || 'unknown';
           }).catch(function(){});
         }
-        addMessage(msg);
+        addMsg(data);
       } catch(err) {}
     };
 
     ws.onclose = function() {
       dotEl.className = 'dot';
-      statusEl.textContent = 'Disconnected';
+      connLabel.textContent = 'Reconnecting';
       inputEl.disabled = true;
       sendBtn.disabled = true;
-      reconnectTimer = setTimeout(connect, 3000);
+      reconnTimer = setTimeout(connect, 3000);
     };
 
-    ws.onerror = function() {
-      ws.close();
-    };
+    ws.onerror = function() { ws.close(); };
   }
 
   function send() {
     var text = inputEl.value.trim();
     if (!text || !ws || ws.readyState !== 1) return;
-    ws.send(text);
+    var ch = channelEl.value;
+    ws.send(JSON.stringify({action:'send', text:text, to:ch}));
     inputEl.value = '';
     inputEl.focus();
   }
 
+  function uploadFile(file) {
+    var form = new FormData();
+    form.append('file', file);
+    var ch = channelEl.value;
+    if (ch) form.append('to', ch);
+
+    var bar = document.createElement('div');
+    bar.className = 'upload-progress';
+    bar.style.width = '20%';
+    document.body.appendChild(bar);
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/applets/mesh-chat/proxy/upload');
+    xhr.upload.onprogress = function(e) {
+      if (e.lengthComputable) bar.style.width = Math.round(e.loaded/e.total*100) + '%';
+    };
+    xhr.onload = function() { bar.style.width = '100%'; setTimeout(function(){ bar.remove(); }, 400); };
+    xhr.onerror = function() { bar.remove(); alert('Upload failed'); };
+    xhr.send(form);
+  }
+
   sendBtn.onclick = send;
-  inputEl.onkeydown = function(e) {
-    if (e.key === 'Enter') send();
+  inputEl.onkeydown = function(e) { if (e.key === 'Enter') send(); };
+
+  channelEl.onchange = function() {
+    updatePlaceholder();
+    renderAll();
   };
+
+  peersBtn.onclick = function(e) {
+    e.stopPropagation();
+    peersPanel.classList.toggle('open');
+  };
+  document.addEventListener('click', function() { peersPanel.classList.remove('open'); });
+
+  syncBtn.onclick = function() {
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({action:'sync'}));
+      syncBtn.textContent = 'Syncing...';
+      setTimeout(function(){ syncBtn.textContent = 'Sync'; }, 3000);
+    }
+  };
+
+  attachBtn.onclick = function() { fileInput.click(); };
+  fileInput.onchange = function() {
+    if (fileInput.files.length > 0) {
+      uploadFile(fileInput.files[0]);
+      fileInput.value = '';
+    }
+  };
+
+  // drag and drop
+  messagesEl.addEventListener('dragover', function(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  messagesEl.addEventListener('drop', function(e) {
+    e.preventDefault();
+    if (e.dataTransfer.files.length > 0) uploadFile(e.dataTransfer.files[0]);
+  });
 
   fetch('/api/local').then(function(r){return r.json()}).then(function(d){
     myHostname = d.hostname || 'unknown';

@@ -233,49 +233,51 @@ func assembleStatusData() StatusData {
 		nodeByID[rn["id"]] = &nodes[len(nodes)-1]
 	}
 
-	// Fallback: build nodes from batctl when registry is empty
-	if len(registry) == 0 {
-		seen := make(map[string]bool)
-		for mac, orig := range origMap {
-			if mac == myMAC || seen[mac] {
-				continue
-			}
-			seen[mac] = true
-			tq := orig.TQ
-			node := Node{
-				ID:       mac,
-				Hostname: mac,
-				MAC:      mac,
-				TQ:       &tq,
-				IsDirect: neighborMACs[mac],
-				AllMACs:  []string{mac},
-				BestLink: map[string]interface{}{"iface": orig.Iface, "nexthop": orig.Nexthop, "tq": orig.TQ},
-				LastSeen: "",
-			}
-			macToNodeID[mac] = mac
-			nodes = append(nodes, node)
-			nodeByID[mac] = &nodes[len(nodes)-1]
+	// Merge batctl-discovered nodes not already covered by registry
+	knownMACs := make(map[string]bool)
+	knownMACs[myMAC] = true
+	for _, n := range nodes {
+		for _, m := range n.AllMACs {
+			knownMACs[m] = true
 		}
-		for _, n := range neighbors {
-			if n.MAC == myMAC || seen[n.MAC] {
-				continue
-			}
-			seen[n.MAC] = true
-			tq := n.TQ
-			node := Node{
-				ID:       n.MAC,
-				Hostname: n.MAC,
-				MAC:      n.MAC,
-				TQ:       &tq,
-				IsDirect: true,
-				AllMACs:  []string{n.MAC},
-				BestLink: make(map[string]interface{}),
-				LastSeen: "",
-			}
-			macToNodeID[n.MAC] = n.MAC
-			nodes = append(nodes, node)
-			nodeByID[n.MAC] = &nodes[len(nodes)-1]
+	}
+	for mac, orig := range origMap {
+		if knownMACs[mac] {
+			continue
 		}
+		knownMACs[mac] = true
+		tq := orig.TQ
+		node := Node{
+			ID:       mac,
+			Hostname: mac,
+			MAC:      mac,
+			TQ:       &tq,
+			IsDirect: neighborMACs[mac],
+			AllMACs:  []string{mac},
+			BestLink: map[string]interface{}{"iface": orig.Iface, "nexthop": orig.Nexthop, "tq": orig.TQ},
+		}
+		macToNodeID[mac] = mac
+		nodes = append(nodes, node)
+		nodeByID[mac] = &nodes[len(nodes)-1]
+	}
+	for _, nb := range neighbors {
+		if knownMACs[nb.MAC] {
+			continue
+		}
+		knownMACs[nb.MAC] = true
+		tq := nb.TQ
+		node := Node{
+			ID:       nb.MAC,
+			Hostname: nb.MAC,
+			MAC:      nb.MAC,
+			TQ:       &tq,
+			IsDirect: true,
+			AllMACs:  []string{nb.MAC},
+			BestLink: make(map[string]interface{}),
+		}
+		macToNodeID[nb.MAC] = nb.MAC
+		nodes = append(nodes, node)
+		nodeByID[nb.MAC] = &nodes[len(nodes)-1]
 	}
 
 	// Inject self if not in registry
@@ -294,6 +296,15 @@ func assembleStatusData() StatusData {
 			LastSeen: "",
 		}
 		nodes = append([]Node{selfNode}, nodes...)
+	}
+
+	// Attach local applets to self node
+	localApplets := scanLocalApplets()
+	for i := range nodes {
+		if nodes[i].IsMe {
+			nodes[i].Applets = localApplets
+			break
+		}
 	}
 
 	// Sort: self first, then by TQ descending
@@ -325,7 +336,16 @@ func assembleStatusData() StatusData {
 		}
 	}
 
-	// Build edges
+	// Resolve self node ID (may differ from myMAC when sourced from registry)
+	selfID := myMAC
+	for _, n := range nodes {
+		if n.IsMe {
+			selfID = n.ID
+			break
+		}
+	}
+
+	// Build edges using node IDs so D3 forceLink can resolve them
 	var edges []Edge
 	for _, n := range nodes {
 		if n.IsMe {
@@ -334,7 +354,7 @@ func assembleStatusData() StatusData {
 		orig := bestOrigForNode(n.AllMACs, origMap)
 		if orig == nil {
 			if n.State != "" {
-				edges = append(edges, Edge{Source: myMAC, Target: n.MAC, Type: "unknown"})
+				edges = append(edges, Edge{Source: selfID, Target: n.ID, Type: "unknown"})
 			}
 			continue
 		}
@@ -349,16 +369,13 @@ func assembleStatusData() StatusData {
 
 		if n.IsDirect || nexthopIsNode {
 			tq := orig.TQ
-			edges = append(edges, Edge{Source: myMAC, Target: n.MAC, Type: "direct", TQ: &tq})
+			edges = append(edges, Edge{Source: selfID, Target: n.ID, Type: "direct", TQ: &tq})
 		} else {
 			via := orig.Nexthop
 			tq := orig.TQ
-			edges = append(edges, Edge{Source: myMAC, Target: n.MAC, Type: "multihop", Via: via, TQ: &tq})
-			// Inferred edge
+			edges = append(edges, Edge{Source: selfID, Target: n.ID, Type: "multihop", Via: via, TQ: &tq})
 			if viaNodeID, ok := macToNodeID[via]; ok {
-				if viaNode, ok2 := nodeByID[viaNodeID]; ok2 {
-					edges = append(edges, Edge{Source: viaNode.MAC, Target: n.MAC, Type: "inferred", TQ: &tq})
-				}
+				edges = append(edges, Edge{Source: viaNodeID, Target: n.ID, Type: "inferred", TQ: &tq})
 			}
 		}
 	}

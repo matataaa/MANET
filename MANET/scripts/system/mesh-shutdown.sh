@@ -9,7 +9,7 @@ ALFRED_DATA_TYPE=68
 CONTROL_IFACE="br0"
 
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] - MESH-SHUTDOWN: $1" | systemd-cat -t mesh-shutdown
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - MESH-SHUTDOWN: %s\n' -1 "$1" >&2
 }
 
 log "=== GRACEFUL MESH SHUTDOWN INITIATED ==="

@@ -2,7 +2,7 @@
 # Watchdog: re-enslaves HaLow (and standard mesh) interfaces into bat0 if they fall out.
 # Runs continuously after batman-enslave.service. Safe to restart.
 
-log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] ENSLAVE-WATCH: $*" | systemd-cat -t batman-enslave-watch; }
+log() { printf '[%(%Y-%m-%d %H:%M:%S)T] ENSLAVE-WATCH: %s\n' -1 "$*" >&2; }
 
 radio_iface_enabled() {
     python3 - "$1" <<'PY'

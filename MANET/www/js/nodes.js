@@ -26,6 +26,7 @@ function nodesActivate() {
                 <th data-col="battery">Battery <span class="sort-arrow"></span></th>
                 <th data-col="uptime">Uptime</th>
                 <th data-col="last_seen">Last Seen <span class="sort-arrow"></span></th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="nodes-tbody"></tbody>
@@ -104,6 +105,12 @@ function nodesRender() {
     if (n.mumble) svcs.push('<span class="badge badge-svc">MUMBLE</span>');
     if (n.mediamtx) svcs.push('<span class="badge badge-svc">MTX</span>');
     if (n.ntp) svcs.push('<span class="badge badge-svc">NTP</span>');
+    if (n.applets && n.applets.length) {
+      n.applets.forEach(function(a) {
+        var cls = a.status === 'running' ? 'badge-applet-on' : 'badge-applet-off';
+        svcs.push('<span class="badge ' + cls + '">' + escHtml(a.label || a.name) + '</span>');
+      });
+    }
     if (n.limp) svcs.push('<span class="badge badge-limp">LIMP</span>');
     if (n.is_me) svcs.push('<span class="self-node-badge">THIS NODE</span>');
 
@@ -125,6 +132,12 @@ function nodesRender() {
       '<td>' + battCell + '</td>' +
       '<td>' + escHtml(n.uptime || '--') + '</td>' +
       '<td>' + lastSeen + '</td>' +
+      '<td class="col-actions">' +
+        '<button class="node-act-btn" onclick="openNodeConfig(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\')">' + (n.is_me ? 'Config' : 'Config') + '</button>' +
+        (n.is_me ? '' :
+        '<button class="node-act-btn" onclick="openNodeTerminal(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\',\'terminal\')">Shell</button>' +
+        '<button class="node-act-btn" onclick="openNodeTerminal(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\',\'logs\')">Logs</button>') +
+      '</td>' +
       '</tr>';
   }).join('');
 }

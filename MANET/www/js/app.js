@@ -81,6 +81,39 @@ async function fetchData() {
 function onDataUpdated() {
   if (activeTab === 'dashboard') dashboardUpdate();
   else if (activeTab === 'nodes') nodesUpdate();
+  fetchPeerApplets();
+}
+
+let _peerAppletCache = {};
+let _peerAppletFetching = {};
+function fetchPeerApplets() {
+  if (!DATA || !DATA.nodes) return;
+  DATA.nodes.forEach(function(n) {
+    if (n.is_me || !n.ip || n.applets) return;
+    if (_peerAppletCache[n.ip]) {
+      n.applets = _peerAppletCache[n.ip];
+      return;
+    }
+    if (_peerAppletFetching[n.ip]) return;
+    _peerAppletFetching[n.ip] = true;
+    fetch('http://' + n.ip + '/api/applets', {signal: AbortSignal.timeout(3000)})
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        var applets = (d.applets || []).map(function(a) {
+          return {name: a.name, label: a.label || a.name, status: a.status || 'unknown'};
+        });
+        _peerAppletCache[n.ip] = applets;
+        if (DATA && DATA.nodes) {
+          DATA.nodes.forEach(function(nd) {
+            if (nd.ip === n.ip && !nd.is_me) nd.applets = applets;
+          });
+          if (activeTab === 'dashboard') dashboardUpdate();
+          else if (activeTab === 'nodes') nodesUpdate();
+        }
+      })
+      .catch(function() {})
+      .finally(function() { delete _peerAppletFetching[n.ip]; });
+  });
 }
 
 function updateHeader() {
@@ -89,7 +122,13 @@ function updateHeader() {
   document.getElementById('hdr-hostname').textContent = LOCAL_DATA.hostname || '--';
   if (LOCAL_DATA.hostname) document.title = 'Mesh: ' + LOCAL_DATA.hostname;
   document.getElementById('hdr-ip').textContent = LOCAL_DATA.ip || '--';
-  document.getElementById('hdr-nodes').textContent = (DATA.nodes ? DATA.nodes.length : 0) + ' nodes';
+  var totalNodes = DATA.nodes ? DATA.nodes.length : 0;
+  var onlineNodes = DATA.nodes ? DATA.nodes.filter(function(n) {
+    if (n.is_me) return true;
+    if (!n.last_seen || !DATA.timestamp) return false;
+    return (DATA.timestamp - parseInt(n.last_seen)) <= 300;
+  }).length : 0;
+  document.getElementById('hdr-nodes').textContent = onlineNodes + '/' + totalNodes + ' nodes';
   document.getElementById('hdr-time').textContent = DATA.timestamp ? ts(DATA.timestamp) : '--';
 
   // Health
@@ -123,6 +162,22 @@ function updateHeader() {
       : '';
     hdr.onclick = (faults.length || warns.length) ? function() { location.hash = '#mesh'; } : null;
   }
+}
+
+// Open terminal tab targeting a remote node
+function openNodeTerminal(ip, hostname, mode) {
+  window._pendingTermTarget = { ip: ip, hostname: hostname || ip, mode: mode || 'terminal' };
+  window.location.hash = 'terminal';
+}
+
+// Open config tab targeting a specific node (local or remote)
+function openNodeConfig(ip, hostname) {
+  if (LOCAL_DATA && LOCAL_DATA.ip === ip) {
+    window._pendingConfigTarget = null;
+  } else {
+    window._pendingConfigTarget = { ip: ip, hostname: hostname || ip };
+  }
+  window.location.hash = 'config';
 }
 
 // Boot — fetch data before routing so tabs have data on first render

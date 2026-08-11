@@ -132,6 +132,42 @@ func appletInfo(name string) map[string]interface{} {
 	}
 }
 
+func scanLocalApplets() []AppletBrief {
+	entries, err := os.ReadDir(appletsDir)
+	if err != nil {
+		return nil
+	}
+	var out []AppletBrief
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		m := loadManifest(e.Name())
+		if m == nil {
+			continue
+		}
+		svc := m.serviceName()
+		props := unitProps(svc)
+		status := props["ActiveState"]
+		switch status {
+		case "active":
+			status = "running"
+		case "inactive":
+			status = "stopped"
+		case "failed":
+			status = "failed"
+		case "":
+			status = "unknown"
+		}
+		label := m.Label
+		if label == "" {
+			label = m.Name
+		}
+		out = append(out, AppletBrief{Name: m.Name, Label: label, Status: status})
+	}
+	return out
+}
+
 // --- Handlers ---
 
 func apiAppletsList(w http.ResponseWriter, r *http.Request) {

@@ -21,7 +21,7 @@ BATCTL_PATH="/usr/sbin/batctl"
 ELECTION_OUTPUT_FILE="/var/run/mesh_channel_election"
 
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] - TOURGUIDE: $1" | systemd-cat -t tourguide-manager
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - TOURGUIDE: %s\n' -1 "$1" >&2
 }
 
 get_current_freq() {

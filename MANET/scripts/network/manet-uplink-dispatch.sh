@@ -16,9 +16,7 @@ exec 200>"$LOCK_FILE"
 flock -n 200 || exit 0
 
 log() {
-    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] - MANET-UPLINK: $*"
-    echo "$msg" >&2
-    echo "$msg" | systemd-cat -t manet-uplink
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - MANET-UPLINK: %s\n' -1 "$*" >&2
 }
 
 is_upstream_iface() {
@@ -160,7 +158,9 @@ find_working_uplink() {
         has_carrier "$iface" || continue
 
         ip link set "$iface" nomaster 2>/dev/null || true
-        write_networkd_dhcp_config "$iface"
+        if [ ! -f "${NETWORKD_DIR}/20-${iface}.network" ]; then
+            write_networkd_dhcp_config "$iface"
+        fi
         ip=$(wait_for_ipv4 "$iface" 12 || true)
         [ -n "$ip" ] || continue
         iface_default_gw "$iface" >/dev/null || true
@@ -324,6 +324,10 @@ current_uplink_iface() {
 reconcile() {
     local current working
     current=$(current_uplink_iface)
+
+    if [ -n "$current" ] && [ -f "$STATE_FILE" ] && has_carrier "$current" && internet_probe "$current"; then
+        return 0
+    fi
 
     working=$(find_working_uplink || true)
     if [ -n "$working" ]; then

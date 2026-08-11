@@ -1,0 +1,14 @@
+[Unit]
+Description=WPA supplicant (S1G/HaLow) for wlan0
+After=sys-subsystem-net-devices-wlan0.device
+Requires=sys-subsystem-net-devices-wlan0.device
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 3
+ExecStart=/usr/sbin/wpa_supplicant_s1g -c /etc/wpa_supplicant/wpa_supplicant-s1g-wlan0.conf -i wlan0 -D nl80211
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

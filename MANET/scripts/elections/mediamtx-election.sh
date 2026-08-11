@@ -19,7 +19,7 @@ MTX_IPV6_SCRIPT="/usr/local/bin/mtx-ip.sh"
 INCUMBENT_BIAS=10
 
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] - MEDIAMTX-ELECTION: $1" | systemd-cat -t mediamtx-election
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - MEDIAMTX-ELECTION: %s\n' -1 "$1" >&2
 }
 
 # Function to get the second usable IP address from the CIDR (our reserved VIP)

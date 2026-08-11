@@ -8,9 +8,7 @@ exec 200>"$LOCK_FILE"
 flock -n 200 || exit 0
 
 log() {
-    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] - GW-ROUTE-MGR: $*"
-    echo "$msg" >&2
-    echo "$msg" | systemd-cat -t gateway-route-manager
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - GW-ROUTE-MGR: %s\n' -1 "$*" >&2
 }
 
 get_gateway_mac() {

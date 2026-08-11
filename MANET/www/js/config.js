@@ -1,32 +1,73 @@
-// Config tab: view/edit this node's mesh.conf
+// Config tab: view/edit node mesh.conf (local or remote via direct fetch)
 let configInitialized = false;
 let configEditing = false;
 let configData = null;
 let configVoiceData = null;
+let configTarget = null;
+
+function configBaseUrl() {
+  return configTarget ? 'http://' + configTarget : '';
+}
 
 function configActivate() {
   const panel = document.getElementById('tab-config');
   if (!configInitialized) {
-    panel.innerHTML = '<div class="loading-msg">Loading configuration...</div>';
+    panel.innerHTML =
+      '<div class="cfg-target-bar">' +
+        '<select id="cfg-target"></select>' +
+      '</div>' +
+      '<div id="cfg-content"><div class="loading-msg">Loading configuration...</div></div>';
+    document.getElementById('cfg-target').addEventListener('change', function() {
+      configTarget = this.value || null;
+      configEditing = false;
+      configData = null;
+      configVoiceData = null;
+      configFetch();
+    });
     configInitialized = true;
+  }
+  configPopulateTargets();
+  if (window._pendingConfigTarget) {
+    var p = window._pendingConfigTarget;
+    window._pendingConfigTarget = null;
+    configTarget = p.ip;
+    var sel = document.getElementById('cfg-target');
+    if (sel) sel.value = p.ip;
   }
   configFetch();
 }
 
+function configPopulateTargets() {
+  var sel = document.getElementById('cfg-target');
+  if (!sel || !DATA || !DATA.nodes) return;
+  var current = configTarget || '';
+  sel.innerHTML = '<option value="">This Node' + (LOCAL_DATA ? ' (' + (LOCAL_DATA.hostname || LOCAL_DATA.ip || '') + ')' : '') + '</option>';
+  DATA.nodes.forEach(function(n) {
+    if (n.is_me || !n.ip) return;
+    var opt = document.createElement('option');
+    opt.value = n.ip;
+    opt.textContent = (n.hostname || n.ip) + ' (' + n.ip + ')';
+    sel.appendChild(opt);
+  });
+  sel.value = current;
+}
+
 async function configFetch() {
   try {
-    const [adminR, voiceR] = await Promise.all([fetch('/api/admin/status'), fetch('/api/voice')]);
+    var base = configBaseUrl();
+    const [adminR, voiceR] = await Promise.all([fetch(base + '/api/admin/status'), fetch(base + '/api/voice')]);
     configData = await adminR.json();
     configVoiceData = await voiceR.json();
     configRender();
   } catch(e) {
-    document.getElementById('tab-config').innerHTML = '<div class="loading-msg">Failed to load config</div>';
+    document.getElementById('cfg-content').innerHTML =
+      '<div class="loading-msg">Failed to load config' + (configTarget ? ' from ' + escHtml(configTarget) : '') + '</div>';
   }
 }
 
 function configRender() {
   if (!configData) return;
-  const panel = document.getElementById('tab-config');
+  const panel = document.getElementById('cfg-content');
   const cfg = configData.current_config || {};
 
   if (configEditing) {
@@ -40,7 +81,13 @@ function configRenderView(panel, cfg) {
   const sections = [
     { title: 'Node', fields: [
       { label: 'Hostname Prefix', key: 'node_hostname' },
-      { label: 'Full Hostname', computed: () => (LOCAL_DATA && LOCAL_DATA.hostname) || '--' },
+      { label: 'Full Hostname', computed: () => {
+        if (configTarget && DATA && DATA.nodes) {
+          var node = DATA.nodes.find(function(n) { return n.ip === configTarget; });
+          return node ? (node.hostname || '--') : '--';
+        }
+        return (LOCAL_DATA && LOCAL_DATA.hostname) || '--';
+      }},
     ]},
     { title: 'Network', fields: [
       { label: 'Mesh SSID', key: 'mesh_ssid' },
@@ -67,6 +114,9 @@ function configRenderView(panel, cfg) {
       { label: 'NAT Masquerade', key: 'gateway_nat', yesno: true },
       { label: 'MSS Clamping', key: 'gateway_mss_clamp', yesno: true },
       { label: 'Bandwidth Advertisement', key: 'gateway_bandwidth' },
+    ]},
+    { title: 'Access', fields: [
+      { label: 'Admin Key', key: 'admin_password', masked: true },
     ]},
     { title: 'Voice', voice: true, fields: [
       { label: 'PTT Mode', voiceKey: 'ptt_mode' },
@@ -122,7 +172,7 @@ function configRenderEdit(panel, cfg) {
     { label: 'MediaMTX', key: 'mtx', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Mumble', key: 'mumble', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
-    { label: 'Admin Password', key: 'admin_password', type: 'password' },
+    { label: 'Admin Key', key: 'admin_password', type: 'password' },
     { section: 'Gateway' },
     { label: 'Gateway Enabled', key: 'gateway', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}], hint: 'Allow this node to act as a mesh gateway' },
     { label: 'NAT Masquerade', key: 'gateway_nat', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
@@ -140,7 +190,7 @@ function configRenderEdit(panel, cfg) {
     { label: 'Interface', key: 'voice_iface', type: 'text', voiceKey: 'interface', fallback: 'br0' },
   ];
 
-  let html = '<div class="card"><div class="cfg-section-title">Edit Configuration</div>';
+  let html = '<div class="card"><div class="cfg-section-title">Edit Configuration' + (configTarget ? ' — ' + escHtml(configTarget) : '') + '</div>';
   fields.forEach(f => {
     if (f.section) {
       html += '</div><div class="card"><div class="cfg-section-title">' + f.section + '</div>';
@@ -181,7 +231,13 @@ function configRenderEdit(panel, cfg) {
   const hostnameInput = document.getElementById('cfg-f-node_hostname');
   const ssidInput = document.getElementById('cfg-f-mesh_ssid');
   const preview = document.getElementById('cfg-hostname-preview');
-  const macSuffix = (LOCAL_DATA && LOCAL_DATA.hostname) ? LOCAL_DATA.hostname.split('-').pop() : '????';
+  var macSuffix = '????';
+  if (configTarget && DATA && DATA.nodes) {
+    var node = DATA.nodes.find(function(n) { return n.ip === configTarget; });
+    if (node && node.hostname) macSuffix = node.hostname.split('-').pop();
+  } else if (LOCAL_DATA && LOCAL_DATA.hostname) {
+    macSuffix = LOCAL_DATA.hostname.split('-').pop();
+  }
   function updateHostnamePreview() {
     const prefix = hostnameInput.value || '???';
     const ssid = ssidInput.value || '???';
@@ -210,10 +266,11 @@ async function configSave() {
     interface: (document.getElementById('cfg-f-voice_iface') || {}).value || 'br0',
   };
 
+  var base = configBaseUrl();
   try {
     const [meshR, voiceR] = await Promise.all([
-      fetch('/api/admin/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({config}) }),
-      fetch('/api/voice', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(voiceCfg) })
+      fetch(base + '/api/admin/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({config}) }),
+      fetch(base + '/api/voice', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(voiceCfg) })
     ]);
     const meshResult = await meshR.json();
     const voiceResult = await voiceR.json();

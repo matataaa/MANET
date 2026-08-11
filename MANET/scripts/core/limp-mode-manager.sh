@@ -12,7 +12,7 @@ LIMP_MODE_CONSENSUS=0.5
 STALE_NODE_THRESHOLD=600
 
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] - LIMP-MODE: $1" | systemd-cat -t limp-mode-manager
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - LIMP-MODE: %s\n' -1 "$1" >&2
 }
 
 mesh_iface_24="$(cat /var/lib/mesh_24_if 2>/dev/null || true)"

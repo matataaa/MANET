@@ -9,7 +9,7 @@ REGISTRY_STATE_FILE="/var/run/mesh_node_registry"
 STATE_FILE="/var/run/initial_time_synced"
 
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] - ONE-SHOT-SYNC: $1" | systemd-cat -t time-sync
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - ONE-SHOT-SYNC: %s\n' -1 "$1" >&2
 }
 
 # If we've already synced on this boot, do nothing.

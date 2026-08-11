@@ -42,7 +42,7 @@ CHANNELS_5_0="5200 5220 5240 5745 5765 5785 5805 5825"
 
 # --- Helper Functions ---
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] - CHAN-ELECTION: $1" | systemd-cat -t channel-election
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - CHAN-ELECTION: %s\n' -1 "$1" >&2
 }
 
 # Get the currently configured frequency for an interface

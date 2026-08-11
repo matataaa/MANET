@@ -39,7 +39,7 @@ LAST_PUBLISH_TIME=0
 PUBLISH_INTERVAL=180  # Publish every 3 minutes
 
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] - NODE-MGR-STATIC: $1" >&2
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - NODE-MGR-STATIC: %s\n' -1 "$1" >&2
 }
 
 
@@ -54,7 +54,7 @@ GW_CHECK_INTERVAL=60
 
 detect_and_update_gateway_state() {
     local NOW
-    NOW=$(date +%s)
+    printf -v NOW '%(%s)T' -1
 
     local time_since_check=$(( NOW - LAST_GW_CHECK ))
     if [ "$time_since_check" -lt "$GW_CHECK_INTERVAL" ] && [ -f "$GATEWAY_STATE_FILE" ]; then
@@ -71,16 +71,9 @@ get_current_freq() {
 }
 
 radio_iface_enabled() {
-    python3 - "$1" <<'PY'
-import json, sys
-iface = sys.argv[1]
-try:
-    with open('/var/lib/mesh_radio_state.json') as f:
-        state = json.load(f).get('desired', {}).get(iface, 'up')
-except Exception:
-    state = 'up'
-sys.exit(1 if state == 'down' else 0)
-PY
+    local state_file="/var/lib/mesh_radio_state.json"
+    [ -f "$state_file" ] || return 0
+    ! grep -q "\"$1\"[[:space:]]*:[[:space:]]*\"down\"" "$state_file"
 }
 
 collect_radio_mcs() {
@@ -191,6 +184,8 @@ is_hosting_mumble_service() {
 log "Starting Mesh Node Manager (Static Channel Mode)."
 log "Static channels: 2.4G=${STATIC_FREQ_2_4}, 5G=${STATIC_FREQ_5_0}"
 MY_MAC=$(cat "/sys/class/net/${CONTROL_IFACE}/address")
+MY_HOSTNAME=$(hostname)
+CACHED_SYNCTHING_ID=""
 log "Node MAC: ${MY_MAC}"
 
 # Ensure we're on static channels at startup
@@ -198,7 +193,7 @@ ensure_static_channels
 
 # === MAIN LOOP ===
 while true; do
-    NOW=$(date +%s)
+    printf -v NOW '%(%s)T' -1
 
     # === ALFRED RADIO STATE SYNC ===
     # Global radio up/down changes are staged through Alfred and only applied
@@ -226,8 +221,11 @@ while true; do
     if [ $time_since_publish -ge $PUBLISH_INTERVAL ]; then
         log "Publishing status to Alfred..."
         
-        HOSTNAME=$(hostname)
-        SYNCTHING_ID=$(runuser -u radio -- syncthing --device-id 2>/dev/null || echo "")
+        HOSTNAME="$MY_HOSTNAME"
+        if [ -z "$CACHED_SYNCTHING_ID" ]; then
+            CACHED_SYNCTHING_ID=$(runuser -u radio -- syncthing --device-id 2>/dev/null || echo "")
+        fi
+        SYNCTHING_ID="$CACHED_SYNCTHING_ID"
         TQ_AVG=$("$BATCTL_PATH" o 2>/dev/null | awk 'NR>1 {sum+=$3} END {if (NR>1) printf "%.2f", sum/(NR-1); else print 0}')
         
         # Service flags
@@ -275,7 +273,7 @@ while true; do
         [ -n "$IS_NTP_FLAG" ] && ENCODER_ARGS+=("$IS_NTP_FLAG")
         [ -n "$IS_MEDIAMTX_FLAG" ] && ENCODER_ARGS+=("$IS_MEDIAMTX_FLAG")
         [ -n "$IS_MUMBLE_FLAG" ] && ENCODER_ARGS+=("$IS_MUMBLE_FLAG")
-        BATT_PCT=$(python3 -c "import json;d=json.load(open('/run/battery_status.json'));print(d['percentage'])" 2>/dev/null)
+        BATT_PCT=$(grep -oP '"percentage"\s*:\s*\K[0-9]+' /run/battery_status.json 2>/dev/null)
         [ -n "$BATT_PCT" ] && ENCODER_ARGS+=("--battery-percentage" "$BATT_PCT")
         UPTIME_SECS=$(awk '{print int($1)}' /proc/uptime 2>/dev/null)
         [ -n "$UPTIME_SECS" ] && ENCODER_ARGS+=("--uptime-seconds" "$UPTIME_SECS")
@@ -284,18 +282,10 @@ while true; do
 
         # --- GPS Location ---
         GPS_LAT=""; GPS_LON=""; GPS_ALT=""
-        if [ -f /run/gps_status.json ]; then
-            eval "$(python3 -c "
-import json, sys
-try:
-    d = json.load(open('/run/gps_status.json'))
-    if d.get('has_fix'):
-        print('GPS_LAT=' + str(d['latitude']))
-        print('GPS_LON=' + str(d['longitude']))
-        print('GPS_ALT=' + str(d['altitude']))
-except Exception:
-    pass
-" 2>/dev/null)"
+        if [ -f /run/gps_status.json ] && grep -q '"has_fix"\s*:\s*true' /run/gps_status.json 2>/dev/null; then
+            GPS_LAT=$(grep -oP '"latitude"\s*:\s*\K[-0-9.]+' /run/gps_status.json 2>/dev/null)
+            GPS_LON=$(grep -oP '"longitude"\s*:\s*\K[-0-9.]+' /run/gps_status.json 2>/dev/null)
+            GPS_ALT=$(grep -oP '"altitude"\s*:\s*\K[-0-9.]+' /run/gps_status.json 2>/dev/null)
         fi
         [ -n "$GPS_LAT" ] && ENCODER_ARGS+=("--latitude" "$GPS_LAT" "--longitude" "$GPS_LON" "--altitude" "$GPS_ALT")
 

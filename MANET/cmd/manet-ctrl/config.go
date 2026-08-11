@@ -58,6 +58,13 @@ type Node struct {
 	BestLink     map[string]interface{} `json:"best_link"`
 	HopCount     *int        `json:"hop_count"`
 	LastSeen     string      `json:"last_seen"`
+	Applets      []AppletBrief `json:"applets,omitempty"`
+}
+
+type AppletBrief struct {
+	Name   string `json:"name"`
+	Label  string `json:"label"`
+	Status string `json:"status"`
 }
 
 type Edge struct {

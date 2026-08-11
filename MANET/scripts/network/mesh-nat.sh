@@ -7,9 +7,7 @@ LEGACY_GATEWAY_STATE=/var/run/mesh-gateway.state
 UPSTREAM_IFACE_FILE=/var/run/upstream_iface
 
 log() {
-    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] - MESH-NAT: $*"
-    echo "$msg" >&2
-    echo "$msg" | systemd-cat -t mesh-nat
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - MESH-NAT: %s\n' -1 "$*" >&2
 }
 
 get_upstream_iface() {
