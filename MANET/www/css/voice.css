@@ -2,9 +2,7 @@
   display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
   max-width: 900px;
 }
-.voice-client-card {
-  display: flex; flex-direction: column;
-}
+.voice-client-card { display: flex; flex-direction: column; }
 .voice-status-card .status-row {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 14px; border-bottom: 1px solid var(--border2);
@@ -17,18 +15,60 @@
 .voice-status-card .status-value {
   flex: 1; font-size: 12px; color: var(--text);
 }
+
+/* Dots */
 .voice-dot {
   width: 10px; height: 10px; border-radius: 50%; display: inline-block;
   margin-right: 6px; transition: background .1s, box-shadow .1s;
 }
 .voice-dot.on  { background: var(--good); box-shadow: 0 0 8px rgba(34,197,94,.4); }
 .voice-dot.off { background: var(--muted); }
-.voice-dot.tx  { background: #ef4444; box-shadow: 0 0 12px rgba(239,68,68,.6); animation: voice-pulse .6s infinite alternate; }
-.voice-dot.rx  { background: #3b82f6; box-shadow: 0 0 12px rgba(59,130,246,.6); animation: voice-pulse .6s infinite alternate; }
+.voice-dot.tx  { background: #ef4444; box-shadow: 0 0 12px rgba(239,68,68,.6); animation: voice-pulse .5s infinite alternate; }
+.voice-dot.rx  { background: #3b82f6; box-shadow: 0 0 12px rgba(59,130,246,.6); animation: voice-pulse .5s infinite alternate; }
 
 @keyframes voice-pulse {
   from { opacity: 1; }
-  to   { opacity: .5; }
+  to   { opacity: .4; }
+}
+
+/* Hardware device row */
+.voice-hw-device-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border2);
+}
+.voice-hw-device-label {
+  flex: 1; font-size: 13px; font-weight: 600; color: var(--text);
+}
+.voice-hw-device-status {
+  font-size: 11px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase;
+}
+.voice-hw-device-status.connected { color: var(--good); }
+.voice-hw-device-status.disconnected { color: var(--muted); }
+
+/* Hardware PTT indicator */
+.voice-hw-ptt-wrap {
+  display: flex; justify-content: center; padding: 20px 16px;
+}
+.voice-hw-ptt-indicator {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.voice-hw-ptt-dot {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: var(--muted);
+  transition: all .2s;
+}
+.voice-hw-ptt-indicator.active .voice-hw-ptt-dot {
+  background: #ef4444;
+  box-shadow: 0 0 30px rgba(239,68,68,.6), 0 0 60px rgba(239,68,68,.3);
+  animation: voice-pulse .5s infinite alternate;
+}
+.voice-hw-ptt-label {
+  font-size: 12px; font-weight: 600; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--muted);
+  transition: color .2s;
+}
+.voice-hw-ptt-indicator.active .voice-hw-ptt-label {
+  color: #ef4444;
 }
 
 /* PTT button */
@@ -46,18 +86,13 @@
   background: var(--card-bg, #1a1a2e);
   color: var(--text);
   cursor: pointer;
-  user-select: none;
-  -webkit-user-select: none;
+  user-select: none; -webkit-user-select: none;
   touch-action: none;
   transition: all .1s;
 }
-.voice-ptt-btn:hover {
-  border-color: var(--accent, #3b82f6);
-}
+.voice-ptt-btn:hover { border-color: var(--accent, #3b82f6); }
 .voice-ptt-btn.active, .voice-ptt-btn:active {
-  background: #ef4444;
-  border-color: #ef4444;
-  color: #fff;
+  background: #ef4444; border-color: #ef4444; color: #fff;
   box-shadow: 0 0 30px rgba(239,68,68,.5);
   transform: scale(0.98);
 }
@@ -65,55 +100,47 @@
 /* Indicators */
 .voice-indicators {
   display: flex; gap: 16px; justify-content: center;
-  padding: 12px 16px;
-  font-size: 12px; color: var(--text);
+  padding: 12px 16px; font-size: 12px; color: var(--text);
 }
-.voice-ind {
-  display: flex; align-items: center; gap: 4px;
-}
+.voice-ind { display: flex; align-items: center; gap: 4px; }
 
-/* Connect state */
+/* Connect/disconnect */
 .voice-connect-wrap {
   flex: 1; display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   padding: 32px 16px; gap: 12px;
 }
 .voice-connect-btn {
-  padding: 14px 32px;
-  font-size: 13px; font-weight: 600;
-  border: 2px solid var(--accent, #3b82f6);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--accent, #3b82f6);
-  cursor: pointer;
-  transition: all .15s;
+  padding: 14px 32px; font-size: 13px; font-weight: 600;
+  border: 2px solid var(--accent, #3b82f6); border-radius: 8px;
+  background: transparent; color: var(--accent, #3b82f6);
+  cursor: pointer; transition: all .15s;
 }
-.voice-connect-btn:hover {
-  background: var(--accent, #3b82f6);
-  color: #fff;
-}
-.voice-connect-hint {
-  font-size: 11px; color: var(--muted); text-align: center;
-}
-.voice-unsupported {
-  padding: 24px; text-align: center;
-  font-size: 12px; color: var(--muted);
-}
-.voice-disconnect-wrap {
-  display: flex; justify-content: center; padding: 8px 16px 16px;
-}
-.voice-svc-controls {
-  display: flex; gap: 8px; padding: 12px 14px;
-}
-.voice-btn-stop {
-  background: var(--danger, #ef4444); color: #fff; border: none;
-}
+.voice-connect-btn:hover { background: var(--accent, #3b82f6); color: #fff; }
+.voice-connect-hint { font-size: 11px; color: var(--muted); text-align: center; }
+.voice-disconnect-wrap { display: flex; justify-content: center; padding: 8px 16px 16px; }
+.voice-svc-controls { display: flex; gap: 8px; padding: 12px 14px; }
+.voice-btn-stop { background: var(--danger, #ef4444); color: #fff; border: none; }
 .voice-btn-stop:hover { background: #dc2626; }
 .voice-config-hint {
   padding: 8px 14px; font-size: 11px; color: var(--muted);
   border-top: 1px solid var(--border2);
 }
 .voice-config-hint a { color: var(--accent, #3b82f6); }
+
+/* HTTPS warning */
+.voice-https-warn {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 16px; margin: 12px;
+  background: rgba(234,179,8,.12); border: 1px solid rgba(234,179,8,.3);
+  border-radius: 8px; text-align: center;
+}
+.voice-https-warn-icon { font-size: 24px; line-height: 1; }
+.voice-https-warn-text { font-size: 12px; color: #eab308; }
+.voice-https-link {
+  font-size: 12px; font-weight: 600; color: var(--accent, #3b82f6);
+  text-decoration: underline;
+}
 
 @media (max-width: 768px) {
   .voice-layout { grid-template-columns: 1fr; }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -221,6 +222,9 @@ func serveStatic(webRoot string) http.HandlerFunc {
 
 func main() {
 	port := flag.String("port", "80", "listen port")
+	tlsPort := flag.String("tls-port", "443", "HTTPS listen port")
+	tlsCert := flag.String("tls-cert", "/etc/manet/tls/cert.pem", "TLS certificate file")
+	tlsKey := flag.String("tls-key", "/etc/manet/tls/key.pem", "TLS key file")
 	webRoot := flag.String("webroot", "/usr/local/share/manet/www", "static files directory")
 	flag.Parse()
 
@@ -278,6 +282,10 @@ func main() {
 	// Auth
 	mux.HandleFunc("/api/perf-auth", apiPerfAuth)
 
+	// Applets
+	mux.HandleFunc("/api/applets", apiAppletsRouter)
+	mux.HandleFunc("/api/applets/", apiAppletsRouter)
+
 	// Static files (SPA fallback)
 	mux.HandleFunc("/", serveStatic(*webRoot))
 
@@ -288,6 +296,24 @@ func main() {
 		log.Println("shutting down")
 		os.Exit(0)
 	}()
+
+	if err := ensureTLSCert(*tlsCert, *tlsKey); err != nil {
+		log.Printf("TLS cert generation failed: %v — HTTPS disabled", err)
+	} else {
+		go func() {
+			tlsSrv := &http.Server{
+				Addr:    ":" + *tlsPort,
+				Handler: mux,
+				TLSConfig: &tls.Config{
+					MinVersion: tls.VersionTLS12,
+				},
+			}
+			log.Printf("manet-ctrl HTTPS on :%s", *tlsPort)
+			if err := tlsSrv.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil {
+				log.Printf("HTTPS listener failed: %v", err)
+			}
+		}()
+	}
 
 	log.Printf("manet-ctrl listening on :%s webroot=%s", *port, *webRoot)
 	log.Fatal(http.ListenAndServe(":"+*port, mux))

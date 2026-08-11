@@ -1377,7 +1377,7 @@ Requires=batman-enslave.service
 [Service]
 Type=simple
 ExecStartPre=/bin/bash -c 'for i in {1..20}; do if ip -6 addr show dev bat0 | grep "inet6 fe80::" | grep -qv "tentative"; then exit 0; fi; sleep 1; done; echo "bat0 link-local IPv6 address not ready" >&2; exit 1'
-ExecStart=/usr/sbin/alfred -m -i br0 -f
+ExecStart=/usr/sbin/alfred -m -i bat0 -b br0 -f
 UMask=0000
 Restart=always
 RestartSec=10
@@ -1702,15 +1702,42 @@ systemctl enable battery-reader.service
 
 apt-get install -y gpsd gpsd-clients 2>/dev/null || true
 
-# /etc/default/gpsd — hotplug via gpsd's own udev rules (USBAUTO=true).
-# DEVICES="" means gpsd starts without a fixed device path and picks up
-# any GPS device added after boot through its udev integration.
-cat > /etc/default/gpsd <<'GPSD_CONF'
+# Detect UART GPS (e.g. Quectel L76K on WM1302 Pi Hat).
+# The hat connects GPS TX/RX to GPIO 14/15 (/dev/ttyAMA0).
+# GPIO 12 = GPS_WAKE_UP (active high brings GPS out of standby).
+UART_GPS_DEV=""
+if [ -e /dev/ttyAMA0 ]; then
+    # Wake the GPS module
+    echo 12 > /sys/class/gpio/export 2>/dev/null || true
+    echo out > /sys/class/gpio/gpio12/direction 2>/dev/null || true
+    echo 1 > /sys/class/gpio/gpio12/value 2>/dev/null || true
+    sleep 1
+
+    # Check for NMEA data on the UART (L76K defaults to 9600 baud)
+    stty -F /dev/ttyAMA0 9600 raw -echo 2>/dev/null || true
+    if timeout 3 cat /dev/ttyAMA0 2>/dev/null | grep -q '^\$G'; then
+        UART_GPS_DEV="/dev/ttyAMA0"
+        echo " > UART GPS detected on /dev/ttyAMA0"
+    fi
+fi
+
+# /etc/default/gpsd — configure for detected GPS device or USB hotplug.
+if [ -n "$UART_GPS_DEV" ]; then
+    cat > /etc/default/gpsd <<GPSD_CONF
+DEVICES="$UART_GPS_DEV"
+GPSD_OPTIONS="-n"
+START_DAEMON="true"
+USBAUTO="true"
+GPSD_CONF
+    echo " > gpsd configured for UART GPS: $UART_GPS_DEV"
+else
+    cat > /etc/default/gpsd <<'GPSD_CONF'
 DEVICES=""
 GPSD_OPTIONS="-n"
 START_DAEMON="true"
 USBAUTO="true"
 GPSD_CONF
+fi
 
 # Patch chrony configs — add SHM 0 refclock and IPv4 mesh allow if absent.
 # ethernet-autodetect.sh can replace chrony.conf from these templates, so all

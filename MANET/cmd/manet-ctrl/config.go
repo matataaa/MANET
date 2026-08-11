@@ -188,12 +188,17 @@ type ServiceInfo struct {
 }
 
 type VoiceStatus struct {
-	Active    bool   `json:"active"`
-	Uptime    string `json:"uptime"`
-	PTTMode   string `json:"ptt_mode"`
-	McastAddr string `json:"mcast_addr"`
-	Port      string `json:"port"`
-	Interface string `json:"interface"`
+	Active       bool   `json:"active"`
+	Uptime       string `json:"uptime"`
+	PTTMode      string `json:"ptt_mode"`
+	McastAddr    string `json:"mcast_addr"`
+	Port         string `json:"port"`
+	Interface    string `json:"interface"`
+	PTTActive    bool   `json:"ptt_active"`
+	PTTConnected bool   `json:"ptt_connected"`
+	PTTDevice    string `json:"ptt_device"`
+	TX           bool   `json:"tx"`
+	RX           bool   `json:"rx"`
 }
 
 type AdminStatus struct {

@@ -29,15 +29,28 @@ function onTabActivated(tab) {
   else if (tab === 'services') servicesActivate();
   else if (tab === 'mesh') meshActivate();
   else if (tab === 'terminal') terminalActivate();
+  else if (tab === 'applets') appletsActivate();
   else if (tab === 'docs') docsActivate();
 }
 
 // Hash routing
 function routeFromHash() {
   if (!booted) return;
-  const hash = window.location.hash.replace('#', '') || 'dashboard';
-  const valid = ['dashboard', 'nodes', 'config', 'hardware', 'voice', 'perf', 'services', 'mesh', 'terminal', 'docs'];
-  switchTab(valid.includes(hash) ? hash : 'dashboard');
+  const raw = window.location.hash.replace('#', '') || 'dashboard';
+  const parts = raw.split('/');
+  const tab = parts[0];
+  const sub = parts.slice(1).join('/');
+  const valid = ['dashboard', 'nodes', 'config', 'hardware', 'voice', 'perf', 'services', 'mesh', 'terminal', 'applets', 'docs'];
+  switchTab(valid.includes(tab) ? tab : 'dashboard');
+  if (tab === 'applets' && sub) {
+    var subParts = sub.split('/');
+    var appletName = decodeURIComponent(subParts[0]);
+    var appletView = subParts[1] || '';
+    setTimeout(function() {
+      if (appletView === 'config') openAppletConfig(appletName);
+      else openApplet(appletName);
+    }, 100);
+  }
 }
 
 window.addEventListener('hashchange', routeFromHash);
@@ -74,6 +87,7 @@ function updateHeader() {
   if (!DATA || !LOCAL_DATA) return;
 
   document.getElementById('hdr-hostname').textContent = LOCAL_DATA.hostname || '--';
+  if (LOCAL_DATA.hostname) document.title = 'Mesh: ' + LOCAL_DATA.hostname;
   document.getElementById('hdr-ip').textContent = LOCAL_DATA.ip || '--';
   document.getElementById('hdr-nodes').textContent = (DATA.nodes ? DATA.nodes.length : 0) + ' nodes';
   document.getElementById('hdr-time').textContent = DATA.timestamp ? ts(DATA.timestamp) : '--';

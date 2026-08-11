@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 
 	evdev "github.com/gvalkov/golang-evdev"
 	hid "github.com/sstallion/go-hid"
@@ -93,53 +92,59 @@ func findEvdevGPIO() (*evdev.InputDevice, error) {
 // === OpenVLM HID PTT ===
 
 const (
-	openvlmVID        uint16 = 0x0D8C
-	openvlmPID        uint16 = 0x0012
-	openvlmReportSize        = 5
-	openvlmGPIO3Mask  byte   = 0x04
+	openvlmVID         uint16 = 0x0D8C
+	openvlmPID         uint16 = 0x0012
+	openvlmReportSize         = 5
+	openvlmGPIO3Mask   byte   = 0x04
+	openvlmPollSeconds        = 2
 )
 
-// openvlmPTTLoop reads HID reports from an OpenVLM USB audio dongle
-// and sends PTT state changes based on GPIO3.
+// openvlmPTTLoop handles USB hot-plug: retries on disconnect, reports connection state.
 func openvlmPTTLoop(ctx context.Context, ch chan<- bool) {
 	if err := hid.Init(); err != nil {
-		log.Printf("OpenVLM PTT: hid init failed: %v (falling back to always-on)", err)
-		ch <- true
+		log.Printf("OpenVLM PTT: hid init failed: %v", err)
 		return
 	}
+	defer hid.Exit()
 
-	dev, err := hid.Open(openvlmVID, openvlmPID, "")
-	if err != nil {
-		log.Printf("OpenVLM PTT: device not found: %v (falling back to always-on)", err)
-		hid.Exit()
-		ch <- true
-		return
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		dev, err := hid.Open(openvlmVID, openvlmPID, "")
+		if err != nil {
+			pttState.setConnected(false)
+			select {
+			case <-ctx.Done():
+				return
+			case <-timerChan(openvlmPollSeconds * 1000):
+				continue
+			}
+		}
+
+		log.Printf("OpenVLM PTT: connected (VID=0x%04X PID=0x%04X)", openvlmVID, openvlmPID)
+		pttState.setConnected(true)
+		detectALSACard()
+
+		openvlmReadLoop(ctx, dev, ch)
+
+		dev.Close()
+		pttState.setConnected(false)
+		ch <- false
+		log.Println("OpenVLM PTT: disconnected, waiting for reconnect...")
 	}
+}
 
-	var closeOnce sync.Once
-	closeDev := func() {
-		closeOnce.Do(func() {
-			dev.Close()
-			hid.Exit()
-		})
-	}
-
-	go func() {
-		<-ctx.Done()
-		closeDev()
-	}()
-
-	defer closeDev()
-
-	log.Printf("OpenVLM PTT: connected (VID=0x%04X PID=0x%04X)", openvlmVID, openvlmPID)
-
-	// Auto-detect ALSA card for the OpenVLM device
-	detectALSACard()
-
+func openvlmReadLoop(ctx context.Context, dev *hid.Device, ch chan<- bool) {
 	buf := make([]byte, openvlmReportSize)
 	prevGPIO3 := false
 
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+
 		n, err := dev.Read(buf)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -151,7 +156,7 @@ func openvlmPTTLoop(ctx context.Context, ch chan<- bool) {
 
 		payloadStart := 0
 		if n >= openvlmReportSize {
-			payloadStart = 1 // skip report ID byte
+			payloadStart = 1
 		}
 		if n < payloadStart+2 {
 			continue

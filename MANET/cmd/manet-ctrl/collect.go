@@ -780,6 +780,26 @@ func getVoiceStatus() VoiceStatus {
 			vs.Uptime = m[1]
 		}
 	}
+	if data, err := os.ReadFile("/run/mesh-voice-ptt.json"); err == nil {
+		var ps struct {
+			Active    bool   `json:"ptt_active"`
+			Connected bool   `json:"ptt_connected"`
+			Device    string `json:"ptt_device"`
+			TX        bool   `json:"tx"`
+			RX        bool   `json:"rx"`
+		}
+		if json.Unmarshal(data, &ps) == nil {
+			vs.PTTActive = ps.Active
+			vs.PTTConnected = ps.Connected
+			vs.PTTDevice = ps.Device
+			vs.TX = ps.TX
+			vs.RX = ps.RX
+		}
+	} else if vs.PTTMode == "always" {
+		vs.PTTActive = true
+		vs.PTTConnected = true
+		vs.PTTDevice = "always"
+	}
 	return vs
 }
 

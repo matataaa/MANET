@@ -5,7 +5,7 @@ Wants=batman-enslave.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/mesh-voice -iface br0 -ptt always
+ExecStart=/usr/local/bin/mesh-voice -iface br0 -ptt openvlm
 Restart=on-failure
 RestartSec=5
 

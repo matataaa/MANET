@@ -237,7 +237,7 @@ function termConnectWs(target, session) {
     if (session.password) params.set('password', session.password);
   }
 
-  var wsUrl = 'ws://' + location.hostname + ':' + TERM_PORT + '/ws/terminal';
+  var wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.hostname + ':' + TERM_PORT + '/ws/terminal';
   if (params.toString()) wsUrl += '?' + params;
 
   statusEl.textContent = 'Connecting...';
@@ -293,7 +293,7 @@ function termConnectLogs() {
   if (unit) params.set('unit', unit);
   params.set('lines', '200');
 
-  var wsUrl = 'ws://' + location.hostname + ':' + TERM_PORT + '/ws/logs';
+  var wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.hostname + ':' + TERM_PORT + '/ws/logs';
   if (params.toString()) wsUrl += '?' + params;
 
   statusEl.textContent = 'Connecting...';

@@ -25,6 +25,30 @@ function dashboardUpdate() {
   topoUpdate(DATA);
   renderDashNodeList(DATA.nodes);
   renderThrottleWarning();
+  renderDashApplets();
+}
+
+function renderDashApplets() {
+  if (document.getElementById('dash-applets')) return;
+  fetch('/api/applets').then(function(r) { return r.json(); }).then(function(d) {
+    var applets = (d.applets || []).filter(function(a) { return a.has_frontend; });
+    if (!applets.length) return;
+    var side = document.querySelector('.dash-side');
+    if (!side) return;
+    var section = document.createElement('div');
+    section.id = 'dash-applets';
+    section.className = 'dash-applets-section';
+    section.innerHTML = '<div class="card-header">APPLETS</div>' +
+      applets.map(function(a) {
+        var dot = a.status === 'running' ? 'on' : 'off';
+        return '<div class="dash-applet-row" onclick="openApplet(\'' + escHtml(a.name) + '\')">' +
+          '<span class="voice-dot ' + dot + '"></span>' +
+          '<span class="dash-applet-name">' + escHtml(a.name) + '</span>' +
+          '<span class="dash-applet-launch">Open</span>' +
+        '</div>';
+      }).join('');
+    side.appendChild(section);
+  }).catch(function() {});
 }
 
 function renderThrottleWarning() {

@@ -1,0 +1,7 @@
+# Mesh Chat applet configuration
+# Multicast group for chat messages (must match on all nodes)
+MULTICAST_ADDR=239.255.50.50:9800
+# Network interface to bind multicast listener
+INTERFACE=br0
+# Local HTTP/WebSocket port (proxied by manet-ctrl)
+PORT=9800

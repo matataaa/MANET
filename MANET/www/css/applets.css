@@ -1,0 +1,62 @@
+#tab-applets { padding: 20px; }
+.applets-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.applets-header h2 { font-size: 18px; font-weight: 700; }
+.applet-upload-btn {
+  background: var(--accent, #3b82f6); color: #fff; border: none; border-radius: 6px;
+  padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.applet-upload-btn:hover { filter: brightness(1.1); }
+.applet-list { display: flex; flex-direction: column; gap: 12px; }
+.applet-card {
+  background: var(--surface, #1a1d27); border: 1px solid var(--border, #2a2d3a);
+  border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px;
+}
+.applet-card-header { display: flex; justify-content: space-between; align-items: flex-start; }
+.applet-card-info { display: flex; flex-direction: column; gap: 4px; }
+.applet-card-name { font-size: 16px; font-weight: 700; color: var(--text, #e4e4e7); }
+.applet-card-desc { font-size: 13px; color: var(--muted, #6b7280); }
+.applet-card-meta { font-size: 11px; color: var(--muted, #6b7280); display: flex; gap: 12px; }
+.applet-card-status { display: flex; align-items: center; gap: 6px; }
+.applet-status-dot { width: 8px; height: 8px; border-radius: 50%; }
+.applet-status-dot.running { background: #22c55e; }
+.applet-status-dot.stopped { background: #6b7280; }
+.applet-status-dot.failed { background: #ef4444; }
+.applet-status-label { font-size: 12px; font-weight: 600; }
+.applet-card-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.applet-card-actions button {
+  padding: 5px 12px; border-radius: 5px; font-size: 12px; font-weight: 600;
+  border: 1px solid var(--border, #2a2d3a); background: transparent;
+  color: var(--text, #e4e4e7); cursor: pointer;
+}
+.applet-card-actions button:hover { background: var(--border, #2a2d3a); }
+.applet-card-actions button.danger { color: #ef4444; border-color: #ef4444; }
+.applet-card-actions button.danger:hover { background: #7f1d1d; }
+.applet-card-actions button.primary { color: var(--accent, #3b82f6); border-color: var(--accent, #3b82f6); }
+.applet-card-actions button.primary:hover { background: rgba(59,130,246,.15); }
+.applet-logs {
+  background: var(--bg, #0f1117); border: 1px solid var(--border, #2a2d3a);
+  border-radius: 6px; padding: 12px; font-family: monospace; font-size: 11px;
+  max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  color: var(--muted, #6b7280); display: none;
+}
+.applet-logs.visible { display: block; }
+.applet-empty {
+  text-align: center; padding: 60px 20px; color: var(--muted, #6b7280); font-size: 14px;
+}
+.applet-iframe-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1000;
+  background: var(--bg, #0f1117); display: flex; flex-direction: column;
+}
+.applet-iframe-bar {
+  padding: 10px 16px; display: flex; justify-content: space-between; align-items: center;
+  border-bottom: 1px solid var(--border, #2a2d3a); background: var(--surface, #1a1d27);
+}
+.applet-iframe-bar h3 { font-size: 14px; font-weight: 600; }
+.applet-iframe-close {
+  background: var(--border, #2a2d3a); color: var(--text, #e4e4e7); border: none;
+  border-radius: 5px; padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.applet-iframe-overlay iframe { flex: 1; border: none; width: 100%; }
+.upload-status { margin-top: 8px; font-size: 13px; }
+.upload-status.ok { color: #22c55e; }
+.upload-status.err { color: #ef4444; }

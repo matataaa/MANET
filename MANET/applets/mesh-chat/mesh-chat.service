@@ -1,0 +1,16 @@
+[Unit]
+Description=MANET Applet: Mesh Chat
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/share/manet/applets/mesh-chat/mesh-chat -config /etc/mesh-chat.conf
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mesh-chat
+
+[Install]
+WantedBy=multi-user.target

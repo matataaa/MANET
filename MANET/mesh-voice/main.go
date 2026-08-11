@@ -102,14 +102,21 @@ func run(ctx context.Context, cfg Config) error {
 	var broadcasting atomic.Bool
 	var remoteActive atomic.Bool
 
+	// PTT state file
+	pttState.init(cfg.PTTSource)
+	defer pttState.cleanup()
+
 	// PTT source
 	pttCh := make(chan bool, 4)
 	switch cfg.PTTSource {
 	case "always":
 		broadcasting.Store(true)
+		pttState.setActive(true)
+		pttState.setConnected(true)
 		log.Println("PTT: always-on (open mic)")
 	case "gpio":
 		go gpioPTTLoop(ctx, cfg.GPIOKey, pttCh)
+		pttState.setConnected(true)
 		log.Printf("PTT: GPIO evdev (key=%s)", cfg.GPIOKey)
 	case "openvlm":
 		go openvlmPTTLoop(ctx, pttCh)
@@ -117,6 +124,8 @@ func run(ctx context.Context, cfg Config) error {
 	case "vox":
 		log.Println("PTT: VOX (not yet implemented, using always-on)")
 		broadcasting.Store(true)
+		pttState.setActive(true)
+		pttState.setConnected(true)
 	default:
 		return fmt.Errorf("unknown PTT source: %s", cfg.PTTSource)
 	}
@@ -128,9 +137,13 @@ func run(ctx context.Context, cfg Config) error {
 			case down := <-pttCh:
 				if down && !remoteActive.Load() {
 					broadcasting.Store(true)
+					pttState.setActive(true)
+					pttState.setTX(true)
 					log.Println("TX: start")
 				} else {
 					broadcasting.Store(false)
+					pttState.setActive(false)
+					pttState.setTX(false)
 					log.Println("TX: stop")
 				}
 			case <-ctx.Done():
@@ -154,6 +167,7 @@ func run(ctx context.Context, cfg Config) error {
 	var wg sync.WaitGroup
 
 	// === TX: capture → encode → multicast ===
+	canCapture := false
 	captureCfg := malgo.DefaultDeviceConfig(malgo.Capture)
 	captureCfg.Capture.Format = malgo.FormatS16
 	captureCfg.Capture.Channels = channels
@@ -169,7 +183,6 @@ func run(ctx context.Context, cfg Config) error {
 			if !broadcasting.Load() {
 				return
 			}
-			// Convert bytes to int16 samples
 			nSamples := len(inputSamples) / 2
 			samples := make([]int16, nSamples)
 			for i := 0; i < nSamples; i++ {
@@ -191,7 +204,6 @@ func run(ctx context.Context, cfg Config) error {
 					continue
 				}
 
-				// Build minimal RTP header
 				pkt := buildRTPPacket(seqNum, ssrc, encBuf[:n])
 				seqNum++
 
@@ -204,14 +216,22 @@ func run(ctx context.Context, cfg Config) error {
 
 	captureDevice, err := malgo.InitDevice(malgoCtx.Context, captureCfg, captureCallbacks)
 	if err != nil {
-		return fmt.Errorf("capture device: %w", err)
+		log.Printf("no capture device available — running receive-only: %v", err)
+	} else {
+		if err := captureDevice.Start(); err != nil {
+			log.Printf("capture start failed — running receive-only: %v", err)
+			captureDevice.Uninit()
+		} else {
+			canCapture = true
+			defer captureDevice.Stop()
+			defer captureDevice.Uninit()
+		}
 	}
-	defer captureDevice.Uninit()
 
-	if err := captureDevice.Start(); err != nil {
-		return fmt.Errorf("capture start: %w", err)
+	if !canCapture {
+		log.Println("TX disabled (no microphone), RX still active")
+		broadcasting.Store(false)
 	}
-	defer captureDevice.Stop()
 
 	// === RX: multicast → decode → playback ===
 	playbackCfg := malgo.DefaultDeviceConfig(malgo.Playback)
@@ -298,6 +318,7 @@ func run(ctx context.Context, cfg Config) error {
 
 			// Half-duplex: mark remote active
 			remoteActive.Store(true)
+			pttState.setRX(true)
 
 			samples, err := decoder.Decode(payload, pcmOut)
 			if err != nil {
@@ -329,6 +350,7 @@ func run(ctx context.Context, cfg Config) error {
 			// Simple approach: clear after each RX check cycle
 			// A proper jitter-buffer-based approach would be better
 			remoteActive.Store(false)
+			pttState.setRX(false)
 			select {
 			case <-ctx.Done():
 				return

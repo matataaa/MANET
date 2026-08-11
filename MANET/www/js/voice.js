@@ -10,7 +10,7 @@ function voiceActivate() {
     voiceInitialized = true;
   }
   voiceFetch();
-  voicePollTimer = setInterval(voiceFetch, 5000);
+  voicePollTimer = setInterval(voiceFetchLive, 1000);
 }
 
 function voiceDeactivate() {
@@ -27,6 +27,14 @@ async function voiceFetch() {
   }
 }
 
+async function voiceFetchLive() {
+  try {
+    var r = await fetch('/api/voice');
+    voiceData = await r.json();
+    voiceUpdateHWIndicators();
+  } catch(e) {}
+}
+
 function voiceRender() {
   var panel = document.getElementById('tab-voice');
   var d = voiceData;
@@ -39,20 +47,25 @@ function voiceRender() {
   html += '<div class="card voice-client-card">';
   html += '<div class="card-header">VOICE CLIENT</div>';
 
-  if (!window.AudioEncoder) {
-    html += '<div class="voice-unsupported">WebCodecs not supported. Use Chrome or Edge.</div>';
-  } else if (!cc) {
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+    var httpsUrl = 'https://' + location.hostname + (location.port && location.port !== '443' ? '' : '') + location.pathname + location.hash;
+    html += '<div class="voice-https-warn">';
+    html += '<div class="voice-https-warn-icon">&#9888;</div>';
+    html += '<div class="voice-https-warn-text">Voice client requires HTTPS for microphone access.</div>';
+    html += '<a class="voice-https-link" href="' + httpsUrl + '">Switch to HTTPS</a>';
+    html += '</div>';
+  }
+
+  if (!cc) {
     html += '<div class="voice-connect-wrap">';
     html += '<button class="voice-connect-btn" onclick="voiceClientStart()">Connect to Mesh Voice</button>';
-    html += '<div class="voice-connect-hint">Connects your browser mic to the mesh multicast channel</div>';
+    html += '<div class="voice-connect-hint">Connects your browser mic to the mesh voice channel</div>';
     html += '</div>';
   } else {
-    // PTT area
     html += '<div class="voice-ptt-area">';
     html += '<button class="voice-ptt-btn' + (voiceClient.transmitting ? ' active' : '') + '" id="voice-ptt-btn">PUSH TO TALK</button>';
     html += '</div>';
 
-    // Live indicators
     html += '<div class="voice-indicators">';
     html += '<div class="voice-ind"><span class="voice-dot ' + (cc ? 'on' : 'off') + '"></span>Connected</div>';
     html += '<div class="voice-ind"><span class="voice-dot ' + (voiceClient.transmitting ? 'tx' : 'off') + '" id="voice-tx-dot"></span><span id="voice-tx-label">' + (voiceClient.transmitting ? 'Transmitting' : 'TX Idle') + '</span></div>';
@@ -65,9 +78,31 @@ function voiceRender() {
   }
   html += '</div>';
 
-  // --- Current settings card (read-only) ---
+  // --- Service + live PTT card ---
   html += '<div class="card voice-status-card">';
-  html += '<div class="card-header">SERVICE STATUS</div>';
+  html += '<div class="card-header">HARDWARE PTT</div>';
+
+  // OpenVLM connection status
+  var vlmConn = d.ptt_connected;
+  html += '<div class="voice-hw-device-row" id="hw-vlm-row">';
+  html += '<span class="voice-dot ' + (vlmConn ? 'on' : 'off') + '" id="hw-vlm-dot"></span>';
+  html += '<span class="voice-hw-device-label">OpenVLM</span>';
+  html += '<span class="voice-hw-device-status ' + (vlmConn ? 'connected' : 'disconnected') + '" id="hw-vlm-status">' + (vlmConn ? 'Connected' : 'Disconnected') + '</span>';
+  html += '</div>';
+
+  // PTT state
+  html += '<div class="voice-hw-ptt-wrap">';
+  html += '<div class="voice-hw-ptt-indicator' + (active && d.ptt_active ? ' active' : '') + '" id="hw-ptt-indicator">';
+  html += '<div class="voice-hw-ptt-dot" id="hw-ptt-dot"></div>';
+  html += '<div class="voice-hw-ptt-label" id="hw-ptt-label">' + (active ? (d.ptt_active ? 'PTT PRESSED' : 'PTT UNPRESSED') : 'SERVICE OFF') + '</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // TX/RX indicators
+  html += '<div class="voice-indicators" id="hw-txrx">';
+  html += '<div class="voice-ind"><span class="voice-dot ' + (d.tx ? 'tx' : 'off') + '" id="hw-tx-dot"></span><span id="hw-tx-label">' + (d.tx ? 'Transmitting' : 'TX Idle') + '</span></div>';
+  html += '<div class="voice-ind"><span class="voice-dot ' + (d.rx ? 'rx' : 'off') + '" id="hw-rx-dot"></span><span id="hw-rx-label">' + (d.rx ? 'Receiving' : 'RX Silent') + '</span></div>';
+  html += '</div>';
 
   html += '<div class="status-row"><div class="status-label">Service</div><div class="status-value">';
   html += '<span class="voice-dot ' + (active ? 'on' : 'off') + '"></span>' + (active ? 'Running' : 'Stopped');
@@ -94,13 +129,55 @@ function voiceRender() {
   }
   html += '</div>';
 
-  html += '<div class="voice-config-hint">Voice settings can be changed in the <a href="#config">Config</a> tab</div>';
+  html += '<div class="voice-config-hint">Voice settings in <a href="#config">Config</a> tab</div>';
   html += '</div>';
 
   html += '</div>';
   panel.innerHTML = html;
 
   voiceBindPTT();
+}
+
+function voiceUpdateHWIndicators() {
+  if (!voiceData) return;
+  var d = voiceData;
+
+  // OpenVLM connection
+  var vlmDot = document.getElementById('hw-vlm-dot');
+  var vlmStatus = document.getElementById('hw-vlm-status');
+  if (vlmDot) {
+    vlmDot.className = 'voice-dot ' + (d.ptt_connected ? 'on' : 'off');
+  }
+  if (vlmStatus) {
+    vlmStatus.textContent = d.ptt_connected ? 'Connected' : 'Disconnected';
+    vlmStatus.className = 'voice-hw-device-status ' + (d.ptt_connected ? 'connected' : 'disconnected');
+  }
+
+  // PTT state
+  var indicator = document.getElementById('hw-ptt-indicator');
+  var label = document.getElementById('hw-ptt-label');
+  if (!indicator) return;
+
+  if (d.active && d.ptt_active) {
+    indicator.className = 'voice-hw-ptt-indicator active';
+    label.textContent = 'PTT PRESSED';
+  } else if (d.active) {
+    indicator.className = 'voice-hw-ptt-indicator';
+    label.textContent = 'PTT UNPRESSED';
+  } else {
+    indicator.className = 'voice-hw-ptt-indicator';
+    label.textContent = 'SERVICE OFF';
+  }
+
+  // TX/RX
+  var txDot = document.getElementById('hw-tx-dot');
+  var txLabel = document.getElementById('hw-tx-label');
+  var rxDot = document.getElementById('hw-rx-dot');
+  var rxLabel = document.getElementById('hw-rx-label');
+  if (txDot) txDot.className = 'voice-dot ' + (d.tx ? 'tx' : 'off');
+  if (txLabel) txLabel.textContent = d.tx ? 'Transmitting' : 'TX Idle';
+  if (rxDot) rxDot.className = 'voice-dot ' + (d.rx ? 'rx' : 'off');
+  if (rxLabel) rxLabel.textContent = d.rx ? 'Receiving' : 'RX Silent';
 }
 
 function voiceBindPTT() {
@@ -133,14 +210,25 @@ async function voiceAction(action) {
 
 // --- Web voice client ---
 
+function voiceGetUserMedia(constraints) {
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    return navigator.mediaDevices.getUserMedia(constraints);
+  }
+  var legacy = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+  if (!legacy) return Promise.reject(new Error('getUserMedia not available — HTTPS may be required'));
+  return new Promise(function(resolve, reject) {
+    legacy.call(navigator, constraints, resolve, reject);
+  });
+}
+
 var VOICE_SAMPLE_RATE = 48000;
-var VOICE_FRAME_SIZE = 960;
+var VOICE_FRAME_SIZE = 1024;
 
 async function voiceClientStart() {
   if (voiceClient && voiceClient.connected) return;
 
   try {
-    var stream = await navigator.mediaDevices.getUserMedia({
+    var stream = await voiceGetUserMedia({
       audio: { sampleRate: VOICE_SAMPLE_RATE, channelCount: 1, echoCancellation: true, noiseSuppression: true }
     });
 
@@ -227,10 +315,10 @@ async function voiceClientStart() {
 
       if (voiceClient) {
         voiceClient.receiving = true;
-        voiceUpdateLiveIndicators();
+        voiceUpdateClientIndicators();
         clearTimeout(rxTimeout);
         rxTimeout = setTimeout(function() {
-          if (voiceClient) { voiceClient.receiving = false; voiceUpdateLiveIndicators(); }
+          if (voiceClient) { voiceClient.receiving = false; voiceUpdateClientIndicators(); }
         }, 300);
       }
     };
@@ -286,10 +374,10 @@ function voiceClientPTT(down) {
   if (!voiceClient || !voiceClient.connected) return;
   voiceClient.transmitting = down;
   voiceClient.setCaptureActive(down);
-  voiceUpdateLiveIndicators();
+  voiceUpdateClientIndicators();
 }
 
-function voiceUpdateLiveIndicators() {
+function voiceUpdateClientIndicators() {
   if (!voiceClient) return;
   var txDot = document.getElementById('voice-tx-dot');
   var txLabel = document.getElementById('voice-tx-label');

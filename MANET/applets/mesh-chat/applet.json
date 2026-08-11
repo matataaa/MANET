@@ -1,0 +1,21 @@
+{
+  "name": "mesh-chat",
+  "label": "Mesh Chat",
+  "version": "1.0.0",
+  "description": "Mesh-wide text chat over multicast",
+  "author": "Frost Technologies",
+  "type": "go",
+  "backend": {
+    "binary": "mesh-chat",
+    "port": 9800,
+    "args": ["-port", "9800", "-iface", "br0"],
+    "service": "applet-mesh-chat.service"
+  },
+  "frontend": {
+    "entrypoint": "index.html"
+  },
+  "config": {
+    "page": "config.html",
+    "file": "/etc/mesh-chat.conf"
+  }
+}
