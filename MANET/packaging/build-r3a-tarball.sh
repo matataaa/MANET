@@ -154,8 +154,7 @@ for unit in \
     ebtables-restore.service \
     batman-enslave-watch.service \
     manet-ctrl.service \
-    mesh-registry.service \
-    node-manager.service
+    mesh-registry.service
 do
     if [ -f "$STAGE/etc/systemd/system/$unit" ]; then
         ln -sf "../$unit" "$STAGE/etc/systemd/system/multi-user.target.wants/$unit"

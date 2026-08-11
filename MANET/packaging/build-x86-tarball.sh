@@ -161,7 +161,6 @@ fi
 # --- Enable key services ---
 mkdir -p "$STAGE/etc/systemd/system/multi-user.target.wants"
 for unit in \
-    node-manager.service \
     gateway-route-manager.service \
     sae-watchdog.service \
     manet-ctrl.service \

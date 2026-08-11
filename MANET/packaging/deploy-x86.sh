@@ -77,7 +77,6 @@ ip link show br0 &>/dev/null && ip link set br0 mtu 1400
 systemctl daemon-reload
 
 for unit in \
-    node-manager.service \
     gateway-route-manager.service \
     sae-watchdog.service \
     manet-ctrl.service
@@ -94,7 +93,6 @@ echo "=== Deploy complete ==="
 echo "  bat0 MTU: $(ip link show bat0 2>/dev/null | grep -oP 'mtu \K\d+' || echo 'N/A')"
 echo "  br0  MTU: $(ip link show br0 2>/dev/null | grep -oP 'mtu \K\d+' || echo 'N/A')"
 echo "  manet-ctrl: $(systemctl is-active manet-ctrl 2>/dev/null)"
-echo "  node-manager: $(systemctl is-active node-manager 2>/dev/null)"
 echo "  sae-watchdog: $(systemctl is-active sae-watchdog 2>/dev/null)"
 REMOTE
 

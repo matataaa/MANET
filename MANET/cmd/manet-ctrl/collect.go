@@ -817,8 +817,8 @@ type serviceEntry struct {
 var serviceRegistry = []serviceEntry{
 	{"manet-ctrl", "MANET Controller", []string{"manet-ctrl"}, "core", []string{"restart"}, "Web UI, API, and terminal"},
 	{"alfred", "Alfred", []string{"alfred"}, "core", []string{"start", "stop", "restart"}, "Mesh data distribution daemon"},
-	{"node-manager", "Node Manager", []string{"node-manager"}, "core", []string{"restart"}, "Status publisher and IP coordination"},
-	{"wpa-supplicant", "WPA Supplicant", []string{"wpa_supplicant"}, "network", []string{"start", "stop", "restart"}, "Mesh WiFi authentication"},
+	{"mesh-registry", "Mesh Registry", []string{"mesh-registry"}, "core", []string{"start", "stop", "restart"}, "Node discovery and registry sync"},
+	{"wpa-supplicant", "WPA Supplicant", []string{"wpa_supplicant-s1g-wlan2", "wpa_supplicant@wlan0", "wpa_supplicant@wlan1"}, "network", []string{"start", "stop", "restart"}, "Mesh WiFi authentication"},
 	{"hostapd", "hostapd", []string{"hostapd"}, "network", []string{"start", "stop", "restart"}, "Access point daemon"},
 	{"dnsmasq", "dnsmasq", []string{"dnsmasq"}, "network", []string{"start", "stop", "restart", "reload"}, "DHCP and DNS for EUDs"},
 	{"avahi", "Avahi", []string{"avahi-daemon"}, "network", []string{"start", "stop", "restart", "reload"}, "mDNS / service discovery"},

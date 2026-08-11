@@ -122,8 +122,7 @@ for unit in \
     sae-watchdog.service \
     ebtables-restore.service \
     manet-ctrl.service \
-    mesh-registry.service \
-    node-manager.service
+    mesh-registry.service
 do
     if [ -f "$STAGE/etc/systemd/system/$unit" ]; then
         ln -sf "../$unit" "$STAGE/etc/systemd/system/multi-user.target.wants/$unit"

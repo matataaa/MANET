@@ -144,6 +144,7 @@ func readPeers() map[string]NodeInfo {
 }
 
 func unescapeAlfred(s string) string {
+	s = strings.ReplaceAll(s, `\"`, `"`)
 	s = strings.ReplaceAll(s, `\x0a`, "\n")
 	s = strings.ReplaceAll(s, `\x09`, "\t")
 	s = strings.ReplaceAll(s, `\\`, `\`)

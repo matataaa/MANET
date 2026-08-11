@@ -742,11 +742,18 @@ EOF
 [ "${#nonmesh_ifaces[@]}" -gt 0 ] && write_link_file wlan3 "$(iface_mac "${nonmesh_ifaces[0]}")"
 echo "MESH_NAME=\"$MESH_NAME\"" > /etc/default/mesh
 
-# Mask all wpa_supplicant@ template instances — we use dedicated service names
-# (wpa_supplicant-s1g-wlan2, hostapd for wlan3) so the generic template is unused.
+# Mask wpa_supplicant@ template instances for wlan indices that have no .link file
+# (i.e. no interface assigned to that name). Indices WITH .link files that use the
+# template for mesh auth (wlan0/wlan1 on dual-radio hardware) are left alone.
+# HaLow (wlan2) and AP (wlan3) use dedicated services, so masking their template
+# instances is safe — but only when they have no .link means they don't exist at all.
 for _i in 0 1 2 3; do
-    systemctl mask "wpa_supplicant@wlan${_i}.service" 2>/dev/null || true
+    if [ ! -f "/etc/systemd/network/10-wlan${_i}.link" ]; then
+        systemctl mask "wpa_supplicant@wlan${_i}.service" 2>/dev/null || true
+    fi
 done
+# Always mask template instances for HaLow and AP — they use dedicated services
+systemctl mask "wpa_supplicant@wlan2.service" "wpa_supplicant@wlan3.service" 2>/dev/null || true
 
 
 # Detect if the .link files we just wrote disagree with current runtime names.
@@ -1382,8 +1389,8 @@ Requires=batman-enslave.service
 
 [Service]
 Type=simple
-ExecStartPre=/bin/bash -c 'for i in {1..20}; do if ip -6 addr show dev bat0 | grep "inet6 fe80::" | grep -qv "tentative"; then exit 0; fi; sleep 1; done; echo "bat0 link-local IPv6 address not ready" >&2; exit 1'
-ExecStart=/usr/sbin/alfred -m -i bat0 -b br0 -f
+ExecStartPre=/bin/bash -c 'for i in {1..20}; do if ip -6 addr show dev br0 | grep "inet6 fe80::" | grep -qv "tentative"; then exit 0; fi; sleep 1; done; echo "br0 link-local IPv6 address not ready" >&2; exit 1'
+ExecStart=/usr/sbin/alfred -m -i br0 -b bat0 -f
 UMask=0000
 Restart=always
 RestartSec=10
@@ -1574,30 +1581,6 @@ else
 fi
 
 # ============================================================================
-# === Web Status / config ===
-# ============================================================================
-cat << EOF > /etc/systemd/system/mesh-status.service
-[Unit]
-Description=MANET Node Status Web Server
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=/usr/local/bin
-ExecStart=/usr/bin/python3 -m manet_web 80
-Restart=on-failure
-RestartSec=5
-User=root
-AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl enable mesh-status
-
-# ============================================================================
 # === mDNS — manet.local ===
 # ============================================================================
 # Advertise this node as manet.local on the AP/EUD interface only.
@@ -1607,13 +1590,12 @@ systemctl enable mesh-status
 apt install -y avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf 2>/dev/null || true
 install -m 644 /etc/avahi/avahi-daemon.conf /etc/avahi/avahi-daemon.conf.bak 2>/dev/null || true
 cp /usr/local/share/manet/avahi-daemon.conf /etc/avahi/avahi-daemon.conf
-# Restrict avahi to the AP-only interface so nodes on the mesh don't conflict on 'manet'
+# Add the AP interface to avahi's allow list (br0, end0, eth0 are in the template)
 AVAHI_AP_IF=$(head -1 /var/lib/no_mesh_if 2>/dev/null)
 if [ -n "$AVAHI_AP_IF" ]; then
-    sed -i "s/allow-interfaces=.*/allow-interfaces=$AVAHI_AP_IF/" /etc/avahi/avahi-daemon.conf
+    sed -i "s/allow-interfaces=.*/allow-interfaces=br0,end0,eth0,$AVAHI_AP_IF/" /etc/avahi/avahi-daemon.conf
 fi
 cp /usr/local/share/manet/manet-http.service /etc/avahi/services/manet-http.service
-cp /usr/local/share/manet/perf-http.service /etc/avahi/services/perf-http.service 2>/dev/null || true
 systemctl enable avahi-daemon
 systemctl restart avahi-daemon || true
 
