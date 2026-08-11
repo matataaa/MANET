@@ -98,11 +98,17 @@ Voice traffic is prioritized at two layers:
 **DSCP marking** — `mesh-voice` and `manet-ctrl` (web voice relay) set IP TOS to `0xB8` (DSCP EF / Expedited Forwarding) on all voice UDP packets. batman-adv preserves the TOS field through encapsulation, mapping it to `skb->priority`. The wireless driver then maps this to WMM Access Category Voice (AC_VO), which gets the shortest contention window and highest priority on the air.
 
 **tc qdisc** — `mesh-manager` configures a `prio` qdisc on `br0` at startup with three bands:
-- Band 0 (highest): DSCP EF traffic (`match ip tos 0xb8 0xfc`) and voice multicast port 4370
-- Band 1: interactive traffic
-- Band 2 (lowest): bulk data
+- Band 0 (high): DSCP EF traffic (`match ip tos 0xb8 0xfc`) and voice multicast port 4370
+- Band 1 (normal): CoT multicast port 6969
+- Band 2 (bulk): Mesh Chat port 9800
 
-This ensures voice packets are dequeued before bulk traffic even under load.
+Per-service band assignments are configurable via the QoS card on the Config page. Voice packets are dequeued before bulk traffic even under load.
+
+### Multicast
+
+batman-adv multicast delivery is configurable via `multicast_mode` in `mesh.conf` (Config page or `mesh config set multicast_mode <mode>`):
+- **flood** (default) — `multicast_forceflood=1`, bridge snooping off. All multicast flooded to every mesh peer. Recommended for meshes up to ~10 nodes.
+- **optimized** — `multicast_forceflood=0`, bridge snooping on, IGMP querier on. batman-adv uses IGMP group membership to deliver multicast selectively. Reduces overhead on larger meshes (10+ nodes) but requires all nodes to run the same mode.
 
 ### Applets
 

@@ -42,6 +42,7 @@ $Script:ADMIN_PW          = ""
 $Script:AUTO_UPDATE       = ""
 $Script:REGULATORY_DOMAIN = ""
 $Script:HALOW_REGULATORY_DOMAIN = ""
+$Script:NODE_HOSTNAME     = ""
 $Script:RPI_IMAGER_PATH   = $null
 
 
@@ -620,6 +621,14 @@ function Ask-Questions {
         }
     }
 
+    $hn = Read-Host "Enter node hostname [or press Enter for auto]"
+    $Script:NODE_HOSTNAME = if ([string]::IsNullOrWhiteSpace($hn)) { "" } else { $hn }
+    if ($Script:NODE_HOSTNAME) {
+        Write-Host "Hostname will be: $($Script:NODE_HOSTNAME)-$($Script:MESH_SSID)-<mac>"
+    } else {
+        Write-Host "Hostname will be: $($Script:MESH_SSID)-<mac>"
+    }
+
     Write-Host "The device will have a user called 'radio' for SSH access."
     $pw = Read-Host "Enter a password for the radio user [or press Enter to default to 'radio']"
     Write-Host ""
@@ -696,6 +705,7 @@ AUTO_CHANNEL="$($Script:AUTO_CHANNEL)"
 RADIO_PW="$($Script:RADIO_PW)"
 ADMIN_PW="$($Script:ADMIN_PW)"
 AUTO_UPDATE="$($Script:AUTO_UPDATE)"
+NODE_HOSTNAME="$($Script:NODE_HOSTNAME)"
 "@
     [System.IO.File]::WriteAllText($CONFIG_FILE, $content.Replace("`r`n", "`n"))
     Write-Host "Configuration saved to $CONFIG_FILE"
@@ -723,6 +733,7 @@ function Load-Config {
                 "RADIO_PW"                { $Script:RADIO_PW                  = $Matches[2] }
                 "ADMIN_PW"                { $Script:ADMIN_PW                  = $Matches[2] }
                 "AUTO_UPDATE"             { $Script:AUTO_UPDATE               = $Matches[2] }
+                "NODE_HOSTNAME"           { $Script:NODE_HOSTNAME             = $Matches[2] }
             }
         }
     }
@@ -749,6 +760,7 @@ function Load-Config {
     Write-Host "  User password: $($Script:RADIO_PW)"
     Write-Host "  Admin password: $(if ($Script:ADMIN_PW) { $Script:ADMIN_PW } else { '(not set)' })"
     Write-Host "  Auto Update: $(if ($Script:AUTO_UPDATE) { $Script:AUTO_UPDATE } else { 'n' })"
+    Write-Host "  Node Hostname: $(if ($Script:NODE_HOSTNAME) { $Script:NODE_HOSTNAME } else { '(auto)' })"
     Write-Host "----------------------------"
 }
 
@@ -987,7 +999,8 @@ auto_update=$($Script:AUTO_UPDATE)
             -replace '__REGULATORY_DOMAIN__',       $Script:REGULATORY_DOMAIN `
             -replace '__HALOW_REGULATORY_DOMAIN__', $Script:HALOW_REGULATORY_DOMAIN `
             -replace '__ADMIN_PW__',                $Script:ADMIN_PW `
-            -replace '__AUTO_UPDATE__',             $Script:AUTO_UPDATE
+            -replace '__AUTO_UPDATE__',             $Script:AUTO_UPDATE `
+            -replace '__NODE_HOSTNAME__',           $Script:NODE_HOSTNAME
 
         $provisionScript = $provisionScript.Replace("`r`n", "`n")
 
@@ -1156,7 +1169,8 @@ WantedBy=multi-user.target
         -replace '__REGULATORY_DOMAIN__',       $Script:REGULATORY_DOMAIN `
         -replace '__HALOW_REGULATORY_DOMAIN__', $Script:HALOW_REGULATORY_DOMAIN `
         -replace '__ADMIN_PW__',                $Script:ADMIN_PW `
-        -replace '__AUTO_UPDATE__',             $Script:AUTO_UPDATE
+        -replace '__AUTO_UPDATE__',             $Script:AUTO_UPDATE `
+        -replace '__NODE_HOSTNAME__',           $Script:NODE_HOSTNAME
 
     $flashCount = 0
     $keepFlashing = $true

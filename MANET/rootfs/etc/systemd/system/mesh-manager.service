@@ -1,0 +1,13 @@
+[Unit]
+Description=Mesh IP and Route Manager
+After=batman-enslave-watch.service alfred.service
+Wants=alfred.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mesh-manager
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -2,6 +2,9 @@ let voiceInitialized = false;
 let voiceData = null;
 let voiceClient = null;
 let voicePollTimer = null;
+let voiceAudioDevices = { inputs: [], outputs: [] };
+let voiceSelectedInput = '';
+let voiceSelectedOutput = '';
 
 function voiceActivate() {
   var panel = document.getElementById('tab-voice');
@@ -9,8 +12,28 @@ function voiceActivate() {
     panel.innerHTML = '<div class="loading-msg">Loading voice...</div>';
     voiceInitialized = true;
   }
+  voiceEnumerateDevices();
   voiceFetch();
   voicePollTimer = setInterval(voiceFetchLive, 1000);
+}
+
+async function voiceEnumerateDevices() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  try {
+    var devices = await navigator.mediaDevices.enumerateDevices();
+    voiceAudioDevices.inputs = devices.filter(function(d) { return d.kind === 'audioinput'; });
+    voiceAudioDevices.outputs = devices.filter(function(d) { return d.kind === 'audiooutput'; });
+    if (voiceAudioDevices.inputs.length && !voiceAudioDevices.inputs[0].label) {
+      try {
+        var tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+        tmp.getTracks().forEach(function(t) { t.stop(); });
+        devices = await navigator.mediaDevices.enumerateDevices();
+        voiceAudioDevices.inputs = devices.filter(function(d) { return d.kind === 'audioinput'; });
+        voiceAudioDevices.outputs = devices.filter(function(d) { return d.kind === 'audiooutput'; });
+      } catch(e) {}
+    }
+    if (voiceData) voiceRender();
+  } catch(e) {}
 }
 
 function voiceDeactivate() {
@@ -55,6 +78,25 @@ function voiceRender() {
     html += '<a class="voice-https-link" href="' + httpsUrl + '">Switch to HTTPS</a>';
     html += '</div>';
   }
+
+  html += '<div class="voice-device-selectors" id="voice-device-selectors">';
+  html += '<div class="voice-device-row"><label class="voice-device-label">Microphone</label>';
+  html += '<select class="voice-device-select" id="voice-input-select" onchange="voiceSelectedInput=this.value">';
+  html += '<option value="">Default</option>';
+  voiceAudioDevices.inputs.forEach(function(d) {
+    var sel = d.deviceId === voiceSelectedInput ? ' selected' : '';
+    html += '<option value="' + escHtml(d.deviceId) + '"' + sel + '>' + escHtml(d.label || 'Mic ' + d.deviceId.slice(0,8)) + '</option>';
+  });
+  html += '</select></div>';
+  html += '<div class="voice-device-row"><label class="voice-device-label">Speaker</label>';
+  html += '<select class="voice-device-select" id="voice-output-select" onchange="voiceSelectedOutput=this.value">';
+  html += '<option value="">Default</option>';
+  voiceAudioDevices.outputs.forEach(function(d) {
+    var sel = d.deviceId === voiceSelectedOutput ? ' selected' : '';
+    html += '<option value="' + escHtml(d.deviceId) + '"' + sel + '>' + escHtml(d.label || 'Speaker ' + d.deviceId.slice(0,8)) + '</option>';
+  });
+  html += '</select></div>';
+  html += '</div>';
 
   if (!cc) {
     html += '<div class="voice-connect-wrap">';
@@ -228,11 +270,13 @@ async function voiceClientStart() {
   if (voiceClient && voiceClient.connected) return;
 
   try {
-    var stream = await voiceGetUserMedia({
-      audio: { sampleRate: VOICE_SAMPLE_RATE, channelCount: 1, echoCancellation: true, noiseSuppression: true }
-    });
+    var audioConstraints = { sampleRate: VOICE_SAMPLE_RATE, channelCount: 1, echoCancellation: true, noiseSuppression: true };
+    if (voiceSelectedInput) audioConstraints.deviceId = { exact: voiceSelectedInput };
+    var stream = await voiceGetUserMedia({ audio: audioConstraints });
 
-    var ctx = new AudioContext({ sampleRate: VOICE_SAMPLE_RATE });
+    var ctxOpts = { sampleRate: VOICE_SAMPLE_RATE };
+    if (voiceSelectedOutput) ctxOpts.sinkId = voiceSelectedOutput;
+    var ctx = new AudioContext(ctxOpts);
 
     var encoder = new AudioEncoder({
       output: function(chunk) {

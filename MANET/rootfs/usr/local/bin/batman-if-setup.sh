@@ -324,8 +324,20 @@ start() {
 
     ip link set bat0 up
 
-    batctl bat0 multicast_forceflood 1
-    echo "bat0 multicast_forceflood enabled"
+    MCAST_MODE=$(grep -s '^multicast_mode=' /etc/mesh.conf | cut -d= -f2)
+    if [ "$MCAST_MODE" = "optimized" ]; then
+        batctl bat0 multicast_forceflood 0
+        sleep 1
+        echo 1 > /sys/devices/virtual/net/br0/bridge/multicast_snooping
+        echo 1 > /sys/devices/virtual/net/br0/bridge/multicast_querier
+        echo "bat0 multicast: optimized (IGMP snooping + querier)"
+    else
+        batctl bat0 multicast_forceflood 1
+        sleep 1
+        echo 0 > /sys/devices/virtual/net/br0/bridge/multicast_snooping
+        echo 0 > /sys/devices/virtual/net/br0/bridge/multicast_querier
+        echo "bat0 multicast: flood (forceflood)"
+    fi
     echo "bat0 interface is up and configured."
 
     # Final verification

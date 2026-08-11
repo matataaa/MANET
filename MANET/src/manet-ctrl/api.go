@@ -78,12 +78,12 @@ var validateTargetRE = regexp.MustCompile(`^[a-zA-Z0-9._:-]+$`)
 // --- Status endpoints ---
 
 func apiData(w http.ResponseWriter, r *http.Request) {
-	data := assembleStatusData()
+	data := cachedStatusData()
 	writeJSON(w, 200, data)
 }
 
 func apiLocal(w http.ResponseWriter, r *http.Request) {
-	data := assembleLocalData()
+	data := cachedLocalData()
 	writeJSON(w, 200, data)
 }
 
@@ -145,8 +145,13 @@ func apiPeer(w http.ResponseWriter, r *http.Request) {
 }
 
 func peerProxyRequest(w http.ResponseWriter, r *http.Request, peerIP, path string) {
-	targetURL := fmt.Sprintf("http://%s:80%s", peerIP, path)
-	client := &http.Client{Timeout: 30 * time.Second}
+	targetURL := fmt.Sprintf("https://%s%s", peerIP, path)
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: peerTLSConfig,
+		},
+	}
 
 	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
 	if err != nil {
@@ -603,6 +608,7 @@ var saveableKeys = map[string]bool{
 	"acs": true, "mtx": true,
 	"mumble": true, "battery_monitor": true, "auto_update": true, "admin_password": true,
 	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
+	"multicast_mode": true,
 }
 
 func apiAdminSave(w http.ResponseWriter, r *http.Request) {
@@ -672,6 +678,12 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	if updates["mesh_ssid"] != "" || updates["mesh_key"] != "" {
 		applyWPAConfig(conf)
 		applied["mesh_updated"] = true
+	}
+
+	// Apply multicast mode
+	if updates["multicast_mode"] != "" {
+		applyMulticastMode(updates["multicast_mode"])
+		applied["multicast_applied"] = true
 	}
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "saved": saved, "applied": applied})
@@ -1192,6 +1204,18 @@ func applyWPAConfig(conf map[string]string) {
 
 	// Restart mesh wpa_supplicant instances
 	runCmd(10*time.Second, "bash", "-c", "systemctl restart 'wpa_supplicant@wlan*.service' 2>/dev/null || true")
+}
+
+func applyMulticastMode(mode string) {
+	if mode == "optimized" {
+		runCmd(3*time.Second, "batctl", "bat0", "multicast_forceflood", "0")
+		os.WriteFile("/sys/devices/virtual/net/br0/bridge/multicast_snooping", []byte("1"), 0644)
+		os.WriteFile("/sys/devices/virtual/net/br0/bridge/multicast_querier", []byte("1"), 0644)
+	} else {
+		runCmd(3*time.Second, "batctl", "bat0", "multicast_forceflood", "1")
+		os.WriteFile("/sys/devices/virtual/net/br0/bridge/multicast_snooping", []byte("0"), 0644)
+		os.WriteFile("/sys/devices/virtual/net/br0/bridge/multicast_querier", []byte("0"), 0644)
+	}
 }
 
 func shellQuote(s string) string {

@@ -20,22 +20,33 @@ if [ -d "$PWR_LED" ]; then
     echo 100          > "$PWR_LED/delay_off" 2>/dev/null || true
 fi
 
-while true; do
+HAS_INTERNET=0
+INET_WAIT=0
+MAX_INET_WAIT=60
+while [ $INET_WAIT -lt $MAX_INET_WAIT ]; do
     if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
         echo "Internet connectivity confirmed!"
+        HAS_INTERNET=1
         break
     fi
-    echo "Waiting for internet..."
+    echo "Waiting for internet... (${INET_WAIT}/${MAX_INET_WAIT})"
     sleep 5
+    (( INET_WAIT++ ))
 done
+
+if [ $HAS_INTERNET -eq 0 ]; then
+    echo "WARNING: No internet after $((MAX_INET_WAIT * 5))s — continuing with local resources"
+fi
 
 # Restore LED to solid-on
 if [ -d "$PWR_LED" ]; then
     echo default-on > "$PWR_LED/trigger" 2>/dev/null || true
 fi
 
-# A basic method to set the system time
-date -s "$(curl -sI google.com | grep -i ^Date: | cut -d' ' -f2-)"
+# Sync system time if we have internet
+if [ $HAS_INTERNET -eq 1 ]; then
+    date -s "$(curl -sI google.com | grep -i ^Date: | cut -d' ' -f2-)" 2>/dev/null || true
+fi
 
 cd /root
 
@@ -48,7 +59,11 @@ cd /root
 # This tar file also contains the manet kernel, modified to include the drivers for the various radios used
 
 #  The tar file will be extracted after apt install happens
-if [ "rpi5" = "rpi5" ]; then
+if [ -f /root/morse-pi-install.tar.gz ]; then
+		echo "Tools tarball already present, skipping download"
+elif [ $HAS_INTERNET -eq 0 ]; then
+		echo "No internet and no tarball — skipping download (re-run?)"
+elif [ "rpi5" = "rpi5" ]; then
 		echo "Applying RPi 5 specific settings..."
 		# Match both bare 'rpi5-install.tar.gz' and versioned variants like
 		# 'rpi5-install-v0.25-foo.tar.gz' so a release uploaded under a
@@ -124,26 +139,34 @@ fi
 
 
 # get the sources up to date and install packages
-echo -n "Updating system packages..."
-apt update > /dev/null 2>&1
+if [ $HAS_INTERNET -eq 1 ]; then
+    echo -n "Updating system packages..."
+    apt update > /dev/null 2>&1
 
-# Remove the question about the iperf daemon during apt install
-echo "iperf3 iperf3/start_daemon boolean true" | debconf-set-selections
+    # Remove the question about the iperf daemon during apt install
+    echo "iperf3 iperf3/start_daemon boolean true" | debconf-set-selections
 
-# This isn't needed for the manet kernel and causes errors
-chmod -x /etc/kernel/postinst.d/initramfs-tools
+    # This isn't needed for the manet kernel and causes errors
+    [ -x /etc/kernel/postinst.d/initramfs-tools ] && chmod -x /etc/kernel/postinst.d/initramfs-tools
 
-# Install packages for this system
-apt install -y ipcalc nmap lshw tcpdump net-tools nftables wireless-tools iperf3\
-		radvd bridge-utils firmware-mediatek libnss-mdns syncthing networkd-dispatcher\
-		libgps-dev libcap-dev screen arping bc jq git libssl-dev hostapd dnsmasq pulseaudio\
-		python3-protobuf unzip chrony systemd-resolved dhcping mpg123\
-		libnl-3-dev libnl-genl-3-dev libnl-route-3-dev ebtables libdbus-1-dev gpsd pulseaudio-utils
+    # Install packages for this system
+    apt install -y ipcalc nmap lshw tcpdump net-tools nftables wireless-tools iperf3\
+            radvd bridge-utils firmware-mediatek libnss-mdns syncthing networkd-dispatcher\
+            libgps-dev libcap-dev screen arping bc jq git libssl-dev hostapd dnsmasq pulseaudio\
+            python3-protobuf unzip chrony systemd-resolved dhcping mpg123\
+            libnl-3-dev libnl-genl-3-dev libnl-route-3-dev ebtables libdbus-1-dev gpsd pulseaudio-utils
+else
+    echo "No internet — skipping apt update/install (packages must already be present)"
+fi
 
 
-# Unpack the tar file that was pulled down earlier.  This contains the kernel and 
+# Unpack the tar file that was pulled down earlier.  This contains the kernel and
 # mesh tools
-tar -zxf /root/morse-pi-install.tar.gz -C /
+if [ -f /root/morse-pi-install.tar.gz ]; then
+    tar -zxf /root/morse-pi-install.tar.gz -C /
+else
+    echo "No tarball to extract — skipping (already provisioned?)"
+fi
 
 # Reload udev rules after extracting (picks up 80-usb-ethernet.rules etc.)
 udevadm control --reload-rules 2>/dev/null || true
@@ -303,8 +326,8 @@ Name=br0
 Kind=bridge
 
 [Bridge]
-MulticastSnooping=true
-MulticastQuerier=true
+MulticastSnooping=false
+MulticastQuerier=false
 EOF
 
 # br0 will get a slaac ipv6 address

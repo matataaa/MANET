@@ -95,6 +95,7 @@ function configRenderView(panel, cfg) {
       { label: 'IPv4 Network', key: 'ipv4_network' },
       { label: 'Regulatory Domain', key: 'regulatory_domain' },
       { label: 'HaLow Bandwidth', key: 'halow_bw' },
+      { label: 'Multicast Mode', key: 'multicast_mode', fmt: function(v) { return v === 'optimized' ? 'Optimized (IGMP)' : 'Flood (default)'; } },
     ]},
     { title: 'Services', fields: [
       { label: 'ACS (Auto Channel)', key: 'acs', yesno: true },
@@ -141,7 +142,8 @@ function configRenderView(panel, cfg) {
       }
       let cls = 'cfg-value';
       if (f.masked && val !== '--') { val = '••••••••'; cls += ' masked'; }
-      if (f.yesno) val = val === 'y' ? 'Enabled' : 'Disabled';
+      if (f.fmt) val = f.fmt(val);
+      else if (f.yesno) val = val === 'y' ? 'Enabled' : 'Disabled';
       html += '<div class="cfg-row"><div class="cfg-label">' + f.label + '</div><div class="' + cls + '">' + escHtml(String(val)) + '</div></div>';
     });
     html += '</div>';
@@ -177,6 +179,10 @@ function configRenderEdit(panel, cfg) {
     { label: 'HaLow Bandwidth', key: 'halow_bw', type: 'select', options: [
       {v:'1MHz',l:'1 MHz'},{v:'2MHz',l:'2 MHz'},{v:'4MHz',l:'4 MHz'},{v:'8MHz',l:'8 MHz'}
     ], hint: 'Primary channel width for 802.11ah mesh' },
+    { label: 'Multicast Mode', key: 'multicast_mode', type: 'select', options: [
+      {v:'flood',l:'Flood (recommended ≤10 nodes)'},
+      {v:'optimized',l:'Optimized IGMP (10+ nodes)'}
+    ], hint: 'Flood sends all multicast to all peers; IGMP uses snooping for selective delivery' },
     { label: 'ACS', key: 'acs', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'MediaMTX', key: 'mtx', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Mumble', key: 'mumble', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
@@ -260,7 +266,7 @@ function configRenderEdit(panel, cfg) {
 
 async function configSave() {
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','mesh_ssid','mesh_key',
-    'ipv4_network','regulatory_domain','halow_bw','acs','mtx','mumble','battery_monitor','auto_update','admin_password',
+    'ipv4_network','regulatory_domain','halow_bw','multicast_mode','acs','mtx','mumble','battery_monitor','auto_update','admin_password',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth'];
   const config = {};
   meshFields.forEach(f => {

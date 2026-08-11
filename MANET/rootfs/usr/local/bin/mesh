@@ -3,7 +3,8 @@
 # Talks to the local manet-ctrl API on port 80
 
 set -euo pipefail
-API="http://127.0.0.1/api"
+API="https://127.0.0.1/api"
+CURL="curl -sfk"
 
 usage() {
   cat <<'USAGE'
@@ -13,6 +14,9 @@ Commands:
   status              Node summary (hostname, IP, uptime, radios, battery)
   nodes               All mesh nodes table
   config show         Show current mesh.conf settings
+  config get <key>    Get a single config value
+  config set <key> <value>   Set a config value (applied immediately)
+  config keys         List all configurable keys
   radio info          Radio interfaces — driver, channel, TX power, MCS
   radio txpower <iface> <dbm>   Set TX power
   radio interface <iface> up|down   Bring interface up/down
@@ -21,12 +25,37 @@ Commands:
   perf ping <target>  Ping a peer node
   reboot              Reboot this node
   help                Show this help
+
+Config keys:
+  node_hostname       Hostname prefix
+  mesh_ssid           Mesh network SSID
+  mesh_key            Mesh SAE (WPA3) key
+  ipv4_network        Mesh IPv4 subnet (e.g. 10.30.2.0/24)
+  regulatory_domain   WiFi regulatory domain (US, EU, JP, AU)
+  halow_bw            HaLow bandwidth (1MHz, 2MHz, 4MHz, 8MHz)
+  multicast_mode      Multicast delivery: flood (default) or optimized
+  eud                 EUD mode: wired, wireless, both, auto, none
+  lan_ap_ssid         WiFi AP SSID
+  lan_ap_key          WiFi AP password
+  lan_ap_channel      AP channel (e.g. 36 for 5GHz)
+  lan_ap_bw           AP bandwidth (20, 40, 80)
+  max_euds_per_node   Max EUD clients per node
+  acs                 Auto channel selection (y/n)
+  mtx                 MediaMTX server (y/n)
+  mumble              Mumble voice server (y/n)
+  battery_monitor     Battery monitoring (y/n)
+  auto_update         Auto update (y/n)
+  admin_password      Admin/perf auth key
+  gateway             Gateway mode (y/n)
+  gateway_nat         NAT masquerade (y/n)
+  gateway_mss_clamp   MSS clamping (y/n)
+  gateway_bandwidth   Bandwidth advertisement (e.g. 5M/5M)
 USAGE
 }
 
 cmd_status() {
   local d
-  d=$(curl -sf "$API/local") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
+  d=$($CURL "$API/local") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
   echo "$d" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
@@ -54,7 +83,7 @@ for r in radios:
 
 cmd_nodes() {
   local d
-  d=$(curl -sf "$API/data") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
+  d=$($CURL "$API/data") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
   echo "$d" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
@@ -80,11 +109,11 @@ for n in sorted(nodes, key=lambda x: x.get('hostname', '')):
 
 cmd_config_show() {
   local d
-  d=$(curl -sf "$API/admin/status") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
+  d=$($CURL "$API/admin/status") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
   echo "$d" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-cfg = d.get('config', {})
+cfg = d.get('current_config', d.get('config', {}))
 if not cfg:
     print('No config data available')
     sys.exit(0)
@@ -93,9 +122,77 @@ for k in sorted(cfg.keys()):
 "
 }
 
+cmd_config_get() {
+  local key=$1
+  local d
+  d=$($CURL "$API/admin/status") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
+  echo "$d" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cfg = d.get('current_config', d.get('config', {}))
+key = '$key'
+if key in cfg:
+    print(cfg[key])
+else:
+    print(f'Key not found: {key}', file=sys.stderr)
+    sys.exit(1)
+"
+}
+
+cmd_config_set() {
+  local key=$1 value=$2
+  local result
+  result=$($CURL -X POST -H 'Content-Type: application/json' \
+    -d "{\"config\":{\"$key\":\"$value\"}}" "$API/admin/save") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
+  echo "$result" | python3 -c "
+import sys, json
+r = json.load(sys.stdin)
+if r.get('ok'):
+    saved = r.get('saved', [])
+    applied = r.get('applied', {})
+    if not saved:
+        print(f'Error: key \"$key\" is not a valid config key', file=sys.stderr)
+        sys.exit(1)
+    print(f'Set $key = $value')
+    for k, v in applied.items():
+        print(f'  Applied: {k}')
+else:
+    print(f'Error: {r.get(\"error\", \"unknown\")}', file=sys.stderr)
+    sys.exit(1)
+"
+}
+
+cmd_config_keys() {
+  cat <<'KEYS'
+node_hostname         Hostname prefix
+mesh_ssid             Mesh network SSID
+mesh_key              Mesh SAE (WPA3) key
+ipv4_network          Mesh IPv4 subnet
+regulatory_domain     WiFi regulatory domain (US, EU, JP, AU)
+halow_bw              HaLow bandwidth (1MHz, 2MHz, 4MHz, 8MHz)
+multicast_mode        Multicast: flood (default) or optimized
+eud                   EUD mode: wired, wireless, both, auto, none
+lan_ap_ssid           WiFi AP SSID
+lan_ap_key            WiFi AP password
+lan_ap_channel        AP channel
+lan_ap_bw             AP bandwidth (20, 40, 80)
+max_euds_per_node     Max EUD clients per node
+acs                   Auto channel selection (y/n)
+mtx                   MediaMTX server (y/n)
+mumble                Mumble voice server (y/n)
+battery_monitor       Battery monitoring (y/n)
+auto_update           Auto update (y/n)
+admin_password        Admin/perf auth key
+gateway               Gateway mode (y/n)
+gateway_nat           NAT masquerade (y/n)
+gateway_mss_clamp     MSS clamping (y/n)
+gateway_bandwidth     Bandwidth advertisement (e.g. 5M/5M)
+KEYS
+}
+
 cmd_radio_info() {
   local d
-  d=$(curl -sf "$API/local") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
+  d=$($CURL "$API/local") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
   echo "$d" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
@@ -122,7 +219,7 @@ for r in radios:
 
 cmd_radio_txpower() {
   local iface=$1 dbm=$2
-  curl -sf -X POST -H 'Content-Type: application/json' \
+  $CURL -X POST -H 'Content-Type: application/json' \
     -d "{\"interface\":\"$iface\",\"dbm\":$dbm}" "$API/control/txpower" | python3 -c "
 import sys, json
 r = json.load(sys.stdin)
@@ -133,7 +230,7 @@ else: print(f'Error: {r.get(\"error\", \"unknown\")}'); sys.exit(1)
 
 cmd_radio_interface() {
   local iface=$1 action=$2
-  curl -sf -X POST -H 'Content-Type: application/json' \
+  $CURL -X POST -H 'Content-Type: application/json' \
     -d "{\"name\":\"$iface\",\"action\":\"$action\"}" "$API/control/interface" | python3 -c "
 import sys, json
 r = json.load(sys.stdin)
@@ -144,7 +241,7 @@ else: print(f'Error: {r.get(\"error\", \"unknown\")}'); sys.exit(1)
 
 cmd_gps() {
   local d
-  d=$(curl -sf "$API/local") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
+  d=$($CURL "$API/local") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
   echo "$d" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
@@ -161,7 +258,7 @@ else:
 
 cmd_services() {
   local d
-  d=$(curl -sf "$API/services") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
+  d=$($CURL "$API/services") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
   echo "$d" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
@@ -181,14 +278,14 @@ for s in svcs:
 
 cmd_perf_ping() {
   local target=$1
-  curl -sf -X POST -H 'Content-Type: application/json' \
+  $CURL -X POST -H 'Content-Type: application/json' \
     -d "{\"target\":\"$target\",\"count\":10}" "$API/perf/ping/run" >/dev/null 2>&1 || true
-  curl -sf "$API/perf/ping/stream" 2>/dev/null || ping -c 10 "$target"
+  $CURL "$API/perf/ping/stream" 2>/dev/null || ping -c 10 "$target"
 }
 
 cmd_reboot() {
   echo "Rebooting node..."
-  curl -sf -X POST -H 'Content-Type: application/json' -d '{}' "$API/terminal/reboot" >/dev/null 2>&1 || true
+  $CURL -X POST -H 'Content-Type: application/json' -d '{}' "$API/terminal/reboot" >/dev/null 2>&1 || true
   echo "Reboot command sent."
 }
 
@@ -198,7 +295,14 @@ case "${1:-}" in
   config)
     case "${2:-}" in
       show) cmd_config_show ;;
-      *)    echo "Usage: mesh config show"; exit 1 ;;
+      get)
+        [[ $# -ge 3 ]] || { echo "Usage: mesh config get <key>"; exit 1; }
+        cmd_config_get "$3" ;;
+      set)
+        [[ $# -ge 4 ]] || { echo "Usage: mesh config set <key> <value>"; exit 1; }
+        cmd_config_set "$3" "$4" ;;
+      keys) cmd_config_keys ;;
+      *)    echo "Usage: mesh config {show|get|set|keys}"; exit 1 ;;
     esac ;;
   radio)
     case "${2:-}" in

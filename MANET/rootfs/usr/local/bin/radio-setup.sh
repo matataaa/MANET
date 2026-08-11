@@ -1009,11 +1009,13 @@ WantedBy=multi-user.target
 EOF
 
     # Enable proxy ARP on br0 for EUD routing
-    cat <<-EOF >> /etc/sysctl.d/99-mesh.conf
+    if ! grep -q 'proxy_arp' /etc/sysctl.d/99-mesh.conf 2>/dev/null; then
+        cat <<-EOF >> /etc/sysctl.d/99-mesh.conf
 
 # Proxy ARP for EUD clients
 net.ipv4.conf.br0.proxy_arp=1
 EOF
+    fi
     sysctl -p /etc/sysctl.d/99-mesh.conf
 
     systemctl enable ap-txpower.service
@@ -1430,11 +1432,13 @@ systemctl enable syncthing@radio.service
 systemctl daemon-reload
 systemctl enable --now nftables.service
 
-# Install scripts for auto gateway management
-cp /root/networkd-dispatcher/off /etc/networkd-dispatcher/off.d/50-gateway-disable
-cp /root/networkd-dispatcher/off /etc/networkd-dispatcher/no-carrier.d/50-gateway-disable
-cp /root/networkd-dispatcher/off /etc/networkd-dispatcher/degraded.d/50-gateway-disable
-cp /root/networkd-dispatcher/carrier /etc/networkd-dispatcher/carrier.d/50-ethernet-detect
+# Install scripts for auto gateway management (skip if source files are gone — already provisioned)
+if [ -d /root/networkd-dispatcher ]; then
+    cp /root/networkd-dispatcher/off /etc/networkd-dispatcher/off.d/50-gateway-disable
+    cp /root/networkd-dispatcher/off /etc/networkd-dispatcher/no-carrier.d/50-gateway-disable
+    cp /root/networkd-dispatcher/off /etc/networkd-dispatcher/degraded.d/50-gateway-disable
+    cp /root/networkd-dispatcher/carrier /etc/networkd-dispatcher/carrier.d/50-ethernet-detect
+fi
 chmod -R 755 /etc/networkd-dispatcher
 
 cat <<- EOF > /etc/systemd/system/ethernet-autodetect.service
@@ -1454,7 +1458,7 @@ WantedBy=multi-user.target
 EOF
 systemctl enable ethernet-autodetect.service
 
-cp /root/regulatory.db /lib/firmware/
+[ -f /root/regulatory.db ] && cp /root/regulatory.db /lib/firmware/
 
 cat <<- EOF > /etc/systemd/system/gateway-manager.service
 [Unit]
@@ -1552,7 +1556,9 @@ fi
 # avahi-daemon is kept but restricted to deny mesh interfaces (bat0, wlan0-2).
 # Clients connected to the EUD AP can reach the admin panel at http://manet.local
 
-apt install -y avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf 2>/dev/null || true
+if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+    apt install -y avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf 2>/dev/null || true
+fi
 install -m 644 /etc/avahi/avahi-daemon.conf /etc/avahi/avahi-daemon.conf.bak 2>/dev/null || true
 cp /usr/local/share/manet/avahi-daemon.conf /etc/avahi/avahi-daemon.conf
 # Add the AP interface to avahi's allow list (br0, end0, eth0 are in the template)
@@ -1633,7 +1639,9 @@ if ! grep -q '^i2c-dev$' /etc/modules 2>/dev/null; then
 fi
 
 # Install i2c-tools for battery-reader and diagnostics
-apt update -qq && apt install -y python3-smbus i2c-tools || true
+if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+    apt update -qq && apt install -y python3-smbus i2c-tools || true
+fi
 
 systemctl enable battery-reader.service
 
@@ -1653,7 +1661,9 @@ systemctl enable battery-reader.service
 #   - No election logic change needed — existing is_ntp_server flag stays
 #     tied to the ethernet gateway; GPS just silently improves time quality.
 
-apt-get install -y gpsd gpsd-clients 2>/dev/null || true
+if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+    apt-get install -y gpsd gpsd-clients 2>/dev/null || true
+fi
 
 # Detect UART GPS (e.g. Quectel L76K on WM1302 Pi Hat).
 # The hat connects GPS TX/RX to GPIO 14/15 (/dev/ttyAMA0).
@@ -1744,8 +1754,8 @@ fi
 FIRST_BOOT_STAGE_MARKER="/var/lib/radio-setup-first-stage.done"
 
 if [[ "$FIRST_BOOT_UNIT_ENABLED" -eq 1 && ! -f "$FIRST_BOOT_STAGE_MARKER" ]]; then
-    apt remove -y network-manager
-    systemctl mask rpi-eeprom-update.service
+    apt remove -y network-manager 2>/dev/null || true
+    systemctl mask rpi-eeprom-update.service 2>/dev/null || true
     systemctl set-default multi-user.target
 
     echo " >> Doing initial Syncthing config..."
@@ -1753,9 +1763,13 @@ if [[ "$FIRST_BOOT_UNIT_ENABLED" -eq 1 && ! -f "$FIRST_BOOT_STAGE_MARKER" ]]; th
     # syncthing's apt post-install may have already created .local as radio:root;
     # install -d skips chown on pre-existing directories, so fix it explicitly.
     chown radio:radio /home/radio/.local
-    sudo -u radio syncthing -generate="/home/radio/.config/syncthing"
-    sleep 5
-    killall syncthing
+    if [ ! -f /home/radio/.config/syncthing/config.xml ]; then
+        sudo -u radio syncthing -generate="/home/radio/.config/syncthing"
+        sleep 5
+        killall syncthing 2>/dev/null || true
+    else
+        echo " >> Syncthing config already exists, skipping generate"
+    fi
     mkdir -p /home/radio/Sync/mumble/backups
     chown -R radio:radio /home/radio/Sync
     chown -R radio:radio /home/radio/.config/syncthing

@@ -124,7 +124,10 @@ for unit in \
     gps-reader.service \
     manet-ctrl.service \
     manet-txpower.service \
+    mesh-chat.service \
+    mesh-manager.service \
     mesh-registry.service \
+    mesh-voice.service \
     node-manager.service \
     sae-watchdog.service
 do

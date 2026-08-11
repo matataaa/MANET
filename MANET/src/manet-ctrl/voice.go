@@ -24,6 +24,7 @@ var (
 	voiceClients   = make(map[*websocket.Conn]uint32)
 	voiceClientsMu sync.RWMutex
 	voiceSSRCSeq   uint32
+	voiceRxOnce    sync.Once
 )
 
 func init() {
@@ -34,6 +35,47 @@ func init() {
 		base ^= crc32.ChecksumIEEE(iface.HardwareAddr)
 	}
 	voiceSSRCSeq = base << 16
+}
+
+func voiceStartRx() {
+	voiceRxOnce.Do(func() {
+		iface, _ := net.InterfaceByName(voiceMcastIface)
+		mcastIP := net.ParseIP(voiceMcastAddr)
+		rxConn, err := net.ListenMulticastUDP("udp4", iface, &net.UDPAddr{IP: mcastIP, Port: voiceMcastPort})
+		if err != nil {
+			log.Printf("voice shared rx: %v", err)
+			return
+		}
+		rxConn.SetReadBuffer(1024 * 1024)
+
+		go func() {
+			buf := make([]byte, 2048)
+			for {
+				n, _, err := rxConn.ReadFromUDP(buf)
+				if err != nil {
+					continue
+				}
+				if n < 12 {
+					continue
+				}
+
+				pktSSRC := binary.BigEndian.Uint32(buf[8:12])
+
+				voiceClientsMu.RLock()
+				for c, cs := range voiceClients {
+					if cs == pktSSRC {
+						continue
+					}
+					pkt := make([]byte, n)
+					copy(pkt, buf[:n])
+					c.WriteMessage(websocket.BinaryMessage, pkt)
+				}
+				voiceClientsMu.RUnlock()
+			}
+		}()
+
+		log.Printf("voice shared rx listener started on %s:%d", voiceMcastAddr, voiceMcastPort)
+	})
 }
 
 func handleVoiceWS(w http.ResponseWriter, r *http.Request) {
@@ -57,10 +99,9 @@ func handleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		voiceClientsMu.Unlock()
 	}()
 
-	iface, _ := net.InterfaceByName(voiceMcastIface)
-	mcastIP := net.ParseIP(voiceMcastAddr)
+	voiceStartRx()
 
-	txAddr := &net.UDPAddr{IP: mcastIP, Port: voiceMcastPort}
+	txAddr := &net.UDPAddr{IP: net.ParseIP(voiceMcastAddr), Port: voiceMcastPort}
 	txConn, err := net.DialUDP("udp4", nil, txAddr)
 	if err != nil {
 		log.Printf("voice tx: %v", err)
@@ -73,62 +114,8 @@ func handleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	rxConn, err := net.ListenMulticastUDP("udp4", iface, &net.UDPAddr{IP: mcastIP, Port: voiceMcastPort})
-	if err != nil {
-		log.Printf("voice rx: %v", err)
-		return
-	}
-	defer rxConn.Close()
-	rxConn.SetReadBuffer(256 * 1024)
-
-	var closed atomic.Bool
-
-	// RX: multicast RTP → websocket
-	go func() {
-		buf := make([]byte, 2048)
-		for !closed.Load() {
-			n, _, err := rxConn.ReadFromUDP(buf)
-			if err != nil {
-				if closed.Load() {
-					return
-				}
-				continue
-			}
-			if n < 12 {
-				continue
-			}
-
-			pktSSRC := binary.BigEndian.Uint32(buf[8:12])
-
-			if pktSSRC == ssrc {
-				continue
-			}
-
-			// Skip packets from other web clients on this server
-			voiceClientsMu.RLock()
-			skip := false
-			for _, cs := range voiceClients {
-				if cs == pktSSRC {
-					skip = true
-					break
-				}
-			}
-			voiceClientsMu.RUnlock()
-			if skip {
-				continue
-			}
-
-			pkt := make([]byte, n)
-			copy(pkt, buf[:n])
-			if err := conn.WriteMessage(websocket.BinaryMessage, pkt); err != nil {
-				return
-			}
-		}
-	}()
-
 	log.Printf("voice ws connected from %s (ssrc=%08x)", r.RemoteAddr, ssrc)
 
-	// TX: websocket opus frames → wrap in RTP → multicast + local relay
 	for {
 		msgType, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -151,7 +138,6 @@ func handleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		voiceClientsMu.RUnlock()
 	}
 
-	closed.Store(true)
 	log.Printf("voice ws disconnected %s", r.RemoteAddr)
 }
 

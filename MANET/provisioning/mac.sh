@@ -390,6 +390,11 @@ acquire_base_image() {
 build_image() {
     local hw_model="$1"
 
+    # Stop macOS writing AppleDouble sidecars (._foo) onto the FAT32 boot
+    # partition — FAT32 has no xattr support, so cp/tar would otherwise leave
+    # a 4 KB ._file next to every file we write. linux.sh produces none.
+    export COPYFILE_DISABLE=1
+
     # CM4 uses rpi4 template
     [ "$hw_model" = "cm4" ] && hw_model="rpi4"
 
@@ -496,6 +501,10 @@ WRAPPER_HEAD
     fi
 
     # Unmount and detach
+    # Sweep any AppleDouble leftovers before unmounting (belt and braces —
+    # COPYFILE_DISABLE covers cp/tar, dot_clean catches anything else).
+    dot_clean -m "$boot_mount" 2>/dev/null || true
+    rm -f "$boot_mount"/._* 2>/dev/null || true
     sync
     umount "$boot_mount" 2>/dev/null || sudo umount "$boot_mount"
     rmdir "$boot_mount"

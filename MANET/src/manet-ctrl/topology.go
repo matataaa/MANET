@@ -8,8 +8,45 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+var (
+	statusCacheMu   sync.Mutex
+	statusCache     *StatusData
+	statusCacheTime time.Time
+	statusCacheTTL  = 3 * time.Second
+
+	localCacheMu   sync.Mutex
+	localCache     *LocalData
+	localCacheTime time.Time
+	localCacheTTL  = 3 * time.Second
+)
+
+func cachedStatusData() StatusData {
+	statusCacheMu.Lock()
+	defer statusCacheMu.Unlock()
+	if statusCache != nil && time.Since(statusCacheTime) < statusCacheTTL {
+		return *statusCache
+	}
+	data := assembleStatusData()
+	statusCache = &data
+	statusCacheTime = time.Now()
+	return data
+}
+
+func cachedLocalData() LocalData {
+	localCacheMu.Lock()
+	defer localCacheMu.Unlock()
+	if localCache != nil && time.Since(localCacheTime) < localCacheTTL {
+		return *localCache
+	}
+	data := assembleLocalData()
+	localCache = &data
+	localCacheTime = time.Now()
+	return data
+}
 
 func stateIP(state map[string]string) string {
 	if ip := state["CURRENT_IPV4"]; ip != "" {

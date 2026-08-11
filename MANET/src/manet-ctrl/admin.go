@@ -82,6 +82,7 @@ func assembleAdminStatus() AdminStatus {
 		"gateway_mss_clamp": confGet(conf, "gateway_mss_clamp", "y"),
 		"gateway_bandwidth": confGet(conf, "gateway_bandwidth", ""),
 		"halow_bw":          confGet(conf, "halow_bw", ""),
+		"multicast_mode":    confGet(conf, "multicast_mode", "flood"),
 		"lan_ap_channel":    conf["lan_ap_channel"],
 		"lan_ap_bw":         confGet(conf, "lan_ap_bw", "20"),
 	}

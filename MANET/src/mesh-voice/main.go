@@ -138,6 +138,60 @@ func run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("unknown PTT source: %s", cfg.PTTSource)
 	}
 
+	// Audio device idle management
+	var captureMu sync.Mutex
+	var captureRunning atomic.Bool
+	var playbackMu sync.Mutex
+	var playbackRunning atomic.Bool
+	var captureDevicePtr *malgo.Device
+	var playbackDevicePtr *malgo.Device
+
+	ensureCapture := func() {
+		captureMu.Lock()
+		defer captureMu.Unlock()
+		if captureRunning.Load() || captureDevicePtr == nil {
+			return
+		}
+		if err := captureDevicePtr.Start(); err != nil {
+			log.Printf("capture resume: %v", err)
+			return
+		}
+		captureRunning.Store(true)
+	}
+
+	pauseCapture := func() {
+		captureMu.Lock()
+		defer captureMu.Unlock()
+		if !captureRunning.Load() || captureDevicePtr == nil {
+			return
+		}
+		captureDevicePtr.Stop()
+		captureRunning.Store(false)
+	}
+
+	ensurePlayback := func() {
+		playbackMu.Lock()
+		defer playbackMu.Unlock()
+		if playbackRunning.Load() || playbackDevicePtr == nil {
+			return
+		}
+		if err := playbackDevicePtr.Start(); err != nil {
+			log.Printf("playback resume: %v", err)
+			return
+		}
+		playbackRunning.Store(true)
+	}
+
+	pausePlayback := func() {
+		playbackMu.Lock()
+		defer playbackMu.Unlock()
+		if !playbackRunning.Load() || playbackDevicePtr == nil {
+			return
+		}
+		playbackDevicePtr.Stop()
+		playbackRunning.Store(false)
+	}
+
 	// PTT event handler
 	go func() {
 		for {
@@ -147,6 +201,7 @@ func run(ctx context.Context, cfg Config) error {
 					if remoteActive.Load() {
 						log.Println("TX: blocked (half-duplex, remote active)")
 					} else {
+						ensureCapture()
 						broadcasting.Store(true)
 						pttState.setActive(true)
 						pttState.setTX(true)
@@ -156,6 +211,7 @@ func run(ctx context.Context, cfg Config) error {
 					broadcasting.Store(false)
 					pttState.setActive(false)
 					pttState.setTX(false)
+					pauseCapture()
 					log.Println("TX: stop")
 				}
 			case <-ctx.Done():
@@ -242,13 +298,19 @@ func run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		log.Printf("no capture device available — running receive-only: %v", err)
 	} else {
-		if err := captureDevice.Start(); err != nil {
-			log.Printf("capture start failed — running receive-only: %v", err)
-			captureDevice.Uninit()
+		captureDevicePtr = captureDevice
+		defer captureDevice.Uninit()
+		alwaysOn := cfg.PTTSource == "always" || cfg.PTTSource == "vox"
+		if alwaysOn {
+			if err := captureDevice.Start(); err != nil {
+				log.Printf("capture start failed — running receive-only: %v", err)
+			} else {
+				canCapture = true
+				captureRunning.Store(true)
+				defer captureDevice.Stop()
+			}
 		} else {
 			canCapture = true
-			defer captureDevice.Stop()
-			defer captureDevice.Uninit()
 		}
 	}
 
@@ -315,12 +377,13 @@ func run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("playback device: %w", err)
 	}
+	playbackDevicePtr = playbackDevice
 	defer playbackDevice.Uninit()
-
-	if err := playbackDevice.Start(); err != nil {
-		return fmt.Errorf("playback start: %w", err)
-	}
-	defer playbackDevice.Stop()
+	defer func() {
+		if playbackRunning.Load() {
+			playbackDevice.Stop()
+		}
+	}()
 
 	go func() {
 		<-ctx.Done()
@@ -355,6 +418,7 @@ func run(ctx context.Context, cfg Config) error {
 			remoteActive.Store(true)
 			pttState.setRX(true)
 			lastRxTime.Store(time.Now().UnixMilli())
+			ensurePlayback()
 
 			samples, err := decoder.Decode(payload, pcmOut)
 			if err != nil {
@@ -373,7 +437,7 @@ func run(ctx context.Context, cfg Config) error {
 		}
 	}()
 
-	// Half-duplex decay: clear remoteActive after silence
+	// Half-duplex decay: clear remoteActive after silence, pause playback after idle
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -384,9 +448,13 @@ func run(ctx context.Context, cfg Config) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if time.Now().UnixMilli()-lastRxTime.Load() > 500 {
+				silenceMs := time.Now().UnixMilli() - lastRxTime.Load()
+				if silenceMs > 500 {
 					remoteActive.Store(false)
 					pttState.setRX(false)
+				}
+				if silenceMs > 2000 && playbackRunning.Load() {
+					pausePlayback()
 				}
 			}
 		}

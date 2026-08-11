@@ -9,6 +9,7 @@
 - **Self-forming mesh** — nodes discover peers automatically on a lobby channel at boot
 - **Self-healing** — batman-adv reroutes around failed links, SAE watchdog restarts stalled auth
 - **batman-enslave watchdog** — re-enslaves interfaces to bat0 if the link drops
+- **Multicast mode** — configurable via UI/CLI: flood (forceflood, recommended ≤10 nodes) or optimized (IGMP snooping + querier for 10+ nodes)
 
 ## Zero-Configuration Networking
 
@@ -56,8 +57,9 @@
 
 - **DSCP EF marking** — voice UDP packets tagged with TOS 0xB8 (Expedited Forwarding)
 - **WMM prioritization** — DSCP maps through batman-adv to 802.11 Access Category Voice (AC_VO), shortest contention window
-- **tc prio qdisc** — 3-band priority queue on br0: voice in band 0, bulk in band 2
-- **Port-based filter** — multicast port 4370 matched to high-priority band as fallback
+- **tc prio qdisc** — 3-band priority queue on br0: voice high, CoT normal, chat bulk
+- **Per-service band assignment** — configurable via UI QoS card on the Config page
+- **Port-based filter** — service ports matched to priority bands via tc u32 filters
 
 ## Applet System
 
@@ -90,7 +92,13 @@
 - `mesh status` — node summary (hostname, IP, uptime, radios, battery)
 - `mesh nodes` — mesh-wide node table (hostname, IP, TQ, hops, last seen)
 - `mesh config show` — display all mesh.conf settings
+- `mesh config get <key>` — get a single config value
+- `mesh config set <key> <value>` — set a config value (applied immediately)
+- `mesh config keys` — list all configurable keys with descriptions
 - `mesh radio info` — radio interfaces with driver, channel, TX power, MCS
+- `mesh radio txpower <iface> <dbm>` — set TX power on an interface
+- `mesh radio interface <iface> up|down` — bring a radio interface up or down
+- `mesh gps` — GPS fix status and coordinates
 - `mesh services` — systemd service listing with status and category
 - `mesh perf ping <target>` — ping a peer node
 - `mesh reboot` — reboot the node

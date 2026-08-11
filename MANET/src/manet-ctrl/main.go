@@ -27,6 +27,8 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
+var peerTLSConfig *tls.Config
+
 func handleTerminal(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -53,10 +55,11 @@ func handleTerminal(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleTerminalProxy(client *websocket.Conn, target string) {
-	remoteURL := fmt.Sprintf("ws://%s/ws/terminal", target)
+	remoteURL := fmt.Sprintf("wss://%s/ws/terminal", target)
 	dialer := websocket.Dialer{
 		ReadBufferSize:  16384,
 		WriteBufferSize: 16384,
+		TLSClientConfig: peerTLSConfig,
 	}
 	remote, _, err := dialer.Dial(remoteURL, nil)
 	if err != nil {
@@ -296,7 +299,10 @@ func main() {
 	tlsCert := flag.String("tls-cert", "/etc/manet/tls/cert.pem", "TLS certificate file")
 	tlsKey := flag.String("tls-key", "/etc/manet/tls/key.pem", "TLS key file")
 	webRoot := flag.String("webroot", "/usr/local/share/manet/www", "static files directory")
+	tlsSkipVerify := flag.Bool("tls-skip-verify", true, "skip TLS verification for peer connections")
 	flag.Parse()
+
+	peerTLSConfig = &tls.Config{InsecureSkipVerify: *tlsSkipVerify}
 
 	mux := http.NewServeMux()
 
