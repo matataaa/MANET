@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -36,7 +37,23 @@ var origRE = regexp.MustCompile(`[\s*]+([0-9a-f:]{17})\s+[\d.]+(?:ms|s)\s+\(\s*(
 var neighRE = regexp.MustCompile(`([0-9a-f:]{17})\s+[\d.]+(?:ms|s)\s+\(\s*([\d.]+)\)\s+\[\s*(\S+)\s*\]`)
 var macRE = regexp.MustCompile(`([0-9a-f]{2}(?::[0-9a-f]{2}){5})`)
 
+var batmanV bool
+var batmanVOnce sync.Once
+
+func isBatmanV() bool {
+	batmanVOnce.Do(func() {
+		out, err := runCmdStdout(3*time.Second, "batctl", "routing_algo")
+		if err == nil && strings.Contains(out, "BATMAN_V") {
+			batmanV = true
+		}
+	})
+	return batmanV
+}
+
 func normTQ(raw float64) int {
+	if isBatmanV() {
+		return int(math.Min(raw*255/50, 255))
+	}
 	if raw > 255 {
 		return int(math.Min(raw/1000*255, 255))
 	}

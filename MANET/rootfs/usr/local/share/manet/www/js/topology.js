@@ -41,12 +41,12 @@ function topoInit(container) {
   svg.call(topoZoom);
 
   topoSim = d3.forceSimulation()
-    .force('charge', d3.forceManyBody().strength(-3000))
+    .force('charge', d3.forceManyBody().strength(-1500))
     .force('link', d3.forceLink().id(d => d.id).distance(d => {
       const tq = d.tq != null ? d.tq : 128;
-      return 250 + ((255 - tq) / 255) * 250;
+      return 120 + ((255 - tq) / 255) * 180;
     }))
-    .force('collision', d3.forceCollide(120))
+    .force('collision', d3.forceCollide(80))
     .alphaDecay(0.05);
 
   topoNodeMap = {};
@@ -66,7 +66,7 @@ function topoUpdate(data) {
   const ts = data.timestamp || 0;
   const nodes = data.nodes.map((n, idx) => {
     const old = topoNodeMap[n.id];
-    const r = n.is_me ? 18 : (n.is_gateway ? 14 : 11);
+    const r = n.is_me ? 32 : (n.is_gateway ? 26 : 22);
     const stale = !n.is_me && n.last_seen && ts && (ts - parseInt(n.last_seen)) > 300;
     const obj = { ...n, r: r, stale: stale };
     if (old) {
@@ -121,7 +121,7 @@ function topoUpdate(data) {
       if (staleIds.has(sid) || staleIds.has(tid)) return '#6e7681';
       return tqColor(d.tq);
     })
-    .attr('stroke-width', d => d.type === 'direct' ? 3 : 1.5)
+    .attr('stroke-width', d => d.type === 'direct' ? 3 : 2)
     .attr('stroke-dasharray', d => {
       const sid = d.source.id || d.source;
       const tid = d.target.id || d.target;
@@ -134,10 +134,8 @@ function topoUpdate(data) {
     .attr('stroke-opacity', d => {
       const sid = d.source.id || d.source;
       const tid = d.target.id || d.target;
-      if (staleIds.has(sid) || staleIds.has(tid)) return 0.2;
-      if (d.type === 'direct') return 0.85;
-      if (d.type === 'inferred') return 0.35;
-      return 0.5;
+      if (staleIds.has(sid) || staleIds.has(tid)) return 0.35;
+      return 1;
     });
 
   // Nodes
@@ -163,6 +161,15 @@ function topoUpdate(data) {
     .attr('stroke-width', 2.5);
 
   nodeEnter.append('text')
+    .attr('class', 'topo-badge')
+    .attr('text-anchor', 'middle')
+    .attr('y', -30)
+    .style('font-size', '10px')
+    .style('font-weight', '900')
+    .style('pointer-events', 'none');
+
+  nodeEnter.append('text')
+    .attr('class', 'topo-label')
     .attr('text-anchor', 'middle')
     .style('font-size', '11px')
     .style('font-weight', '800')
@@ -177,7 +184,6 @@ function topoUpdate(data) {
       if (d.stale) return '#6e7681';
       if (d.is_me) return '#00928f';
       if (d.limp) return '#ef4444';
-      if (d.state === 'SHUTTING_DOWN') return '#9aa4b2';
       return tqColor(d.tq);
     })
     .attr('stroke-opacity', d => d.stale ? 0.3 : (d.is_me ? 0.8 : 0.5));
@@ -185,10 +191,15 @@ function topoUpdate(data) {
   nodeAll.select('image')
     .attr('opacity', d => d.stale ? 0.3 : 1);
 
-  nodeAll.select('text')
+  nodeAll.select('.topo-badge')
+    .text(d => d.is_gateway ? 'GW' : (d.is_me ? 'ME' : ''))
+    .attr('fill', d => d.is_gateway ? '#7c3aed' : '#00928f');
+
+  nodeAll.select('.topo-label')
     .text(d => d.hostname || d.id)
-    .attr('dy', d => d.r + 16)
-    .attr('fill', d => d.stale ? '#6e7681' : (isDarkTheme() ? '#f8f6ef' : '#02000d'));
+    .attr('dy', d => d.r + 36)
+    .attr('fill', '#fff')
+    .style('font-size', '11px');
 
   nodeAll.style('cursor', d => d.ip ? 'pointer' : 'grab');
 
@@ -240,6 +251,8 @@ function topoUpdate(data) {
 
   topoSim.nodes(nodes);
   topoSim.force('link').links(links);
+  topoSim.force('x', d3.forceX(W / 2).strength(0.06));
+  topoSim.force('y', d3.forceY(H / 2).strength(0.06));
 
   // First render: full simulation. Updates: gentle reheat only if topology changed.
   if (!topoInitialized) {

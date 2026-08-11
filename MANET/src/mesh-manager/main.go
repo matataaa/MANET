@@ -864,7 +864,23 @@ func setupVoiceQoS() {
 			log.Printf("QoS: tc filter port on %s failed: %s %v", iface, out, err)
 		}
 
-		log.Printf("QoS: voice priority active on %s", iface)
+		// CoT multicast port 6969 → band 1 (normal)
+		if out, err := run(5*time.Second, "/usr/sbin/tc", "filter", "add", "dev", iface, "parent", "1:0",
+			"protocol", "ip", "prio", "3", "u32",
+			"match", "ip", "dport", "6969", "0xffff",
+			"flowid", "1:2"); err != nil {
+			log.Printf("QoS: tc filter CoT on %s failed: %s %v", iface, out, err)
+		}
+
+		// Mesh Chat port 9800 → band 2 (bulk)
+		if out, err := run(5*time.Second, "/usr/sbin/tc", "filter", "add", "dev", iface, "parent", "1:0",
+			"protocol", "ip", "prio", "4", "u32",
+			"match", "ip", "dport", "9800", "0xffff",
+			"flowid", "1:3"); err != nil {
+			log.Printf("QoS: tc filter chat on %s failed: %s %v", iface, out, err)
+		}
+
+		log.Printf("QoS: priority active on %s (voice=high, cot=normal, chat=bulk)", iface)
 	}
 }
 

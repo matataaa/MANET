@@ -119,6 +119,7 @@ function toggleAppletLogs(name) {
 function openApplet(name) {
   var existing = document.querySelector('.applet-iframe-overlay');
   if (existing) existing.remove();
+  var returnHash = window.location.hash || '#dashboard';
   var display = appletDisplayName(name);
   var overlay = document.createElement('div');
   overlay.className = 'applet-iframe-overlay';
@@ -132,13 +133,14 @@ function openApplet(name) {
   window.location.hash = 'applets/' + encodeURIComponent(name);
   document.getElementById('close-applet-overlay').onclick = function() {
     overlay.remove();
-    window.location.hash = 'applets';
+    window.location.hash = returnHash.replace('#', '');
   };
 }
 
 function openAppletConfig(name) {
   var existing = document.querySelector('.applet-iframe-overlay');
   if (existing) existing.remove();
+  var returnHash = window.location.hash || '#dashboard';
   var display = appletDisplayName(name);
   var overlay = document.createElement('div');
   overlay.className = 'applet-iframe-overlay';
@@ -152,7 +154,7 @@ function openAppletConfig(name) {
   window.location.hash = 'applets/' + encodeURIComponent(name) + '/config';
   document.getElementById('close-config-overlay').onclick = function() {
     overlay.remove();
-    window.location.hash = 'applets';
+    window.location.hash = returnHash.replace('#', '');
   };
 }
 

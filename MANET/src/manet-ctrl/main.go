@@ -322,6 +322,7 @@ func main() {
 	})
 	mux.HandleFunc("/api/services/", apiServiceAction)
 	mux.HandleFunc("/api/mesh", apiMesh)
+	mux.HandleFunc("/api/qos", apiQoS)
 
 	// Control APIs
 	mux.HandleFunc("/api/control/interface", apiControlInterface)

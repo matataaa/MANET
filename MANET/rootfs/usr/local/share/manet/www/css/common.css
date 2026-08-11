@@ -54,7 +54,7 @@ body {
   min-height: 56px; flex-shrink: 0;
   position: sticky; top: 0; z-index: 100;
   box-shadow: 0 2px 8px rgba(0,0,0,.25);
-  overflow: hidden;
+  overflow: visible;
 }
 #header::after {
   content:''; position:absolute; left:0; right:0; bottom:0; height:3px;
@@ -124,6 +124,19 @@ body {
   background: rgba(0,146,143,.22); color: #ffffff;
   border-color: rgba(0,146,143,.45);
 }
+
+/* More dropdown */
+.nav-more { position: relative; }
+.nav-more-btn { cursor: pointer; border: none; background: none; }
+.nav-more-arrow { font-size: 9px; }
+.nav-more-menu {
+  display: none; position: absolute; top: 100%; right: 0; margin-top: 4px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px; min-width: 120px; z-index: 50;
+  box-shadow: 0 8px 24px rgba(0,0,0,.3);
+}
+.nav-more-menu.show { display: flex; flex-direction: column; }
+.nav-more-menu .tab { display: block; width: 100%; text-align: left; padding: 8px 12px; border-radius: 6px; }
 
 /* Header right */
 #hdr-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; line-height: 1; }

@@ -323,6 +323,9 @@ start() {
     done
 
     ip link set bat0 up
+
+    batctl bat0 multicast_forceflood 1
+    echo "bat0 multicast_forceflood enabled"
     echo "bat0 interface is up and configured."
 
     # Final verification

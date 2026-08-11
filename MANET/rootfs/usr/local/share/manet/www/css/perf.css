@@ -60,6 +60,13 @@
 .radio-iface-name { font-size: 13px; font-weight: 800; margin-bottom: 8px; }
 .radio-iface-detail { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
 
+/* Mesh detail in perf */
+.perf-mesh-detail {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+.perf-mesh-detail .mesh-wide { grid-column: 1 / -1; }
+
 @media (max-width: 768px) {
   .measure-form { grid-template-columns: 1fr; }
 }

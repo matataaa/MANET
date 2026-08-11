@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -175,6 +176,14 @@ func main() {
 		log.Fatalf("Failed to create UDP socket: %v", err)
 	}
 	defer sock.Close()
+	if uc, ok := sock.(*net.UDPConn); ok {
+		if rc, err := uc.SyscallConn(); err == nil {
+			rc.Control(func(fd uintptr) {
+				syscall.SetsockoptString(int(fd), syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, "br0")
+				syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_TOS, 0x20)
+			})
+		}
+	}
 
 	mcastAddr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", mcastGroup, mcastPort))
 	var lastMcast time.Time

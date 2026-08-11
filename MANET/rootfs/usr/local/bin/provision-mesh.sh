@@ -319,6 +319,10 @@ LinkLocalAddressing=ipv6
 IPv6AcceptRA=yes
 MulticastDNS=yes
 
+[Route]
+Destination=224.0.0.0/4
+Type=multicast
+
 [Link]
 RequiredForOnline=no
 MTUBytes=1500

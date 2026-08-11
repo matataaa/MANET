@@ -8,12 +8,12 @@
   <line x1="20" y1="7" x2="20" y2="4" stroke="#eab308" stroke-width="2" stroke-linecap="round"/>
   <line x1="34.5" y1="8" x2="36.5" y2="5" stroke="#eab308" stroke-width="2" stroke-linecap="round"/>
   <!-- Body -->
-  <rect x="8" y="22" width="24" height="40" rx="3" fill="#2a2a2e"/>
+  <rect x="8" y="22" width="24" height="40" rx="3" fill="#3e4250" stroke="#5a5f72" stroke-width="0.8"/>
   <!-- Vent lines -->
-  <line x1="11" y1="44" x2="11" y2="60" stroke="#1a1a1e" stroke-width="1.5"/>
-  <line x1="15" y1="44" x2="15" y2="60" stroke="#1a1a1e" stroke-width="1.5"/>
-  <line x1="19" y1="44" x2="19" y2="60" stroke="#1a1a1e" stroke-width="1.5"/>
-  <line x1="29" y1="44" x2="29" y2="60" stroke="#1a1a1e" stroke-width="1.5"/>
+  <line x1="11" y1="44" x2="11" y2="60" stroke="#2e3040" stroke-width="1.5"/>
+  <line x1="15" y1="44" x2="15" y2="60" stroke="#2e3040" stroke-width="1.5"/>
+  <line x1="19" y1="44" x2="19" y2="60" stroke="#2e3040" stroke-width="1.5"/>
+  <line x1="29" y1="44" x2="29" y2="60" stroke="#2e3040" stroke-width="1.5"/>
   <!-- Status LEDs -->
   <circle cx="14" cy="28" r="1.5" fill="#22c55e"/>
   <circle cx="20" cy="28" r="1.5" fill="#22c55e"/>

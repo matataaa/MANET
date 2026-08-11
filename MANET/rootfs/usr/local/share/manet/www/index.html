@@ -34,13 +34,18 @@
       <a href="#nodes" class="tab" data-tab="nodes">Nodes</a>
       <a href="#config" class="tab" data-tab="config">Config</a>
       <a href="#hardware" class="tab" data-tab="hardware">Hardware</a>
-      <a href="#voice" class="tab" data-tab="voice">Voice</a>
-      <a href="#perf" class="tab" data-tab="perf">Perf</a>
-      <a href="#services" class="tab" data-tab="services">Services</a>
       <a href="#mesh" class="tab" data-tab="mesh">Mesh</a>
-      <a href="#terminal" class="tab" data-tab="terminal">Terminal</a>
-      <a href="#applets" class="tab" data-tab="applets">Applets</a>
-      <a href="#docs" class="tab" data-tab="docs">Docs</a>
+      <a href="#voice" class="tab" data-tab="voice">Voice</a>
+      <a href="#services" class="tab" data-tab="services">Services</a>
+      <div class="nav-more">
+        <button class="tab nav-more-btn" id="nav-more-btn">More <span class="nav-more-arrow">&#9662;</span></button>
+        <div class="nav-more-menu" id="nav-more-menu">
+          <a href="#perf" class="tab" data-tab="perf">Tools</a>
+          <a href="#terminal" class="tab" data-tab="terminal">Terminal</a>
+          <a href="#applets" class="tab" data-tab="applets">Applets</a>
+          <a href="#docs" class="tab" data-tab="docs">Docs</a>
+        </div>
+      </div>
     </nav>
     <div id="hdr-right">
       <div id="hdr-health" class="health-loading">
@@ -60,13 +65,13 @@
       <div style="color:#6b7280;font-size:13px;font-weight:700">Connecting to node...</div>
     </div>
     <section id="tab-dashboard" class="tab-panel active"></section>
+    <section id="tab-mesh" class="tab-panel"></section>
     <section id="tab-nodes" class="tab-panel"></section>
     <section id="tab-config" class="tab-panel"></section>
     <section id="tab-hardware" class="tab-panel"></section>
     <section id="tab-voice" class="tab-panel"></section>
     <section id="tab-perf" class="tab-panel"></section>
     <section id="tab-services" class="tab-panel"></section>
-    <section id="tab-mesh" class="tab-panel"></section>
     <section id="tab-terminal" class="tab-panel"></section>
     <section id="tab-applets" class="tab-panel"></section>
     <section id="tab-docs" class="tab-panel"></section>

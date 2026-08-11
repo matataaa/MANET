@@ -1,4 +1,4 @@
-// Perf tab: radio control, iperf measurements, ping
+// Tools tab: iperf measurements, ping
 let perfInitialized = false;
 let perfActiveSection = 'measure';
 let perfPingAbort = null;
@@ -10,7 +10,6 @@ function perfActivate() {
     panel.innerHTML = `
       <div class="perf-tabs">
         <button class="perf-tab active" data-section="measure">Measure</button>
-        <button class="perf-tab" data-section="radio">Radio</button>
         <button class="perf-tab" data-section="ping">Ping</button>
       </div>
       <div class="perf-section active" id="perf-measure">
@@ -37,12 +36,6 @@ function perfActivate() {
           <div class="measure-results" id="perf-results" style="display:none"></div>
         </div>
       </div>
-      <div class="perf-section" id="perf-radio">
-        <div class="card">
-          <div class="card-header">RADIO INTERFACES</div>
-          <div class="radio-grid" id="perf-radio-grid"><div class="loading-msg">Loading interfaces...</div></div>
-        </div>
-      </div>
       <div class="perf-section" id="perf-ping">
         <div class="card">
           <div class="card-header">PING TEST</div>
@@ -66,7 +59,6 @@ function perfActivate() {
         perfActiveSection = btn.dataset.section;
         panel.querySelectorAll('.perf-tab').forEach(b => b.classList.toggle('active', b === btn));
         panel.querySelectorAll('.perf-section').forEach(s => s.classList.toggle('active', s.id === 'perf-' + perfActiveSection));
-        if (perfActiveSection === 'radio') perfLoadRadio();
       });
     });
 
@@ -82,8 +74,6 @@ function perfActivate() {
 
     perfInitialized = true;
   }
-
-  if (perfActiveSection === 'radio') perfLoadRadio();
 }
 
 async function perfStreamTo(url, body, pre, abortKey) {
@@ -185,29 +175,3 @@ async function perfStopPing() {
   document.getElementById('ping-stop-btn').style.display = 'none';
 }
 
-async function perfLoadRadio() {
-  const grid = document.getElementById('perf-radio-grid');
-  if (!LOCAL_DATA || !LOCAL_DATA.interfaces) {
-    grid.innerHTML = '<div class="loading-msg">No interface data</div>';
-    return;
-  }
-  const radios = LOCAL_DATA.interfaces.filter(i => i.role === 'mesh' || i.role === 'ap');
-  if (!radios.length) {
-    grid.innerHTML = '<div class="loading-msg">No radio interfaces found</div>';
-    return;
-  }
-  grid.innerHTML = radios.map(iface => {
-    const stateClass = iface.state === 'UP' ? 'iface-state-up' : 'iface-state-down';
-    let details = '';
-    if (iface.detail) details += '<div class="radio-iface-detail">' + escHtml(iface.detail) + '</div>';
-    if (iface.channel) details += '<div class="radio-iface-detail">Channel: ' + escHtml(iface.channel) + (iface.halow_bw ? ' (' + iface.halow_bw + ')' : '') + '</div>';
-    if (iface.txpower_dbm) details += '<div class="radio-iface-detail">TX Power: ' + escHtml(iface.txpower_dbm) + ' dBm</div>';
-    if (iface.addrs && iface.addrs.length) details += '<div class="radio-iface-detail" style="color:#60b8d4">' + iface.addrs.join(', ') + '</div>';
-    iface.faults.forEach(f => { details += '<div style="font-size:10px;color:var(--bad)">⚠ ' + escHtml(f) + '</div>'; });
-
-    return '<div class="radio-iface-card">' +
-      '<div class="radio-iface-name">' + escHtml(iface.name) + ' <span class="' + stateClass + '" style="font-size:10px">' + iface.state + '</span></div>' +
-      details +
-      '</div>';
-  }).join('');
-}

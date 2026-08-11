@@ -8,10 +8,15 @@ function dashboardActivate() {
       <div class="topo-panel" id="topo-container">
         <div class="topo-loading" id="topo-loading">LOADING TOPOLOGY...</div>
       </div>
-      <div class="dash-side card">
-        <div class="card-header">MESH NODES <span id="dash-node-count"></span></div>
-        <div id="dash-node-list"></div>
-      </div>`;
+      <div class="dash-side">
+        <div class="card">
+          <div class="card-header">MESH NODES <span id="dash-node-count"></span></div>
+          <div id="dash-node-list"></div>
+        </div>
+        <div id="dash-daemons-wrap"></div>
+        <div id="dash-applets-wrap"></div>
+      </div>
+`;
     topoInit(document.getElementById('topo-container'));
     dashInitialized = true;
   }
@@ -30,17 +35,8 @@ function dashboardUpdate() {
 }
 
 function renderDashDaemons() {
-  var side = document.querySelector('.dash-side');
-  if (!side) return;
-
-  var el = document.getElementById('dash-daemons');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'dash-daemons';
-    var nodeList = document.getElementById('dash-node-list');
-    if (nodeList && nodeList.nextSibling) side.insertBefore(el, nodeList.nextSibling);
-    else side.appendChild(el);
-  }
+  var wrap = document.getElementById('dash-daemons-wrap');
+  if (!wrap) return;
 
   fetch('/api/daemons').then(function(r) { return r.json(); }).then(function(d) {
     var items = [];
@@ -75,23 +71,19 @@ function renderDashDaemons() {
         '<span class="dash-daemon-val">' + cotVal + '</span></div>');
     }
 
-    if (!items.length) { el.style.display = 'none'; return; }
-    el.style.display = '';
-    el.innerHTML = '<div class="card-header">DAEMONS</div>' + items.join('');
+    if (!items.length) { wrap.innerHTML = ''; return; }
+    wrap.innerHTML = '<div class="card"><div class="card-header">DAEMONS</div>' + items.join('') + '</div>';
   }).catch(function() {});
 }
 
 function renderDashApplets() {
-  if (document.getElementById('dash-applets')) return;
+  var wrap = document.getElementById('dash-applets-wrap');
+  if (!wrap || wrap.innerHTML) return;
   fetch('/api/applets').then(function(r) { return r.json(); }).then(function(d) {
     var applets = (d.applets || []).filter(function(a) { return a.has_frontend; });
     if (!applets.length) return;
-    var side = document.querySelector('.dash-side');
-    if (!side) return;
-    var section = document.createElement('div');
-    section.id = 'dash-applets';
-    section.className = 'dash-applets-section';
-    section.innerHTML = '<div class="card-header">APPLETS</div>' +
+    wrap.innerHTML = '<div class="card">' +
+      '<div class="card-header">APPLETS</div>' +
       applets.map(function(a) {
         var dot = a.status === 'running' ? 'on' : 'off';
         return '<div class="dash-applet-row" onclick="openApplet(\'' + escHtml(a.name) + '\')" data-applet-badge="' + escHtml(a.name) + '">' +
@@ -99,8 +91,7 @@ function renderDashApplets() {
           '<span class="dash-applet-name">' + escHtml(a.label || a.name) + '</span>' +
           '<span class="dash-applet-launch">Open</span>' +
         '</div>';
-      }).join('');
-    side.appendChild(section);
+      }).join('') + '</div>';
     pollAppletBadges();
   }).catch(function() {});
 }

@@ -11,9 +11,12 @@ let _lastBadgeCounts = {};
 function switchTab(tab) {
   if (activeTab === 'voice' && tab !== 'voice' && typeof voiceDeactivate === 'function') voiceDeactivate();
   activeTab = tab;
-  document.querySelectorAll('#tab-nav .tab').forEach(el => {
+  var moreTabs = ['perf', 'terminal', 'applets', 'docs'];
+  document.querySelectorAll('#tab-nav .tab[data-tab]').forEach(el => {
     el.classList.toggle('active', el.dataset.tab === tab);
   });
+  var moreBtn = document.getElementById('nav-more-btn');
+  if (moreBtn) moreBtn.classList.toggle('active', moreTabs.indexOf(tab) !== -1);
   document.querySelectorAll('.tab-panel').forEach(el => {
     el.classList.toggle('active', el.id === 'tab-' + tab);
   });
@@ -22,13 +25,13 @@ function switchTab(tab) {
 
 function onTabActivated(tab) {
   if (tab === 'dashboard') dashboardActivate();
+  else if (tab === 'mesh') meshActivate();
   else if (tab === 'nodes') nodesActivate();
   else if (tab === 'config') configActivate();
   else if (tab === 'hardware') hardwareActivate();
   else if (tab === 'voice') voiceActivate();
   else if (tab === 'perf') perfActivate();
   else if (tab === 'services') servicesActivate();
-  else if (tab === 'mesh') meshActivate();
   else if (tab === 'terminal') terminalActivate();
   else if (tab === 'applets') appletsActivate();
   else if (tab === 'docs') docsActivate();
@@ -39,11 +42,11 @@ function routeFromHash() {
   if (!booted) return;
   const raw = window.location.hash.replace('#', '') || 'dashboard';
   const parts = raw.split('/');
-  const tab = parts[0];
+  let tab = parts[0];
   const sub = parts.slice(1).join('/');
-  const valid = ['dashboard', 'nodes', 'config', 'hardware', 'voice', 'perf', 'services', 'mesh', 'terminal', 'applets', 'docs'];
+  const valid = ['dashboard', 'mesh', 'nodes', 'config', 'hardware', 'voice', 'perf', 'services', 'terminal', 'applets', 'docs'];
   switchTab(valid.includes(tab) ? tab : 'dashboard');
-  if (tab === 'applets' && sub) {
+  if (tab === 'applets' && sub && !document.querySelector('.applet-iframe-overlay')) {
     var subParts = sub.split('/');
     var appletName = decodeURIComponent(subParts[0]);
     var appletView = subParts[1] || '';
@@ -56,12 +59,26 @@ function routeFromHash() {
 
 window.addEventListener('hashchange', routeFromHash);
 
-document.querySelectorAll('#tab-nav .tab').forEach(el => {
+document.querySelectorAll('#tab-nav .tab[data-tab]').forEach(el => {
   el.addEventListener('click', (e) => {
     e.preventDefault();
+    var menu = document.getElementById('nav-more-menu');
+    if (menu) menu.classList.remove('show');
     window.location.hash = el.dataset.tab;
   });
 });
+
+// More dropdown
+(function() {
+  var btn = document.getElementById('nav-more-btn');
+  var menu = document.getElementById('nav-more-menu');
+  if (!btn || !menu) return;
+  btn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    menu.classList.toggle('show');
+  });
+  document.addEventListener('click', function() { menu.classList.remove('show'); });
+})();
 
 // Data polling
 async function fetchData() {
@@ -155,7 +172,7 @@ function updateHeader() {
     hdr.title = (faults.length || warns.length)
       ? faults.concat(warns).map(i => i.name + ': ' + (i.faults||[]).join(', ')).join('\n')
       : '';
-    hdr.onclick = (faults.length || warns.length) ? function() { location.hash = '#mesh'; } : null;
+    hdr.onclick = (faults.length || warns.length) ? function() { location.hash = '#dashboard'; } : null;
   }
 }
 

@@ -147,6 +147,8 @@ function configRenderView(panel, cfg) {
     html += '</div>';
   });
 
+  html += '<div id="qos-card" class="card cfg-section"><div class="card-header">QOS PRIORITY</div><div class="loading-msg" style="padding:12px">Loading...</div></div>';
+
   html += '<div style="padding:4px 0"><button class="cfg-btn cfg-btn-primary" id="cfg-edit-btn">Edit Configuration</button></div>';
   html += '</div>';
   panel.innerHTML = html;
@@ -155,6 +157,8 @@ function configRenderView(panel, cfg) {
     configEditing = true;
     configRender();
   });
+
+  qosFetch();
 }
 
 function configRenderEdit(panel, cfg) {
@@ -290,4 +294,98 @@ async function configSave() {
       alert('Save failed: ' + errors.join(', '));
     }
   } catch(e) { alert('Save failed: ' + e.message); }
+}
+
+// QOS Priority
+var qosData = null;
+
+function qosFetch() {
+  var base = configBaseUrl();
+  fetch(base + '/api/qos').then(function(r) { return r.json(); }).then(function(d) {
+    qosData = d;
+    qosRender();
+  }).catch(function() {});
+}
+
+function qosFmt(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return '' + n;
+}
+
+function qosRender() {
+  var card = document.getElementById('qos-card');
+  if (!card || !qosData) return;
+
+  var d = qosData;
+  var bandColors = ['var(--good)', 'var(--warn)', 'var(--muted)'];
+  var bandNames = d.band_names || ['High', 'Normal', 'Low'];
+
+  var html = '<div class="card-header">QOS PRIORITY</div>';
+  html += '<div class="qos-toggle-row">';
+  html += '<span class="qos-toggle-label">Traffic Prioritization</span>';
+  html += '<button class="qos-toggle' + (d.enabled ? ' on' : '') + '" id="qos-toggle"></button>';
+  html += '</div>';
+
+  html += '<div id="qos-body"' + (d.enabled ? '' : ' class="qos-disabled"') + '>';
+
+  for (var b = 0; b < 3; b++) {
+    var rules = (d.rules || []).filter(function(r) { return r.band === b; });
+    var totalPkts = 0, totalBytes = 0;
+    if (d.stats) {
+      Object.keys(d.stats).forEach(function(iface) {
+        var s = d.stats[iface];
+        if (s && s[b]) {
+          totalPkts += s[b].packets;
+          totalBytes += s[b].bytes;
+        }
+      });
+    }
+
+    html += '<div class="qos-band-section">';
+    html += '<div class="qos-band-header">';
+    html += '<span class="qos-band-dot" style="background:' + bandColors[b] + '"></span>';
+    html += '<span class="qos-band-name">' + bandNames[b] + '</span>';
+    html += '<span class="qos-band-stats">' + qosFmt(totalPkts) + ' pkts / ' + qosFmt(totalBytes) + ' bytes</span>';
+    html += '</div>';
+
+    if (rules.length) {
+      rules.forEach(function(r) {
+        html += '<div class="qos-rule-row">';
+        html += '<span class="qos-rule-name">' + escHtml(r.name) + '</span>';
+        html += '<span class="qos-rule-port">:' + r.port + '</span>';
+        html += '<select class="qos-rule-band" data-svc="' + escHtml(r.name) + '">';
+        for (var i = 0; i < 3; i++) {
+          html += '<option value="' + i + '"' + (r.band === i ? ' selected' : '') + '>' + bandNames[i] + '</option>';
+        }
+        html += '</select>';
+        html += '</div>';
+      });
+    } else {
+      html += '<div style="font-size:11px;color:var(--muted);padding:4px 8px">No assigned services</div>';
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  card.innerHTML = html;
+
+  var base = configBaseUrl();
+  document.getElementById('qos-toggle').addEventListener('click', function() {
+    fetch(base + '/api/qos', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: !d.enabled})
+    }).then(function() { qosFetch(); });
+  });
+
+  card.querySelectorAll('.qos-rule-band').forEach(function(sel) {
+    sel.addEventListener('change', function() {
+      fetch(base + '/api/qos', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({service: sel.dataset.svc, band: parseInt(sel.value)})
+      }).then(function() { qosFetch(); });
+    });
+  });
 }

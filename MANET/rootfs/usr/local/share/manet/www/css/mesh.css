@@ -33,6 +33,59 @@
 .mesh-seen-warn { font-size: 10px; color: var(--warn); }
 .mesh-seen-stale { font-size: 10px; color: var(--bad); }
 
+/* QoS card */
+#qos-card { margin-top: 12px; }
+.qos-toggle-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border2);
+}
+.qos-toggle-label { font-size: 12px; font-weight: 700; flex: 1; }
+.qos-toggle {
+  position: relative; width: 36px; height: 20px;
+  background: var(--border); border-radius: 10px;
+  cursor: pointer; border: none; padding: 0;
+  transition: background .2s;
+}
+.qos-toggle.on { background: var(--good); }
+.qos-toggle::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; transition: transform .2s;
+}
+.qos-toggle.on::after { transform: translateX(16px); }
+.qos-band-section { padding: 10px 14px; }
+.qos-band-header {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 8px;
+}
+.qos-band-name {
+  font-size: 11px; font-weight: 800; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .4px;
+}
+.qos-band-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.qos-band-stats {
+  font-size: 10px; color: var(--muted); margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.qos-rule-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 6px;
+  background: rgba(255,255,255,.02); margin-bottom: 4px;
+  border: 1px solid var(--border2);
+}
+.qos-rule-name { font-size: 12px; font-weight: 700; flex: 1; }
+.qos-rule-port { font-size: 10px; color: var(--muted); font-family: monospace; }
+.qos-rule-band {
+  font-family: var(--font); font-size: 11px; font-weight: 600;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 8px; color: var(--text);
+  cursor: pointer;
+}
+.qos-rule-band:focus { border-color: var(--accent2); outline: none; }
+.qos-disabled { opacity: .4; pointer-events: none; }
+
 @media (max-width: 768px) {
   .mesh-grid { grid-template-columns: 1fr; }
 }
