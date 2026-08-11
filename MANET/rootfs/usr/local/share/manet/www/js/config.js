@@ -99,8 +99,6 @@ function configRenderView(panel, cfg) {
     ]},
     { title: 'Services', fields: [
       { label: 'ACS (Auto Channel)', key: 'acs', yesno: true },
-      { label: 'MediaMTX', key: 'mtx', yesno: true },
-      { label: 'Mumble Voice', key: 'mumble', yesno: true },
       { label: 'Battery Monitor', key: 'battery_monitor', yesno: true },
       { label: 'Auto Update', key: 'auto_update', yesno: true },
     ]},
@@ -184,8 +182,6 @@ function configRenderEdit(panel, cfg) {
       {v:'optimized',l:'Optimized IGMP (10+ nodes)'}
     ], hint: 'Flood sends all multicast to all peers; IGMP uses snooping for selective delivery' },
     { label: 'ACS', key: 'acs', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
-    { label: 'MediaMTX', key: 'mtx', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
-    { label: 'Mumble', key: 'mumble', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Battery Monitor', key: 'battery_monitor', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Admin Key', key: 'admin_password', type: 'password' },
@@ -266,7 +262,7 @@ function configRenderEdit(panel, cfg) {
 
 async function configSave() {
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','mesh_ssid','mesh_key',
-    'ipv4_network','regulatory_domain','halow_bw','multicast_mode','acs','mtx','mumble','battery_monitor','auto_update','admin_password',
+    'ipv4_network','regulatory_domain','halow_bw','multicast_mode','acs','battery_monitor','auto_update','admin_password',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth'];
   const config = {};
   meshFields.forEach(f => {

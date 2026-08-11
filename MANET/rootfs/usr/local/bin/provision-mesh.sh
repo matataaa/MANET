@@ -20,33 +20,28 @@ if [ -d "$PWR_LED" ]; then
     echo 100          > "$PWR_LED/delay_off" 2>/dev/null || true
 fi
 
-HAS_INTERNET=0
-INET_WAIT=0
-MAX_INET_WAIT=60
-while [ $INET_WAIT -lt $MAX_INET_WAIT ]; do
+ALREADY_PROVISIONED=0
+[ -f /var/lib/radio-setup.done ] && ALREADY_PROVISIONED=1
+
+while true; do
     if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
         echo "Internet connectivity confirmed!"
-        HAS_INTERNET=1
         break
     fi
-    echo "Waiting for internet... (${INET_WAIT}/${MAX_INET_WAIT})"
+    if [ $ALREADY_PROVISIONED -eq 1 ]; then
+        echo "Re-run on provisioned node — no internet, continuing offline"
+        break
+    fi
+    echo "Waiting for internet..."
     sleep 5
-    (( INET_WAIT++ ))
 done
-
-if [ $HAS_INTERNET -eq 0 ]; then
-    echo "WARNING: No internet after $((MAX_INET_WAIT * 5))s — continuing with local resources"
-fi
 
 # Restore LED to solid-on
 if [ -d "$PWR_LED" ]; then
     echo default-on > "$PWR_LED/trigger" 2>/dev/null || true
 fi
 
-# Sync system time if we have internet
-if [ $HAS_INTERNET -eq 1 ]; then
-    date -s "$(curl -sI google.com | grep -i ^Date: | cut -d' ' -f2-)" 2>/dev/null || true
-fi
+date -s "$(curl -sI google.com | grep -i ^Date: | cut -d' ' -f2-)" 2>/dev/null || true
 
 cd /root
 
@@ -61,8 +56,6 @@ cd /root
 #  The tar file will be extracted after apt install happens
 if [ -f /root/morse-pi-install.tar.gz ]; then
 		echo "Tools tarball already present, skipping download"
-elif [ $HAS_INTERNET -eq 0 ]; then
-		echo "No internet and no tarball — skipping download (re-run?)"
 elif [ "rpi5" = "rpi5" ]; then
 		echo "Applying RPi 5 specific settings..."
 		# Match both bare 'rpi5-install.tar.gz' and versioned variants like
@@ -139,25 +132,21 @@ fi
 
 
 # get the sources up to date and install packages
-if [ $HAS_INTERNET -eq 1 ]; then
-    echo -n "Updating system packages..."
-    apt update > /dev/null 2>&1
+echo -n "Updating system packages..."
+apt update > /dev/null 2>&1 || true
 
-    # Remove the question about the iperf daemon during apt install
-    echo "iperf3 iperf3/start_daemon boolean true" | debconf-set-selections
+# Remove the question about the iperf daemon during apt install
+echo "iperf3 iperf3/start_daemon boolean true" | debconf-set-selections 2>/dev/null || true
 
-    # This isn't needed for the manet kernel and causes errors
-    [ -x /etc/kernel/postinst.d/initramfs-tools ] && chmod -x /etc/kernel/postinst.d/initramfs-tools
+# This isn't needed for the manet kernel and causes errors
+[ -x /etc/kernel/postinst.d/initramfs-tools ] && chmod -x /etc/kernel/postinst.d/initramfs-tools
 
-    # Install packages for this system
-    apt install -y ipcalc nmap lshw tcpdump net-tools nftables wireless-tools iperf3\
-            radvd bridge-utils firmware-mediatek libnss-mdns syncthing networkd-dispatcher\
-            libgps-dev libcap-dev screen arping bc jq git libssl-dev hostapd dnsmasq pulseaudio\
-            python3-protobuf unzip chrony systemd-resolved dhcping mpg123\
-            libnl-3-dev libnl-genl-3-dev libnl-route-3-dev ebtables libdbus-1-dev gpsd pulseaudio-utils
-else
-    echo "No internet — skipping apt update/install (packages must already be present)"
-fi
+# Install packages for this system
+apt install -y ipcalc nmap lshw tcpdump net-tools nftables wireless-tools iperf3\
+        radvd bridge-utils firmware-mediatek libnss-mdns networkd-dispatcher\
+        libgps-dev libcap-dev screen arping bc jq git libssl-dev hostapd dnsmasq pulseaudio\
+        python3-protobuf unzip chrony systemd-resolved dhcping mpg123\
+        libnl-3-dev libnl-genl-3-dev libnl-route-3-dev ebtables libdbus-1-dev gpsd pulseaudio-utils
 
 
 # Unpack the tar file that was pulled down earlier.  This contains the kernel and
@@ -234,11 +223,11 @@ echo "Done"
 
 
 # probably not installed, but the debian package is old
-apt remove -y avahi yq > /dev/null 2>&1
+apt remove -y avahi yq > /dev/null 2>&1 || true
 
 # Download and install Go yq, this has better features
-wget -q https://github.com/mikefarah/yq/releases/latest/download/yq_linux_arm64 -O /usr/bin/yq
-chmod +x /usr/bin/yq
+wget -q https://github.com/mikefarah/yq/releases/latest/download/yq_linux_arm64 -O /usr/bin/yq 2>/dev/null || true
+[ -f /usr/bin/yq ] && chmod +x /usr/bin/yq
 
 # These add network traffic, disable them
 echo "Disabling APT timers for automatic updates"
@@ -361,13 +350,12 @@ LLMNR=no
 MulticastDNS=no
 EOF
 
-# Set ethernet links for DHCP as a default setup.  Scripts will juggle this
-# around later for device detection
 # Set ethernet links for DHCP as a default setup. Scripts will juggle this
-# around later for device detection
+# around later for device detection.
 CT=0
-for LAN in `networkctl | awk '/ether/ {print $2}'`; do
-    M=$(ip link show $LAN | awk '/ether/ {print $2}')
+for LAN in $(networkctl | awk '/ether/ {print $2}'); do
+    M=$(ip link show "$LAN" 2>/dev/null | awk '/ether/ {print $2}')
+    [ -z "$M" ] && continue
     cat <<- EOF > /etc/systemd/network/10-end${CT}.network
 		[Match]
 		MACAddress=$M
@@ -387,8 +375,8 @@ for LAN in `networkctl | awk '/ether/ {print $2}'`; do
 		[Link]
 		Name=end${CT}
 	EOF
+    cp /etc/systemd/network/10-end${CT}.network /etc/systemd/network/10-end${CT}.network.dhcp-default
     (( CT++ ))
-    cp  /etc/systemd/network/10-end${CT}.network  /etc/systemd/network/10-end${CT}.network.dhcp-default
 done
 echo "Ethernet config added"
 
@@ -635,54 +623,6 @@ systemctl restart systemd-resolved
 echo "Disabling default chrony networkd-dispatcher script"
 rm -Rf /usr/lib/NetworkManager/dispatcher.d/*
 
-# Install optional service selections
-if [ "y" = "y" ]; then
-		apt install -y mumble-server
-		#make mumble server ini changes
-		sed -i '/ice="tcp -h 127.0.0.1 -p 6502"/s/^#//g' /etc/mumble-server.ini
-		sed -i 's/icesecretwrite/;icesecretwrite/g' /etc/mumble-server.ini
-		service mumble-server restart
-		grep -m 1 SuperUser /var/log/mumble-server/mumble-server.log > /root/mumble_pw
-fi
-
-# install mediaMTX server
-if [ "y" = "y" ]; then
-	echo "Installing MediaMTX"
-		cd /tmp
-		wget -q https://github.com/bluenviron/mediamtx/releases/download/v1.15.3/mediamtx_v1.15.3_linux_arm64.tar.gz || {
-	        echo "ERROR: Failed to download MediaMTX"
-	        exit 1
-	    }
-	    tar -xzf mediamtx_v1.15.3_linux_arm64.tar.gz || {
-	        echo "ERROR: Failed to extract MediaMTX"
-	        exit 1
-	    }
-
-		groupadd --system mediamtx
-		useradd --system -g mediamtx -d /opt/mediamtx -s /sbin/nologin mediamtx
-		mkdir /etc/mediamtx && chown mediamtx:mediamtx /etc/mediamtx
-		mkdir -p /opt/mediamtx
-		cp mediamtx /opt/mediamtx/
-		chmod +x /opt/mediamtx/mediamtx
-		cp mediamtx.yml /etc/mediamtx/
-
-cat << EOF > /etc/systemd/system/mediamtx.service
-[Unit]
-Description=MediaMTX RTSP/RTMP/WebRTC Server
-After=network.target
-
-[Service]
-User=mediamtx
-Group=mediamtx
-WorkingDirectory=/opt/mediamtx
-ExecStart=/opt/mediamtx/mediamtx /etc/mediamtx/mediamtx.yml
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-fi
 
 chmod +x /usr/local/bin/*
 
@@ -713,11 +653,11 @@ systemctl enable radio-setup-run-once.service
 
 
 echo "Disabling network manager"
-systemctl stop dhcpcd
-systemctl disable dhcpcd
-systemctl stop NetworkManager
-systemctl disable NetworkManager
-systemctl mask NetworkManager
+systemctl stop dhcpcd 2>/dev/null || true
+systemctl disable dhcpcd 2>/dev/null || true
+systemctl stop NetworkManager 2>/dev/null || true
+systemctl disable NetworkManager 2>/dev/null || true
+systemctl mask NetworkManager 2>/dev/null || true
 
 echo "Enabling systemd-networkd and systemd-resolved"
 systemctl enable --now systemd-networkd
@@ -735,21 +675,25 @@ echo "halow_regulatory_domain=EU" >> /etc/mesh.conf
 echo "lan_ap_ssid=MANET" >> /etc/mesh.conf
 echo "lan_ap_key=raspberry" >> /etc/mesh.conf
 echo "ipv4_network=10.30.2.0/24"  >> /etc/mesh.conf
-echo "mumble=y" >> /etc/mesh.conf
-echo "mtx=y" >> /etc/mesh.conf
 echo "acs=n" >> /etc/mesh.conf
 echo "eud=wireless" >> /etc/mesh.conf
 echo "max_euds_per_node=20" >> /etc/mesh.conf
 
 
 # Disable the current script so it won't run again at next boot
-systemctl disable mesh-provision
+systemctl disable mesh-provision 2>/dev/null || true
 
-#use a known dns for next setup
-rm /etc/resolv.conf
+# Ensure a working DNS resolver for the next stage
+if [ -L /etc/resolv.conf ] || [ -f /etc/resolv.conf ]; then
+    rm -f /etc/resolv.conf
+fi
 echo "nameserver 1.1.1.1" > /etc/resolv.conf
 
 echo "=== Provisioning complete at $(date) ==="
-echo "=== Rebooting to apply changes ==="
-reboot
+if systemctl is-enabled mesh-provision >/dev/null 2>&1 || [ ! -f /var/lib/radio-setup.done ]; then
+    echo "=== First boot provisioning — rebooting to apply changes ==="
+    reboot
+else
+    echo "=== Re-run complete — skipping reboot (already provisioned) ==="
+fi
 

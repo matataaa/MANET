@@ -1,9 +1,22 @@
 *.img
 *.deb
+*.img.xz
 .DS_Store
+._*
 .cursor/mesh-nodes.env
 
-# Compiled Go binaries
+# ---------------------------------------------------------------------------
+# Build OUTPUT only. Anything the build consumes as an INPUT stays tracked:
+#   MANET/binaries_arm64/*              (alfred, batctl, wpa_supplicant_s1g, ...)
+#   MANET/src/mesh-voice/bin/*          (prebuilt CGO binaries — cannot cross-compile)
+#   MANET/provisioning/*.exe            (Windows flashing helpers)
+#   MANET/rootfs/root/regulatory.db     (shipped to the node)
+# ---------------------------------------------------------------------------
+
+# Packaged tarballs — regenerate with MANET/packaging/build-*-tarball.sh
+MANET/install_packages/*.tar.gz
+
+# Cross-compiled Go services — regenerate with the packaging scripts
 MANET/src/battery-reader/battery-reader
 MANET/src/cot-emitter/cot-emitter
 MANET/src/gateway-manager/gateway-manager
@@ -15,3 +28,10 @@ MANET/src/mesh-manager/mesh-manager
 MANET/src/mesh-radio-state/mesh-radio-state
 MANET/src/mesh-registry/mesh-registry
 MANET/src/node-manager/node-manager
+
+# Local dev builds (host-native, never shipped)
+MANET/src/manet-ctrl/manet-term
+MANET/src/mesh-cli/mesh-cli
+
+# Provisioning scratch
+MANET/provisioning/.image-cache/

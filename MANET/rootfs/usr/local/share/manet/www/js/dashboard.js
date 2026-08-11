@@ -135,8 +135,6 @@ function renderDashNodeList(nodes) {
     if (n.is_gateway) badges.push('<span class="badge badge-gw">' + (n.is_selected_gw ? '★ GW' : 'GW') + '</span>');
     if (n.is_direct && !n.is_me) badges.push('<span class="badge badge-direct">DIRECT</span>');
     if (n.hop_count && n.hop_count > 1) badges.push('<span class="badge badge-hop">' + n.hop_count + ' hops</span>');
-    if (n.mumble) badges.push('<span class="badge badge-svc">MUMBLE</span>');
-    if (n.mediamtx) badges.push('<span class="badge badge-svc">MTX</span>');
     if (n.ntp) badges.push('<span class="badge badge-svc">NTP</span>');
     if (n.applets && n.applets.length) {
       n.applets.forEach(function(a) {

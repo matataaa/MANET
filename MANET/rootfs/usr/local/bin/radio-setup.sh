@@ -1278,7 +1278,7 @@ cat << EOF > /etc/systemd/system/mesh-clone-identity.service
 [Unit]
 Description=Reset cloned mesh node identity when hardware MAC changes
 After=local-fs.target
-Before=batman-enslave.service alfred.service node-manager.service gateway-route-manager.service syncthing@radio.service hostapd.service dnsmasq.service
+Before=batman-enslave.service alfred.service node-manager.service gateway-route-manager.service hostapd.service dnsmasq.service
 
 [Service]
 Type=oneshot
@@ -1410,25 +1410,6 @@ WantedBy=multi-user.target
 EOF
 systemctl enable node-manager.service
 
-cat <<- EOF > /etc/systemd/system/syncthing-peer-manager.service
-[Unit]
-Description=Syncthing Peer Manager
-After=syncthing@radio.service alfred.service
-Wants=syncthing@radio.service alfred.service
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/syncthing-peer-manager.sh
-Restart=on-failure
-RestartSec=30
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl enable syncthing-peer-manager.service
-
-systemctl enable syncthing@radio.service
-
 systemctl daemon-reload
 systemctl enable --now nftables.service
 
@@ -1556,9 +1537,7 @@ fi
 # avahi-daemon is kept but restricted to deny mesh interfaces (bat0, wlan0-2).
 # Clients connected to the EUD AP can reach the admin panel at http://manet.local
 
-if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
-    apt install -y avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf 2>/dev/null || true
-fi
+apt install -y avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf 2>/dev/null || true
 install -m 644 /etc/avahi/avahi-daemon.conf /etc/avahi/avahi-daemon.conf.bak 2>/dev/null || true
 cp /usr/local/share/manet/avahi-daemon.conf /etc/avahi/avahi-daemon.conf
 # Add the AP interface to avahi's allow list (br0, end0, eth0 are in the template)
@@ -1639,9 +1618,7 @@ if ! grep -q '^i2c-dev$' /etc/modules 2>/dev/null; then
 fi
 
 # Install i2c-tools for battery-reader and diagnostics
-if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
-    apt update -qq && apt install -y python3-smbus i2c-tools || true
-fi
+apt update -qq && apt install -y python3-smbus i2c-tools || true
 
 systemctl enable battery-reader.service
 
@@ -1661,9 +1638,7 @@ systemctl enable battery-reader.service
 #   - No election logic change needed — existing is_ntp_server flag stays
 #     tied to the ethernet gateway; GPS just silently improves time quality.
 
-if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
-    apt-get install -y gpsd gpsd-clients 2>/dev/null || true
-fi
+apt-get install -y gpsd gpsd-clients 2>/dev/null || true
 
 # Detect UART GPS (e.g. Quectel L76K on WM1302 Pi Hat).
 # The hat connects GPS TX/RX to GPIO 14/15 (/dev/ttyAMA0).
@@ -1758,26 +1733,6 @@ if [[ "$FIRST_BOOT_UNIT_ENABLED" -eq 1 && ! -f "$FIRST_BOOT_STAGE_MARKER" ]]; th
     systemctl mask rpi-eeprom-update.service 2>/dev/null || true
     systemctl set-default multi-user.target
 
-    echo " >> Doing initial Syncthing config..."
-    install -d -o radio -g radio -m 700 /home/radio/.local/state/syncthing
-    # syncthing's apt post-install may have already created .local as radio:root;
-    # install -d skips chown on pre-existing directories, so fix it explicitly.
-    chown radio:radio /home/radio/.local
-    if [ ! -f /home/radio/.config/syncthing/config.xml ]; then
-        sudo -u radio syncthing -generate="/home/radio/.config/syncthing"
-        sleep 5
-        killall syncthing 2>/dev/null || true
-    else
-        echo " >> Syncthing config already exists, skipping generate"
-    fi
-    mkdir -p /home/radio/Sync/mumble/backups
-    chown -R radio:radio /home/radio/Sync
-    chown -R radio:radio /home/radio/.config/syncthing
-
-    SYNCTHING_CONFIG="/home/radio/.config/syncthing/config.xml"
-    echo " >> Hardening Syncthing for local-only operation..."
-    sed -i '/<options>/a <globalAnnounceEnabled>false</globalAnnounceEnabled>\n<relaysEnabled>false</relaysEnabled>' "$SYNCTHING_CONFIG"
-    sed -i 's|<gui enabled="true" tls="false" debugging="false">.*</gui>|<gui enabled="true" tls="false" debugging="false">\n        <address>127.0.0.1:8384</address>\n    </gui>|' "$SYNCTHING_CONFIG"
     echo " -- CONFIGURED -- " >> /etc/issue
     touch "$FIRST_BOOT_STAGE_MARKER"
 fi

@@ -251,8 +251,6 @@ func assembleStatusData() StatusData {
 			Uptime:       uptimeStr,
 			CPU:          cpuStr,
 			Battery:      bat,
-			Mumble:       rn["IS_MUMBLE_SERVER"] == "true",
-			MediaMTX:     rn["IS_MEDIAMTX_SERVER"] == "true",
 			NTP:          rn["IS_NTP_SERVER"] == "true",
 			State:        rn["NODE_STATE"],
 			Ch2G:         rn["DATA_CHANNEL_2_4"],

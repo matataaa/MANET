@@ -39,8 +39,6 @@ type NodeInfo struct {
 	IsGateway    string `json:"is_gateway"`
 	GatewayIface string `json:"gateway_iface"`
 	IsNTP        string `json:"is_ntp"`
-	IsMumble     string `json:"is_mumble"`
-	IsMediaMTX   string `json:"is_mediamtx"`
 	GPSLat       string `json:"gps_lat"`
 	GPSLon       string `json:"gps_lon"`
 	GPSAlt       string `json:"gps_alt"`
@@ -57,7 +55,6 @@ type NodeInfo struct {
 	Wifi5TxMCS   string `json:"wifi_5_tx_mcs,omitempty"`
 	Wifi5RxMCS   string `json:"wifi_5_rx_mcs,omitempty"`
 	TQAverage    string `json:"tq_average,omitempty"`
-	SyncthingID  string `json:"syncthing_id,omitempty"`
 }
 
 func main() {
@@ -113,8 +110,6 @@ func collectLocal() NodeInfo {
 		IsGateway:    isGW,
 		GatewayIface: gwIface,
 		IsNTP:        boolStr(serviceActive("ntp") || serviceActive("chrony") || serviceActive("systemd-timesyncd")),
-		IsMumble:     boolStr(serviceActive("mumble-server") || serviceActive("murmurd")),
-		IsMediaMTX:   boolStr(serviceActive("mediamtx")),
 		GPSLat:       gpsLat,
 		GPSLon:       gpsLon,
 		GPSAlt:       gpsAlt,
@@ -214,8 +209,6 @@ func writeNode(b *strings.Builder, n NodeInfo) {
 	w("IS_GATEWAY", n.IsGateway)
 	w("GATEWAY_IFACE", n.GatewayIface)
 	w("IS_NTP_SERVER", n.IsNTP)
-	w("IS_MUMBLE_SERVER", n.IsMumble)
-	w("IS_MEDIAMTX_SERVER", n.IsMediaMTX)
 	w("GPS_LATITUDE", n.GPSLat)
 	w("GPS_LONGITUDE", n.GPSLon)
 	w("GPS_ALTITUDE", n.GPSAlt)
@@ -233,7 +226,6 @@ func writeNode(b *strings.Builder, n NodeInfo) {
 	w("WIFI_5_TX_MCS", n.Wifi5TxMCS)
 	w("WIFI_5_RX_MCS", n.Wifi5RxMCS)
 	w("TQ_AVERAGE", n.TQAverage)
-	w("SYNCTHING_ID", n.SyncthingID)
 	fmt.Fprintln(b)
 }
 

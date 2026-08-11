@@ -198,16 +198,6 @@ func runElections() {
 		if strings.Contains(base, "channel-election") {
 			continue
 		}
-		if strings.Contains(base, "mediamtx-election") {
-			if loadConf("mtx") != "y" {
-				continue
-			}
-		}
-		if strings.Contains(base, "mumble-election") {
-			if loadConf("mumble") != "y" {
-				continue
-			}
-		}
 		info, err := os.Stat(script)
 		if err != nil || info.Mode()&0111 == 0 {
 			continue

@@ -102,8 +102,6 @@ function nodesRender() {
     const stale = !n.is_me && n.last_seen && DATA.timestamp && (DATA.timestamp - parseInt(n.last_seen)) > 300;
     const svcs = [];
     if (n.is_gateway) svcs.push('<span class="badge badge-gw">GW</span>');
-    if (n.mumble) svcs.push('<span class="badge badge-svc">MUMBLE</span>');
-    if (n.mediamtx) svcs.push('<span class="badge badge-svc">MTX</span>');
     if (n.ntp) svcs.push('<span class="badge badge-svc">NTP</span>');
     if (n.applets && n.applets.length) {
       n.applets.forEach(function(a) {

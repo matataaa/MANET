@@ -605,8 +605,8 @@ var saveableKeys = map[string]bool{
 	"lan_ap_channel": true, "lan_ap_bw": true,
 	"max_euds_per_node": true, "mesh_ssid": true, "mesh_key": true,
 	"ipv4_network": true, "regulatory_domain": true, "halow_bw": true,
-	"acs": true, "mtx": true,
-	"mumble": true, "battery_monitor": true, "auto_update": true, "admin_password": true,
+	"acs": true,
+	"battery_monitor": true, "auto_update": true, "admin_password": true,
 	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
 	"multicast_mode": true,
 }

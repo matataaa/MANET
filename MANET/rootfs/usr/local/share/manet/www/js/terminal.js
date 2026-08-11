@@ -208,7 +208,7 @@ function termPopulateLogUnits() {
     'gateway-manager', 'mesh-boot-lobby',
     'sae-watchdog', 'manet-txpower',
     'hostapd', 'wpa_supplicant', 'dnsmasq', 'avahi-daemon',
-    'mesh-voice', 'mumble-server', 'mediamtx', 'syncthing',
+    'mesh-voice',
     'gps-reader', 'battery-reader', 'cot-emitter', 'chronyd',
     'sshd', 'systemd-networkd'
   ];

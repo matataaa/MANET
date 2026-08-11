@@ -81,7 +81,7 @@ DOCS_TABS.config = [
 '<tr><td>Save changes</td><td>Click <strong>Save</strong>. Changes are written to <code>/etc/mesh.conf</code> and relevant services are restarted (hostname, AP, mesh). A reboot may still be needed for some settings.</td></tr>',
 '<tr><td>Cancel</td><td>Click <strong>Cancel</strong> to discard unsaved edits.</td></tr>',
 '</tbody></table>',
-'<p>The Config tab exposes these fields: hostname prefix, mesh SSID, mesh key, IPv4 network, regulatory domain, EUD mode, AP SSID, AP key, max EUDs per node, ACS, MediaMTX, Mumble, auto update, and admin password.</p>',
+'<p>The Config tab exposes these fields: hostname prefix, mesh SSID, mesh key, IPv4 network, regulatory domain, EUD mode, AP SSID, AP key, max EUDs per node, ACS, auto update, and admin password.</p>',
 '<p>Settings not exposed in the UI (e.g. <code>halow_regulatory_domain</code>) must be set via CLI or direct file edit.</p>',
 
 '<h3>CLI Configuration</h3>',
@@ -127,8 +127,6 @@ DOCS_TABS.config = [
 
 '<h4>Services</h4>',
 '<table class="docs-table"><thead><tr><th>Key</th><th>Values</th><th>UI</th><th>Description</th></tr></thead><tbody>',
-'<tr><td><code>mumble</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Enable Mumble voice server election. When enabled, nodes elect a Mumble server via quorum.</td></tr>',
-'<tr><td><code>mtx</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Enable MediaMTX (RTSP/WebRTC) server election for video streaming.</td></tr>',
 '<tr><td><code>acs</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Auto Channel Selection. When enabled, node-manager periodically scans for interference and coordinates channel changes across the mesh.</td></tr>',
 '<tr><td><code>auto_update</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Allow the node to accept over-the-air updates via the mesh.</td></tr>',
 '</tbody></table>',
@@ -202,8 +200,8 @@ DOCS_TABS.services = [
 '<table class="docs-table"><thead><tr><th>Service</th><th>Unit</th><th>Description</th></tr></thead><tbody>',
 '<tr><td>MANET Controller</td><td><code>manet-ctrl</code></td><td>Web UI (SPA), REST API, WebSocket terminal, voice relay. Single Go binary on port 80/443 (auto TLS). Hosts applet frontends and handles <code>.mesh</code> hostname redirects.</td></tr>',
 '<tr><td>Alfred</td><td><code>alfred</code></td><td>Distributed data store for batman-adv. Shares node state across the mesh via type 68 JSON records.</td></tr>',
-'<tr><td>Mesh Registry</td><td><code>mesh-registry</code></td><td>Collects local node info (hostname, IP, MAC, GPS, MCS rates, TQ, Syncthing ID) and publishes to Alfred. Reads remote node data to build the mesh-wide registry.</td></tr>',
-'<tr><td>Node Manager</td><td><code>node-manager</code></td><td>Radio state sync (ensures wpa_supplicant frequencies match config), static channel enforcement, gateway reconciliation, and service elections (MTX, Mumble). 15s main loop.</td></tr>',
+'<tr><td>Mesh Registry</td><td><code>mesh-registry</code></td><td>Collects local node info (hostname, IP, MAC, GPS, MCS rates, TQ) and publishes to Alfred. Reads remote node data to build the mesh-wide registry.</td></tr>',
+'<tr><td>Node Manager</td><td><code>node-manager</code></td><td>Radio state sync (ensures wpa_supplicant frequencies match config), static channel enforcement, gateway reconciliation, and service elections (MTX). 15s main loop.</td></tr>',
 '<tr><td>Mesh Manager</td><td><code>mesh-manager</code></td><td>IPv4 address allocation (chunk-based CIDR), <code>/etc/hosts</code> mesh hostname updates, <code>.mesh</code> DNS records via dnsmasq, gateway route management, default route fix, EUD DHCP pool config, and voice QoS setup. 30s periodic loop.</td></tr>',
 '<tr><td>Gateway Manager</td><td><code>gateway-manager</code></td><td>Detects internet-connected gateway node, manages NAT/masquerade rules, handles gateway election and failover across mesh.</td></tr>',
 '<tr><td>Boot Lobby</td><td><code>mesh-boot-lobby</code></td><td>Sets mesh interfaces to a lobby channel at boot for initial peer discovery.</td></tr>',
@@ -229,9 +227,6 @@ DOCS_TABS.services = [
 '<h3>Applications & Applets</h3>',
 '<table class="docs-table"><thead><tr><th>Service</th><th>Unit</th><th>Description</th></tr></thead><tbody>',
 '<tr><td>Mesh Chat</td><td><code>mesh-chat</code></td><td>Mesh-wide text chat over multicast. Installed as an applet with DNS record <code>chat.mesh</code>.</td></tr>',
-'<tr><td>Mumble Server</td><td><code>mumble-server</code></td><td>Full-duplex voice server. Elected via quorum when <code>mumble=y</code>.</td></tr>',
-'<tr><td>MediaMTX</td><td><code>mediamtx</code></td><td>RTSP/WebRTC media server for video streaming. Elected when <code>mtx=y</code>.</td></tr>',
-'<tr><td>Syncthing</td><td><code>syncthing@radio</code></td><td>Decentralized file synchronization across mesh nodes.</td></tr>',
 '</tbody></table>',
 '<p><strong>Applet DNS:</strong> Applets declare DNS records in their <code>applet.json</code> manifest with a scope: <code>local</code> (only this node\'s EUDs) or <code>global</code> (mesh-wide). When an EUD browses to an applet hostname (e.g. <code>chat.mesh</code>), manet-ctrl redirects to the applet\'s frontend.</p>',
 

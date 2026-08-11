@@ -269,10 +269,7 @@ func getEUDs() []EUD {
 
 func getRunningServices() map[string]bool {
 	checks := map[string][]string{
-		"mumble":    {"mumble-server", "murmur", "mumble"},
-		"mediamtx":  {"mediamtx", "rtsp-server"},
 		"ntp":       {"chrony", "chronyd", "ntp", "ntpd"},
-		"syncthing": {"syncthing"},
 		"tak":       {"tak-server", "takserver"},
 	}
 	result := make(map[string]bool)
@@ -865,10 +862,7 @@ var serviceRegistry = []serviceEntry{
 	{"dnsmasq", "dnsmasq", []string{"dnsmasq"}, "network", []string{"start", "stop", "restart", "reload"}, "DHCP and DNS for EUDs"},
 	{"avahi", "Avahi", []string{"avahi-daemon"}, "network", []string{"start", "stop", "restart", "reload"}, "mDNS / service discovery"},
 	{"mesh-voice", "Mesh Voice", []string{"mesh-voice"}, "application", []string{"start", "stop", "restart"}, "PTT voice over mesh"},
-	{"mumble", "Mumble Server", []string{"mumble-server", "murmur"}, "application", []string{"start", "stop", "restart"}, "Voice comms server"},
-	{"mediamtx", "MediaMTX", []string{"mediamtx"}, "application", []string{"start", "stop", "restart"}, "RTSP/WebRTC media server"},
 	{"chronyd", "Chrony NTP", []string{"chronyd", "chrony"}, "system", []string{"start", "stop", "restart"}, "Network time synchronisation"},
-	{"syncthing", "Syncthing", []string{"syncthing"}, "application", []string{"start", "stop", "restart"}, "File synchronisation"},
 	{"gps-reader", "GPS Reader", []string{"gps-reader"}, "system", []string{"start", "stop", "restart"}, "GPS position tracking"},
 	{"gateway-manager", "Gateway Manager", []string{"gateway-manager"}, "network", []string{"restart", "reload"}, "Gateway routing, NAT, and bandwidth control"},
 	{"sae-watchdog", "SAE Watchdog", []string{"sae-watchdog"}, "network", []string{"start", "stop", "restart"}, "Mesh auth health monitor"},

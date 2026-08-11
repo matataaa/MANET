@@ -31,14 +31,12 @@ for iface in wlan0 wlan1 wlan2 br0 bat0 end0; do
 done
 
 CURRENT_IPV4=$(ip addr show dev "$CONTROL_IFACE" | grep -oP 'inet \K[\d.]+' | head -1)
-SYNCTHING_ID=$(runuser -u radio -- syncthing --device-id 2>/dev/null || echo "")
 
 # Build tombstone payload
 TOMBSTONE_PAYLOAD=$("$ENCODER_PATH" \
     "--hostname" "$HOSTNAME" \
     "--mac-addresses" "${ALL_MACS[@]}" \
     "--ipv4-address" "${CURRENT_IPV4:-}" \
-    "--syncthing-id" "${SYNCTHING_ID:-}" \
     "--timestamp" "$(date +%s)" \
     "--node-state" "SHUTTING_DOWN" \
     2>/dev/null)

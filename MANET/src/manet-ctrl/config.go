@@ -47,8 +47,6 @@ type Node struct {
 	Uptime       string      `json:"uptime"`
 	CPU          string      `json:"cpu"`
 	Battery      *BatteryInfo `json:"battery"`
-	Mumble       bool        `json:"mumble"`
-	MediaMTX     bool        `json:"mediamtx"`
 	NTP          bool        `json:"ntp"`
 	State        string      `json:"state"`
 	Ch2G         string      `json:"ch_2g"`
