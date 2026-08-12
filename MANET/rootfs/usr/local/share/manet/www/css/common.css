@@ -52,7 +52,7 @@ body {
   padding: 0 16px;
   display: flex; align-items: center; gap: 14px;
   min-height: 56px; flex-shrink: 0;
-  position: sticky; top: 0; z-index: 100;
+  position: sticky; top: 0; z-index: 1100;
   box-shadow: 0 2px 8px rgba(0,0,0,.25);
   overflow: visible;
 }
@@ -248,7 +248,9 @@ body {
 @media (max-width: 768px) {
   #header { flex-wrap: wrap; gap: 6px; padding: 8px 10px; }
   .hdr-brand { width: 100%; }
-  #tab-nav { width: 100%; overflow-x: auto; margin: 0; }
+  #tab-nav { width: 100%; overflow-x: auto; overflow-y: visible; margin: 0; }
+  .nav-more { position: static; }
+  .nav-more-menu { position: fixed; top: auto; right: 10px; margin-top: 0; }
   #tab-nav .tab { padding: 6px 10px; font-size: 11px; }
   #hdr-right { width: 100%; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
   #content { padding: 10px; }

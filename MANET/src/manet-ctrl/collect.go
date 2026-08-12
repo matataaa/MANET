@@ -52,7 +52,7 @@ func isBatmanV() bool {
 
 func normTQ(raw float64) int {
 	if isBatmanV() {
-		return int(math.Min(raw*255/50, 255))
+		return int(math.Min(raw*255/35, 255))
 	}
 	if raw > 255 {
 		return int(math.Min(raw/1000*255, 255))
@@ -77,8 +77,12 @@ func runBatctlOriginators() (map[string]int, map[string]BatOriginator) {
 		if len(m) > 5 {
 			iface = m[5]
 		}
+		var rawTP float64
+		if isBatmanV() {
+			rawTP = raw
+		}
 		if prev, ok := origMap[orig]; !ok || tq > prev.TQ {
-			origMap[orig] = BatOriginator{TQ: tq, Nexthop: nexthop, Iface: iface, LastSeen: lastSeen}
+			origMap[orig] = BatOriginator{TQ: tq, RawTP: rawTP, Nexthop: nexthop, Iface: iface, LastSeen: lastSeen}
 		}
 		if tq > tqMap[orig] {
 			tqMap[orig] = tq
@@ -185,6 +189,76 @@ func getBattery() *BatteryInfo {
 		return &BatteryInfo{Percentage: &pct, Status: "unknown"}
 	}
 	return nil
+}
+
+func getNetworkState() *NetworkState {
+	conf := loadKVFile(MeshConfFile)
+	ns := &NetworkState{
+		EUDMode: confGet(conf, "eud", "wired"),
+	}
+
+	// Gateway state
+	if _, err := os.Stat("/var/run/mesh-gateway.state"); err == nil {
+		ns.Gateway = true
+	}
+
+	// NTP server
+	if _, err := os.Stat("/var/run/mesh-ntp.state"); err == nil {
+		ns.NTP = true
+	}
+
+	// Upstream interface
+	if data, err := os.ReadFile("/var/run/upstream_iface"); err == nil {
+		ns.UpstreamIface = strings.TrimSpace(string(data))
+	}
+
+	// Ethernet detection state
+	if det := loadKVFile("/var/run/ethernet_detection_state"); len(det) > 0 {
+		if det["ETH_IP"] != "" {
+			ns.GatewayIP = det["ETH_IP"]
+		}
+		if det["DEFAULT_GW"] != "" && det["DEFAULT_GW"] != "none" {
+			ns.DefaultGW = det["DEFAULT_GW"]
+		}
+	}
+
+	// AP active
+	if out, err := runCmdStdout(3*time.Second, "systemctl", "is-active", "hostapd"); err == nil {
+		ns.APActive = strings.TrimSpace(out) == "active"
+	}
+
+	// EUD active: check if any EUDs are connected (br0 has DHCP leases)
+	euds := getEUDs()
+	ns.EUDActive = len(euds) > 0
+	// Figure out EUD interface
+	if ns.APActive {
+		ns.EUDIface = "wifi"
+	}
+	// Check if end0/upstream is bridged to br0 (wired EUD)
+	if ns.UpstreamIface != "" && !ns.Gateway {
+		if out, err := runCmdStdout(2*time.Second, "ip", "link", "show", ns.UpstreamIface); err == nil {
+			if strings.Contains(out, "master br0") {
+				ns.EUDIface = ns.UpstreamIface
+			}
+		}
+	}
+
+	// USB tethering: check for USB-backed interfaces
+	entries, _ := os.ReadDir("/sys/class/net")
+	for _, e := range entries {
+		name := e.Name()
+		if name == "lo" || strings.HasPrefix(name, "bat") || strings.HasPrefix(name, "br") || strings.HasPrefix(name, "wlan") {
+			continue
+		}
+		bus, _ := os.Readlink(filepath.Join("/sys/class/net", name, "device/subsystem"))
+		if strings.Contains(bus, "usb") {
+			ns.USBTether = true
+			ns.USBIface = name
+			break
+		}
+	}
+
+	return ns
 }
 
 func getThrottle() *ThrottleInfo {

@@ -127,7 +127,7 @@
 /* Topology legend */
 .topo-legend {
   position: absolute; bottom: 46px; left: 12px; z-index: 15;
-  background: rgba(20,20,24,.88); border: 1px solid rgba(255,255,255,.1);
+  background: var(--surface); border: 1px solid var(--border);
   border-radius: 10px; padding: 8px 10px;
   font-size: 10px; line-height: 1.2;
   backdrop-filter: blur(8px);
@@ -144,7 +144,7 @@
   font-family: var(--font);
   text-anchor: middle;
   paint-order: stroke fill;
-  stroke: rgba(15,17,20,0.9);
+  stroke: var(--bg);
   stroke-width: 3px;
   stroke-linecap: round; stroke-linejoin: round;
   pointer-events: none;

@@ -1,5 +1,7 @@
-// Hardware tab — radios, interfaces, GPS, system info
+// Hardware tab — radios, interfaces, GPS, PTT, system info
 var hwInitialized = false;
+var hwPttTimer = null;
+var hwPttData = null;
 
 function hardwareActivate() {
   var panel = document.getElementById('tab-hardware');
@@ -8,7 +10,7 @@ function hardwareActivate() {
       '<div class="hw-wrap">' +
         '<div class="svc-bar"><button class="cfg-btn" id="hw-refresh">Refresh</button></div>' +
         '<h3 class="hw-section-title">SYSTEM</h3>' +
-        '<div id="hw-system" class="svc-grid"></div>' +
+        '<div class="svc-grid"><div id="hw-system" style="display:contents"></div><div id="hw-ptt" style="display:contents"></div></div>' +
         '<h3 class="hw-section-title">RADIOS</h3>' +
         '<div id="hw-radios" class="svc-grid"></div>' +
         '<h3 class="hw-section-title">NETWORK INTERFACES</h3>' +
@@ -20,6 +22,12 @@ function hardwareActivate() {
     hwInitialized = true;
   }
   hardwareUpdate();
+  hwPttFetch();
+  hwPttTimer = setInterval(hwPttFetchLive, 1000);
+}
+
+function hardwareDeactivate() {
+  if (hwPttTimer) { clearInterval(hwPttTimer); hwPttTimer = null; }
 }
 
 function hardwareUpdate() {
@@ -174,7 +182,117 @@ function hwRenderSystem() {
   }
 
   var sysDot = (t && (t.undervoltage || t.throttled)) ? 'dot-bad' : (t && (t.was_undervoltage || t.was_throttled)) ? 'dot-warn' : 'dot-ok';
-  el.innerHTML = '<div class="svc-card svc-card-wide">' +
+  el.innerHTML = '<div class="svc-card">' +
     '<div class="svc-header"><span class="' + sysDot + '"></span><span class="svc-name">Node Info</span></div>' +
     '<div class="hw-details">' + rows + '</div></div>';
+}
+
+// --- PTT hardware tile ---
+
+async function hwPttFetch() {
+  try {
+    var r = await fetch('/api/voice');
+    hwPttData = await r.json();
+    hwRenderPtt();
+  } catch(e) {
+    var el = document.getElementById('hw-ptt');
+    if (el) el.innerHTML = '<div class="svc-card"><div class="svc-name">Voice service unavailable</div></div>';
+  }
+}
+
+async function hwPttFetchLive() {
+  try {
+    var r = await fetch('/api/voice');
+    hwPttData = await r.json();
+    hwUpdatePttIndicators();
+  } catch(e) {}
+}
+
+function hwRenderPtt() {
+  var el = document.getElementById('hw-ptt');
+  if (!el || !hwPttData) return;
+  var d = hwPttData;
+  var active = d.active;
+  var dot = active ? 'dot-ok' : 'dot-bad';
+  var badge = active ? '<span class="hw-badge hw-badge-up">RUNNING</span>' :
+              '<span class="hw-badge hw-badge-down">STOPPED</span>';
+
+  var html = '<div class="svc-card">';
+  html += '<div class="svc-header"><span class="' + dot + '"></span><span class="svc-name">Hardware PTT</span>' + badge + '</div>';
+
+  // OpenVLM connection
+  html += '<div class="voice-hw-device-row" id="hwp-vlm-row">';
+  html += '<span class="voice-dot ' + (d.ptt_connected ? 'on' : 'off') + '" id="hwp-vlm-dot"></span>';
+  html += '<span class="voice-hw-device-label">OpenVLM</span>';
+  html += '<span class="voice-hw-device-status ' + (d.ptt_connected ? 'connected' : 'disconnected') + '" id="hwp-vlm-status">' + (d.ptt_connected ? 'Connected' : 'Disconnected') + '</span>';
+  html += '</div>';
+
+  // PTT state
+  html += '<div class="voice-hw-ptt-wrap">';
+  html += '<div class="voice-hw-ptt-indicator' + (active && d.ptt_active ? ' active' : '') + '" id="hwp-ptt-indicator">';
+  html += '<div class="voice-hw-ptt-dot" id="hwp-ptt-dot"></div>';
+  html += '<div class="voice-hw-ptt-label" id="hwp-ptt-label">' + (active ? (d.ptt_active ? 'PTT PRESSED' : 'PTT UNPRESSED') : 'SERVICE OFF') + '</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // TX/RX indicators
+  html += '<div class="voice-indicators" id="hwp-txrx">';
+  html += '<div class="voice-ind"><span class="voice-dot ' + (d.tx ? 'tx' : 'off') + '" id="hwp-tx-dot"></span><span id="hwp-tx-label">' + (d.tx ? 'TX' : 'TX Idle') + '</span></div>';
+  html += '<div class="voice-ind"><span class="voice-dot ' + (d.rx ? 'rx' : 'off') + '" id="hwp-rx-dot"></span><span id="hwp-rx-label">' + (d.rx ? 'RX' : 'RX Silent') + '</span></div>';
+  html += '</div>';
+
+  // Service details
+  if (active) {
+    var details = '<div class="hw-details">';
+    details += hwRow('PTT Mode', d.ptt_mode || '--');
+    details += hwRow('PTT Device', d.ptt_device || '--');
+    details += hwRow('Multicast', (d.mcast_addr || '239.69.0.1') + ':' + (d.port || '4370'));
+    details += hwRow('Interface', d.interface || 'br0');
+    details += hwRow('Uptime', d.uptime || '--');
+    details += '</div>';
+    html += details;
+  }
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function hwUpdatePttIndicators() {
+  if (!hwPttData) return;
+  var d = hwPttData;
+
+  // OpenVLM
+  var vlmDot = document.getElementById('hwp-vlm-dot');
+  var vlmStatus = document.getElementById('hwp-vlm-status');
+  if (vlmDot) vlmDot.className = 'voice-dot ' + (d.ptt_connected ? 'on' : 'off');
+  if (vlmStatus) {
+    vlmStatus.textContent = d.ptt_connected ? 'Connected' : 'Disconnected';
+    vlmStatus.className = 'voice-hw-device-status ' + (d.ptt_connected ? 'connected' : 'disconnected');
+  }
+
+  // PTT state
+  var indicator = document.getElementById('hwp-ptt-indicator');
+  var label = document.getElementById('hwp-ptt-label');
+  if (indicator) {
+    if (d.active && d.ptt_active) {
+      indicator.className = 'voice-hw-ptt-indicator active';
+      if (label) label.textContent = 'PTT PRESSED';
+    } else if (d.active) {
+      indicator.className = 'voice-hw-ptt-indicator';
+      if (label) label.textContent = 'PTT UNPRESSED';
+    } else {
+      indicator.className = 'voice-hw-ptt-indicator';
+      if (label) label.textContent = 'SERVICE OFF';
+    }
+  }
+
+  // TX/RX
+  var txDot = document.getElementById('hwp-tx-dot');
+  var txLabel = document.getElementById('hwp-tx-label');
+  var rxDot = document.getElementById('hwp-rx-dot');
+  var rxLabel = document.getElementById('hwp-rx-label');
+  if (txDot) txDot.className = 'voice-dot ' + (d.tx ? 'tx' : 'off');
+  if (txLabel) txLabel.textContent = d.tx ? 'TX' : 'TX Idle';
+  if (rxDot) rxDot.className = 'voice-dot ' + (d.rx ? 'rx' : 'off');
+  if (rxLabel) rxLabel.textContent = d.rx ? 'RX' : 'RX Silent';
 }

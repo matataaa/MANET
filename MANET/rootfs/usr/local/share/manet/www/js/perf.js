@@ -11,6 +11,7 @@ function perfActivate() {
       <div class="perf-tabs">
         <button class="perf-tab active" data-section="measure">Measure</button>
         <button class="perf-tab" data-section="ping">Ping</button>
+        <button class="perf-tab" data-section="downloads">Downloads</button>
       </div>
       <div class="perf-section active" id="perf-measure">
         <div class="card">
@@ -51,6 +52,23 @@ function perfActivate() {
             <button class="cfg-btn cfg-btn-danger" id="ping-stop-btn" style="display:none">Stop</button>
           </div>
           <div class="measure-results" id="ping-results" style="display:none"></div>
+        </div>
+      </div>
+      <div class="perf-section" id="perf-downloads">
+        <div class="card">
+          <div class="card-header">DOWNLOADS</div>
+          <div class="dl-grid">
+            <div class="dl-item">
+              <div class="dl-name">Mesh Ctrl (Android)</div>
+              <div class="dl-desc">Android app for controlling mesh nodes. WebView with native notifications.</div>
+              <a href="/api/mesh-ctrl.apk" class="cfg-btn cfg-btn-primary" download>Download APK</a>
+            </div>
+            <div class="dl-item">
+              <div class="dl-name">ATAK Data Package</div>
+              <div class="dl-desc">Import into ATAK to receive mesh CoT position reports.</div>
+              <a href="/api/atak-package" class="cfg-btn cfg-btn-primary" download>Download ZIP</a>
+            </div>
+          </div>
         </div>
       </div>`;
 

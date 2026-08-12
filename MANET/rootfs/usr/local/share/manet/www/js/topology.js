@@ -7,6 +7,22 @@ var topoNodeMap = {};
 var topoInitialized = false;
 var topoStreamAbort = null;
 var topoStreamType = null;
+var topoOrbTimer = null;
+var topoOrbs = [];
+
+function tpColor(tp) {
+  if (tp == null || tp <= 0) return '#9aa4b2';
+  if (tp >= 5) return '#22c55e';
+  if (tp >= 2) return '#eab308';
+  return '#ef4444';
+}
+
+function fmtThroughput(tp) {
+  if (tp == null || tp <= 0) return '';
+  if (tp >= 10) return Math.round(tp) + ' Mbps';
+  if (tp >= 1) return tp.toFixed(1) + ' Mbps';
+  return Math.round(tp * 1000) + ' kbps';
+}
 
 function topoInit(container) {
   container.innerHTML = '';
@@ -24,16 +40,15 @@ function topoInit(container) {
   var legend = document.createElement('div');
   legend.className = 'topo-legend';
   legend.innerHTML =
-    '<div class="topo-legend-title">LINK TYPE</div>' +
-    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#ef4444" stroke-width="3"/></svg><span>Direct</span></div>' +
+    '<div class="topo-legend-title">LINK SPEED</div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#22c55e" stroke-width="2.5"/></svg><span>&gt;5 Mbps</span></div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#eab308" stroke-width="2.5"/></svg><span>2–5 Mbps</span></div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#ef4444" stroke-width="2.5"/></svg><span>&lt;2 Mbps</span></div>' +
+    '<div class="topo-legend-title" style="margin-top:6px">ROUTE</div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#00d4cf" stroke-width="3.5"/></svg><span>GW Route</span></div>' +
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="1.5" stroke-dasharray="6,3"/></svg><span>Multi-hop</span></div>' +
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="1.5" stroke-dasharray="3,5"/></svg><span>Inferred</span></div>' +
-    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="4,6" opacity="0.4"/></svg><span>Stale</span></div>' +
-    '<div class="topo-legend-title" style="margin-top:6px">LINK QUALITY</div>' +
-    '<div class="topo-legend-row"><span class="topo-legend-dot" style="background:#22c55e"></span><span>Excellent</span></div>' +
-    '<div class="topo-legend-row"><span class="topo-legend-dot" style="background:#eab308"></span><span>Good</span></div>' +
-    '<div class="topo-legend-row"><span class="topo-legend-dot" style="background:#f97316"></span><span>Fair</span></div>' +
-    '<div class="topo-legend-row"><span class="topo-legend-dot" style="background:#ef4444"></span><span>Poor</span></div>';
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="4,6" opacity="0.4"/></svg><span>Stale</span></div>';
   container.appendChild(legend);
 
   var bar = document.createElement('div');
@@ -46,9 +61,24 @@ function topoInit(container) {
   var svg = d3.select(container).append('svg');
   topoSvg = svg;
 
+  var defs = svg.append('defs');
+  var orbF = defs.append('filter').attr('id', 'orb-glow')
+    .attr('x', '-100%').attr('y', '-100%').attr('width', '300%').attr('height', '300%');
+  orbF.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '2').attr('result', 'blur');
+  var om = orbF.append('feMerge');
+  om.append('feMergeNode').attr('in', 'blur');
+  om.append('feMergeNode').attr('in', 'SourceGraphic');
+  var gwF = defs.append('filter').attr('id', 'gw-glow')
+    .attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
+  gwF.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '3').attr('result', 'blur');
+  var gm = gwF.append('feMerge');
+  gm.append('feMergeNode').attr('in', 'blur');
+  gm.append('feMergeNode').attr('in', 'SourceGraphic');
+
   var g = svg.append('g').attr('class', 'topo-root');
   g.append('g').attr('class', 'links');
   g.append('g').attr('class', 'link-labels');
+  g.append('g').attr('class', 'orbs');
   g.append('g').attr('class', 'nodes');
 
   topoZoom = d3.zoom()
@@ -110,7 +140,7 @@ function topoUpdate(data) {
   var links = (data.edges || []).filter(function(e) {
     return nodeIds.has(e.source) && nodeIds.has(e.target);
   }).map(function(e) {
-    return { source: e.source, target: e.target, type: e.type, tq: e.tq };
+    return { source: e.source, target: e.target, type: e.type, tq: e.tq, throughput: e.throughput, gw_route: e.gw_route };
   });
 
   // Status bar
@@ -135,9 +165,14 @@ function topoUpdate(data) {
     .attr('stroke', function(d) {
       var s = d.source.id || d.source, t = d.target.id || d.target;
       if (staleIds.has(s) || staleIds.has(t)) return '#6e7681';
+      if (d.gw_route) return '#00d4cf';
+      if (d.throughput != null && d.throughput > 0) return tpColor(d.throughput);
       return tqColor(d.tq);
     })
-    .attr('stroke-width', function(d) { return d.type === 'direct' ? 3 : 2; })
+    .attr('stroke-width', function(d) {
+      if (d.gw_route) return 3.5;
+      return d.type === 'direct' ? 2.5 : 1.5;
+    })
     .attr('stroke-dasharray', function(d) {
       var s = d.source.id || d.source, t = d.target.id || d.target;
       if (staleIds.has(s) || staleIds.has(t)) return '4,6';
@@ -150,6 +185,11 @@ function topoUpdate(data) {
       var s = d.source.id || d.source, t = d.target.id || d.target;
       if (staleIds.has(s) || staleIds.has(t)) return 0.35;
       return 1;
+    })
+    .attr('filter', function(d) {
+      var s = d.source.id || d.source, t = d.target.id || d.target;
+      if (staleIds.has(s) || staleIds.has(t)) return null;
+      return d.gw_route ? 'url(#gw-glow)' : null;
     });
 
   // --- Link labels ---
@@ -159,12 +199,20 @@ function topoUpdate(data) {
   var lblEnter = lblSel.enter().append('text').attr('class', 'topo-link-lbl');
   var lblAll = lblEnter.merge(lblSel)
     .text(function(d) {
-      if (d.tq == null) return '';
       var s = d.source.id || d.source, t = d.target.id || d.target;
       if (staleIds.has(s) || staleIds.has(t)) return '';
+      if (d.throughput != null && d.throughput > 0) return fmtThroughput(d.throughput);
+      if (d.tq == null) return '';
       return tqPct(d.tq) + '%';
     })
-    .attr('fill', function(d) { return tqColor(d.tq); });
+    .attr('fill', function(d) {
+      if (d.gw_route) return '#00d4cf';
+      if (d.throughput != null && d.throughput > 0) return tpColor(d.throughput);
+      return tqColor(d.tq);
+    });
+
+  // --- Orbs ---
+  topoSetupOrbs(links, staleIds);
 
   // --- Nodes ---
   var nodeSel = g.select('.nodes').selectAll('g.node')
@@ -208,6 +256,14 @@ function topoUpdate(data) {
     .style('font-size', '10px').style('font-weight', '600')
     .style('pointer-events', 'none');
 
+  nodeEnter.append('line')
+    .attr('class', 'topo-uplink-stem')
+    .style('pointer-events', 'none');
+
+  nodeEnter.append('g')
+    .attr('class', 'topo-uplink-icon')
+    .style('pointer-events', 'none');
+
   var nodeAll = nodeEnter.merge(nodeSel);
 
   nodeAll.select('.topo-status-ring')
@@ -242,16 +298,60 @@ function topoUpdate(data) {
       if (d.is_me) return '';
       if (d.stale) return 'OFFLINE';
       var parts = [];
-      if (d.tq != null) parts.push(tqPct(d.tq) + '%');
+      if (d.best_link && d.best_link.throughput) {
+        parts.push(fmtThroughput(d.best_link.throughput));
+      } else if (d.tq != null) {
+        parts.push(tqPct(d.tq) + '%');
+      }
       if (d.hop_count != null && d.hop_count > 0)
         parts.push(d.hop_count + (d.hop_count === 1 ? ' hop' : ' hops'));
+      if (d.last_seen && ts) {
+        var age = fmtAge(d.last_seen, ts);
+        if (age !== '--') parts.push(age);
+      }
       return parts.join(' · ');
     })
     .attr('dy', function(d) { return d.r + 63; })
     .attr('fill', function(d) {
       if (d.stale) return '#ef4444';
+      if (d.best_link && d.best_link.throughput) return tpColor(d.best_link.throughput);
       return d.tq != null ? tqColor(d.tq) : '#8b929e';
     });
+
+  // Gateway uplink indicator
+  nodeAll.select('.topo-uplink-stem')
+    .attr('x1', 0).attr('y1', -34)
+    .attr('x2', 0).attr('y2', -56)
+    .attr('stroke', '#7c3aed')
+    .attr('stroke-width', 1.5)
+    .attr('stroke-dasharray', '3,2')
+    .attr('opacity', function(d) { return d.is_gateway ? 0.7 : 0; });
+
+  nodeAll.select('.topo-uplink-icon').each(function(d) {
+    var g = d3.select(this);
+    g.selectAll('*').remove();
+    if (!d.is_gateway) { g.attr('opacity', 0); return; }
+    g.attr('opacity', 1);
+    var isUSB = d.is_me && typeof LOCAL_DATA !== 'undefined' && LOCAL_DATA &&
+      LOCAL_DATA.network && LOCAL_DATA.network.usb_tether;
+    if (isUSB) {
+      g.append('rect').attr('x', -4).attr('y', -68).attr('width', 8).attr('height', 13)
+        .attr('rx', 1.5).attr('fill', 'rgba(124,58,237,0.12)')
+        .attr('stroke', '#7c3aed').attr('stroke-width', 1.2);
+      g.append('rect').attr('x', -3).attr('y', -66).attr('width', 6).attr('height', 7)
+        .attr('fill', 'rgba(124,58,237,0.2)');
+      g.append('circle').attr('cx', 0).attr('cy', -56.5).attr('r', 0.8)
+        .attr('fill', '#7c3aed');
+    } else {
+      g.append('circle').attr('cx', 0).attr('cy', -66).attr('r', 10)
+        .attr('fill', 'rgba(124,58,237,0.12)')
+        .attr('stroke', '#7c3aed').attr('stroke-width', 1.2);
+      g.append('line').attr('x1', -10).attr('y1', -66).attr('x2', 10).attr('y2', -66)
+        .attr('stroke', '#7c3aed').attr('stroke-width', 0.7).attr('opacity', 0.6);
+      g.append('ellipse').attr('cx', 0).attr('cy', -66).attr('rx', 4.3).attr('ry', 10)
+        .attr('fill', 'none').attr('stroke', '#7c3aed').attr('stroke-width', 0.7).attr('opacity', 0.6);
+    }
+  });
 
   nodeAll.style('cursor', function(d) { return d.ip ? 'pointer' : 'grab'; });
 
@@ -263,6 +363,7 @@ function topoUpdate(data) {
       var html = '<div class="tt-host">' + escHtml(d.hostname || d.id) + '</div>';
       if (d.ip) html += '<div class="tt-row"><span class="tt-label">IP</span>' + escHtml(d.ip) + '</div>';
       html += '<div class="tt-row"><span class="tt-label">DNS</span>' + escHtml((d.hostname || '') + '.mesh') + '</div>';
+      if (!d.is_me && d.best_link && d.best_link.throughput) html += '<div class="tt-row"><span class="tt-label">Speed</span>' + fmtThroughput(d.best_link.throughput) + '</div>';
       if (!d.is_me && d.tq != null) html += '<div class="tt-row"><span class="tt-label">TQ</span>' + d.tq + ' (' + tqPct(d.tq) + '%)</div>';
       if (d.hop_count) html += '<div class="tt-row"><span class="tt-label">Hops</span>' + d.hop_count + '</div>';
       if (d.uptime) html += '<div class="tt-row"><span class="tt-label">Up</span>' + d.uptime + '</div>';
@@ -478,6 +579,7 @@ function topoStopStream() {
 
 function topoDestroy() {
   topoStopStream();
+  topoStopOrbs();
   var panel = document.querySelector('.topo-stream-panel');
   if (panel) panel.remove();
   if (topoSim) { topoSim.stop(); topoSim = null; }
@@ -485,4 +587,58 @@ function topoDestroy() {
   topoTooltip = null;
   topoNodeMap = {};
   topoInitialized = false;
+}
+
+function topoSetupOrbs(links, staleIds) {
+  if (!topoSvg) return;
+  if (topoOrbTimer) { cancelAnimationFrame(topoOrbTimer); topoOrbTimer = null; }
+  var orbGroup = topoSvg.select('.orbs');
+  orbGroup.selectAll('*').remove();
+  topoOrbs = [];
+
+  links.forEach(function(link) {
+    var s = link.source.id || link.source;
+    var t = link.target.id || link.target;
+    if (staleIds.has(s) || staleIds.has(t)) return;
+    if (link.type === 'unknown') return;
+    var tp = link.throughput || (link.tq != null ? link.tq * 50.0 / 255.0 : 0);
+    if (tp <= 0) return;
+
+    var count = tp > 10 ? 3 : (tp > 2 ? 2 : 1);
+    var speed = 0.0012 + Math.min(tp / 50, 1) * 0.003;
+    var color = link.gw_route ? '#00d4cf' : (link.throughput != null ? tpColor(link.throughput) : tqColor(link.tq));
+
+    for (var i = 0; i < count; i++) {
+      var c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      c.setAttribute('r', link.gw_route ? 3 : 2);
+      c.setAttribute('fill', color);
+      c.setAttribute('opacity', '0.6');
+      c.setAttribute('filter', 'url(#orb-glow)');
+      orbGroup.node().appendChild(c);
+      topoOrbs.push({ el: c, link: link, t: i / count, speed: speed, reverse: i % 2 === 1 });
+    }
+  });
+
+  if (topoOrbs.length > 0) {
+    topoOrbTimer = requestAnimationFrame(topoTickOrbs);
+  }
+}
+
+function topoTickOrbs() {
+  if (!topoSvg || topoOrbs.length === 0) { topoOrbTimer = null; return; }
+  for (var i = 0; i < topoOrbs.length; i++) {
+    var o = topoOrbs[i];
+    if (o.reverse) { o.t -= o.speed; if (o.t < 0) o.t += 1; }
+    else { o.t += o.speed; if (o.t > 1) o.t -= 1; }
+    var src = o.link.source, tgt = o.link.target;
+    if (src.x == null || tgt.x == null) continue;
+    o.el.setAttribute('cx', src.x + (tgt.x - src.x) * o.t);
+    o.el.setAttribute('cy', src.y + (tgt.y - src.y) * o.t);
+  }
+  topoOrbTimer = requestAnimationFrame(topoTickOrbs);
+}
+
+function topoStopOrbs() {
+  if (topoOrbTimer) { cancelAnimationFrame(topoOrbTimer); topoOrbTimer = null; }
+  topoOrbs = [];
 }

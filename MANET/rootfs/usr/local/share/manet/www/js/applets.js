@@ -123,15 +123,18 @@ function openApplet(name) {
   var display = appletDisplayName(name);
   var overlay = document.createElement('div');
   overlay.className = 'applet-iframe-overlay';
+  var isDirect = !!window.__meshApplet;
   overlay.innerHTML =
+    (isDirect ? '' :
     '<div class="applet-iframe-bar">' +
       '<h3>' + esc(display) + '</h3>' +
       '<button class="applet-iframe-close" id="close-applet-overlay">Close</button>' +
-    '</div>' +
+    '</div>') +
     '<iframe src="/api/applets/' + encodeURIComponent(name) + '/frontend/"></iframe>';
   document.body.appendChild(overlay);
   window.location.hash = 'applets/' + encodeURIComponent(name);
-  document.getElementById('close-applet-overlay').onclick = function() {
+  var closeBtn = document.getElementById('close-applet-overlay');
+  if (closeBtn) closeBtn.onclick = function() {
     overlay.remove();
     window.location.hash = returnHash.replace('#', '');
   };

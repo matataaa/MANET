@@ -256,6 +256,53 @@ func apiAdminStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, assembleAdminStatus())
 }
 
+func apiFleetPreferences(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		writeJSON(w, 200, loadFleetPreferences())
+		return
+	}
+	body := readBody(r)
+	prefs := loadFleetPreferences()
+	if mc, ok := body["mesh_config"]; ok {
+		if m, ok := mc.(map[string]interface{}); ok {
+			prefs.MeshConfig = make(map[string]string, len(m))
+			for k, v := range m {
+				prefs.MeshConfig[k] = fmt.Sprintf("%v", v)
+			}
+		}
+	}
+	if np, ok := body["node_profiles"]; ok {
+		if m, ok := np.(map[string]interface{}); ok {
+			prefs.NodeProfiles = make(map[string]string, len(m))
+			for k, v := range m {
+				prefs.NodeProfiles[k] = fmt.Sprintf("%v", v)
+			}
+		}
+	}
+	if pr, ok := body["profiles"]; ok {
+		if m, ok := pr.(map[string]interface{}); ok {
+			prefs.Profiles = make(map[string]FleetProfile, len(m))
+			for pid, pv := range m {
+				if pm, ok := pv.(map[string]interface{}); ok {
+					fp := FleetProfile{Name: fmt.Sprintf("%v", pm["name"])}
+					fp.Config = make(map[string]string)
+					if cfg, ok := pm["config"].(map[string]interface{}); ok {
+						for k, v := range cfg {
+							fp.Config[k] = fmt.Sprintf("%v", v)
+						}
+					}
+					prefs.Profiles[pid] = fp
+				}
+			}
+		}
+	}
+	if err := saveFleetPreferences(prefs); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
 func apiServices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"services": getAllServices()})
 }
@@ -757,11 +804,15 @@ func apiAdminStage(w http.ResponseWriter, r *http.Request) {
 		strConf["mesh_key"] != currentConf["mesh_key"] ||
 		strConf["ipv4_network"] != confGet(currentConf, "ipv4_network", "10.30.2.0/24")
 
+	prefs := loadFleetPreferences()
+
 	pkg := map[string]interface{}{
-		"version":   version,
-		"config":    configMap,
-		"staged_by": getMyHostname(),
-		"staged_at": time.Now().Unix(),
+		"version":       version,
+		"config":        configMap,
+		"profiles":      prefs.Profiles,
+		"node_profiles": prefs.NodeProfiles,
+		"staged_by":     getMyHostname(),
+		"staged_at":     time.Now().Unix(),
 	}
 
 	savePendingConfig(pkg)
@@ -1381,4 +1432,17 @@ func apiATAKPackage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="MANET-Mesh-CoT.zip"`)
 	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 	w.Write(buf.Bytes())
+}
+
+func apiDownloadAPK(w http.ResponseWriter, r *http.Request) {
+	apkPath := "/usr/local/share/manet/mesh-ctrl.apk"
+	info, err := os.Stat(apkPath)
+	if err != nil {
+		writeJSON(w, 404, map[string]interface{}{"error": "APK not available on this node"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.android.package-archive")
+	w.Header().Set("Content-Disposition", `attachment; filename="mesh-ctrl.apk"`)
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	http.ServeFile(w, r, apkPath)
 }

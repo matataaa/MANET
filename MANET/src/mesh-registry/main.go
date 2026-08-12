@@ -56,6 +56,7 @@ type NodeInfo struct {
 	Wifi5RxMCS   string `json:"wifi_5_rx_mcs,omitempty"`
 	TQAverage    string `json:"tq_average,omitempty"`
 	Neighbors    string `json:"neighbors,omitempty"`
+	ConfigAck    string `json:"config_ack,omitempty"`
 }
 
 func main() {
@@ -128,6 +129,7 @@ func collectLocal() NodeInfo {
 		Wifi5RxMCS:   mcs["WLAN1_RX_MCS"],
 		TQAverage:    getTQAverage(),
 		Neighbors:    getDirectNeighbors(),
+		ConfigAck:    readFileStr("/var/run/mesh_config_ack_version"),
 	}
 }
 
@@ -229,6 +231,7 @@ func writeNode(b *strings.Builder, n NodeInfo) {
 	w("WIFI_5_RX_MCS", n.Wifi5RxMCS)
 	w("TQ_AVERAGE", n.TQAverage)
 	w("DIRECT_NEIGHBORS", n.Neighbors)
+	w("CONFIG_ACK_VERSION", n.ConfigAck)
 	fmt.Fprintln(b)
 }
 
@@ -429,6 +432,14 @@ func boolStr(b bool) string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func readFileStr(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func collectMCS() map[string]string {

@@ -94,6 +94,7 @@ func assembleLocalData() LocalData {
 
 	gps := getGPS(myReg)
 	throttle := getThrottle()
+	network := getNetworkState()
 
 	return LocalData{
 		Hostname:   hostname,
@@ -109,6 +110,7 @@ func assembleLocalData() LocalData {
 		APSSID:     conf["lan_ap_ssid"],
 		MeshSSID:   conf["mesh_ssid"],
 		Throttle:   throttle,
+		Network:    network,
 	}
 }
 
@@ -160,11 +162,18 @@ func assembleStatusData() StatusData {
 
 	// For batman-visible MACs not in registry, inject cached data so they
 	// keep their hostname/IP instead of appearing as bare MACs.
+	// Skip entries that are too stale (>10 min since last seen).
+	nowUnix := time.Now().Unix()
 	for mac := range origMap {
 		if regMACs[mac] {
 			continue
 		}
 		if cached, ok := getCachedRegistryNode(mac); ok {
+			if ts := cached["LAST_SEEN_TIMESTAMP"]; ts != "" {
+				if seen, err := strconv.ParseInt(ts, 10, 64); err == nil && nowUnix-seen > 600 {
+					continue
+				}
+			}
 			registry[cached["id"]] = cached
 		}
 	}
@@ -173,6 +182,11 @@ func assembleStatusData() StatusData {
 			continue
 		}
 		if cached, ok := getCachedRegistryNode(nb.MAC); ok {
+			if ts := cached["LAST_SEEN_TIMESTAMP"]; ts != "" {
+				if seen, err := strconv.ParseInt(ts, 10, 64); err == nil && nowUnix-seen > 600 {
+					continue
+				}
+			}
 			registry[cached["id"]] = cached
 		}
 	}
@@ -271,6 +285,9 @@ func assembleStatusData() StatusData {
 			bestLink["iface"] = orig.Iface
 			bestLink["nexthop"] = orig.Nexthop
 			bestLink["tq"] = orig.TQ
+			if orig.RawTP > 0 {
+				bestLink["throughput"] = orig.RawTP
+			}
 		}
 
 		lastSeen := rn["LAST_SEEN_TIMESTAMP"]
@@ -400,13 +417,28 @@ func assembleStatusData() StatusData {
 
 		if n.IsDirect || nexthopIsNode {
 			tq := orig.TQ
-			edges = append(edges, Edge{Source: selfID, Target: n.ID, Type: "direct", TQ: &tq})
+			e := Edge{Source: selfID, Target: n.ID, Type: "direct", TQ: &tq}
+			if orig.RawTP > 0 {
+				tp := orig.RawTP
+				e.Throughput = &tp
+			}
+			edges = append(edges, e)
 		} else {
 			via := orig.Nexthop
 			tq := orig.TQ
-			edges = append(edges, Edge{Source: selfID, Target: n.ID, Type: "multihop", Via: via, TQ: &tq})
+			e := Edge{Source: selfID, Target: n.ID, Type: "multihop", Via: via, TQ: &tq}
+			if orig.RawTP > 0 {
+				tp := orig.RawTP
+				e.Throughput = &tp
+			}
+			edges = append(edges, e)
 			if viaNodeID, ok := macToNodeID[via]; ok {
-				edges = append(edges, Edge{Source: viaNodeID, Target: n.ID, Type: "inferred", TQ: &tq})
+				ie := Edge{Source: viaNodeID, Target: n.ID, Type: "inferred", TQ: &tq}
+				if orig.RawTP > 0 {
+					tp := orig.RawTP
+					ie.Throughput = &tp
+				}
+				edges = append(edges, ie)
 			}
 		}
 	}
@@ -428,11 +460,15 @@ func assembleStatusData() StatusData {
 			}
 			nbMAC := entry
 			var peerTQ *int
+			var peerTP *float64
 			if eqIdx := strings.LastIndex(entry, "="); eqIdx > 0 {
 				nbMAC = entry[:eqIdx]
 				if raw, err := strconv.ParseFloat(entry[eqIdx+1:], 64); err == nil {
 					tq := normTQ(raw)
 					peerTQ = &tq
+					if isBatmanV() && raw > 0 {
+						peerTP = &raw
+					}
 				}
 			}
 			nbNodeID, ok := macToNodeID[nbMAC]
@@ -449,7 +485,7 @@ func assembleStatusData() StatusData {
 				}
 			}
 			if !dup {
-				edges = append(edges, Edge{Source: n.ID, Target: nbNodeID, Type: "direct", TQ: peerTQ})
+				edges = append(edges, Edge{Source: n.ID, Target: nbNodeID, Type: "direct", TQ: peerTQ, Throughput: peerTP})
 			}
 		}
 	}
@@ -474,8 +510,60 @@ func assembleStatusData() StatusData {
 		}
 	}
 
+	// Mark gateway route edges
+	var gwNodeID string
+	for _, n := range nodes {
+		if n.IsSelectedGW {
+			gwNodeID = n.ID
+			break
+		}
+	}
+	if gwNodeID != "" {
+		var gwVia string
+		for i := range edges {
+			if edges[i].Source == selfID && edges[i].Target == gwNodeID {
+				edges[i].GWRoute = true
+				gwVia = edges[i].Via
+			}
+		}
+		if gwVia != "" {
+			viaNodeID := macToNodeID[gwVia]
+			for i := range edges {
+				s, t := edges[i].Source, edges[i].Target
+				if (s == viaNodeID && t == gwNodeID) || (s == gwNodeID && t == viaNodeID) {
+					edges[i].GWRoute = true
+				}
+				if (s == selfID && t == viaNodeID) || (s == viaNodeID && t == selfID) {
+					edges[i].GWRoute = true
+				}
+			}
+		}
+	}
+
+	// Remove nodes offline for more than 10 minutes (no batman visibility, old timestamp)
+	activeNodeIDs := make(map[string]bool)
+	var activeNodes []Node
+	for _, n := range nodes {
+		keep := n.IsMe || n.TQ != nil || n.IsDirect
+		if !keep && n.LastSeen != "" {
+			if seen, err := strconv.ParseInt(n.LastSeen, 10, 64); err == nil {
+				keep = (nowUnix - seen) < 600
+			}
+		}
+		if keep {
+			activeNodes = append(activeNodes, n)
+			activeNodeIDs[n.ID] = true
+		}
+	}
+	var activeEdges []Edge
+	for _, e := range edges {
+		if activeNodeIDs[e.Source] && activeNodeIDs[e.Target] {
+			activeEdges = append(activeEdges, e)
+		}
+	}
+
 	return StatusData{
-		Nodes:        nodes,
+		Nodes:        activeNodes,
 		MyMAC:        myMAC,
 		MyHostname:   myHostname,
 		MyIP:         myIP,
@@ -484,7 +572,7 @@ func assembleStatusData() StatusData {
 		GatewayCount: gwCount,
 		SelectedGW:   selectedGW,
 		Neighbors:    neighbors,
-		Edges:        edges,
+		Edges:        activeEdges,
 		Timestamp:    time.Now().Unix(),
 	}
 }

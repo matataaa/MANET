@@ -9,6 +9,7 @@ function dashboardActivate() {
         <div class="topo-loading" id="topo-loading">LOADING TOPOLOGY...</div>
       </div>
       <div class="dash-side">
+        <div id="dash-network-wrap"></div>
         <div class="card">
           <div class="card-header">MESH NODES <span id="dash-node-count"></span></div>
           <div id="dash-node-list"></div>
@@ -30,8 +31,62 @@ function dashboardUpdate() {
   topoUpdate(DATA);
   renderDashNodeList(DATA.nodes);
   renderThrottleWarning();
+  renderDashNetwork();
   renderDashDaemons();
   renderDashApplets();
+}
+
+function renderDashNetwork() {
+  var wrap = document.getElementById('dash-network-wrap');
+  if (!wrap || !LOCAL_DATA || !LOCAL_DATA.network) { if (wrap) wrap.innerHTML = ''; return; }
+  var n = LOCAL_DATA.network;
+  var rows = [];
+
+  // Gateway / Uplink
+  var gwDot = n.gateway ? 'on' : 'off';
+  var gwVal = n.gateway ? 'Active' : 'Off';
+  if (n.gateway && n.gateway_ip) gwVal += ' &middot; ' + escHtml(n.gateway_ip);
+  if (n.gateway && n.upstream_iface) gwVal += ' (' + escHtml(n.upstream_iface) + ')';
+  rows.push('<div class="dash-daemon-row"><span class="voice-dot ' + gwDot + '"></span>' +
+    '<span class="dash-daemon-name">Uplink</span>' +
+    '<span class="dash-daemon-val">' + gwVal + '</span></div>');
+
+  // EUD
+  var eudDot = n.eud_active ? 'on' : 'off';
+  var eudVal = n.eud_mode || 'wired';
+  if (n.eud_active) {
+    var via = n.eud_iface === 'wifi' ? 'WiFi AP' : (n.eud_iface || 'bridge');
+    eudVal += ' &middot; ' + via;
+  } else {
+    eudVal += ' &middot; no clients';
+  }
+  rows.push('<div class="dash-daemon-row"><span class="voice-dot ' + eudDot + '"></span>' +
+    '<span class="dash-daemon-name">EUD</span>' +
+    '<span class="dash-daemon-val">' + eudVal + '</span></div>');
+
+  // AP
+  var apDot = n.ap_active ? 'on' : 'off';
+  var apVal = n.ap_active ? 'Active' : 'Off';
+  if (n.ap_active && LOCAL_DATA.ap_ssid) apVal += ' &middot; ' + escHtml(LOCAL_DATA.ap_ssid);
+  rows.push('<div class="dash-daemon-row"><span class="voice-dot ' + apDot + '"></span>' +
+    '<span class="dash-daemon-name">AP</span>' +
+    '<span class="dash-daemon-val">' + apVal + '</span></div>');
+
+  // USB Tether
+  var usbDot = n.usb_tether ? 'on' : 'off';
+  var usbVal = n.usb_tether ? 'Connected (' + escHtml(n.usb_iface || 'usb0') + ')' : 'None';
+  rows.push('<div class="dash-daemon-row"><span class="voice-dot ' + usbDot + '"></span>' +
+    '<span class="dash-daemon-name">USB</span>' +
+    '<span class="dash-daemon-val">' + usbVal + '</span></div>');
+
+  // NTP
+  if (n.ntp) {
+    rows.push('<div class="dash-daemon-row"><span class="voice-dot on"></span>' +
+      '<span class="dash-daemon-name">NTP</span>' +
+      '<span class="dash-daemon-val">Serving</span></div>');
+  }
+
+  wrap.innerHTML = '<div class="card"><div class="card-header">NETWORK</div>' + rows.join('') + '</div>';
 }
 
 function renderDashDaemons() {

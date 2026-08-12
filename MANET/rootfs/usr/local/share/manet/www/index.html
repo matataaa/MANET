@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="/css/hardware.css">
 <link rel="stylesheet" href="/css/terminal.css">
 <link rel="stylesheet" href="/css/applets.css">
+<link rel="stylesheet" href="/css/fleet.css">
 <link rel="stylesheet" href="/css/notify.css">
 <link rel="stylesheet" href="/css/docs.css">
 <link rel="stylesheet" href="/vendor/xterm.css">
@@ -22,7 +23,7 @@
 <body>
 <div id="app">
   <header id="header">
-    <div class="hdr-brand">
+    <div class="hdr-brand" style="cursor:pointer" onclick="window.location.hash='dashboard'">
       <div class="fer-lockup" title="Frost Technologies" aria-label="Frost Technologies">
         <img class="fer-logo-img" src="/assets/frost-logo.png" alt="Frost Technologies">
       </div>
@@ -43,6 +44,7 @@
           <a href="#perf" class="tab" data-tab="perf">Tools</a>
           <a href="#terminal" class="tab" data-tab="terminal">Terminal</a>
           <a href="#applets" class="tab" data-tab="applets">Applets</a>
+          <a href="#fleet" class="tab" data-tab="fleet">Fleet</a>
           <a href="#docs" class="tab" data-tab="docs">Docs</a>
           <a href="#registry" class="tab" data-tab="registry">Registry</a>
         </div>
@@ -75,6 +77,7 @@
     <section id="tab-services" class="tab-panel"></section>
     <section id="tab-terminal" class="tab-panel"></section>
     <section id="tab-applets" class="tab-panel"></section>
+    <section id="tab-fleet" class="tab-panel"></section>
     <section id="tab-docs" class="tab-panel"></section>
     <section id="tab-registry" class="tab-panel"></section>
   </main>
@@ -94,6 +97,7 @@
 <script src="/js/services.js"></script>
 <script src="/js/mesh.js"></script>
 <script src="/js/applets.js"></script>
+<script src="/js/fleet.js"></script>
 <script src="/js/docs.js"></script>
 <script src="/js/registry.js"></script>
 <script src="/vendor/xterm.min.js"></script>

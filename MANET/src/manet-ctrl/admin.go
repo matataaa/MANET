@@ -57,10 +57,39 @@ func broadcastConfigPackage(pkg map[string]interface{}) bool {
 	return err == nil
 }
 
+func loadFleetPreferences() FleetPreferences {
+	var prefs FleetPreferences
+	data, err := os.ReadFile(FleetPrefsFile)
+	if err == nil {
+		json.Unmarshal(data, &prefs)
+	}
+	if prefs.Profiles == nil || len(prefs.Profiles) == 0 {
+		prefs.Profiles = map[string]FleetProfile{
+			"default": {Name: "Default", Config: map[string]string{}},
+		}
+	}
+	if prefs.NodeProfiles == nil {
+		prefs.NodeProfiles = map[string]string{}
+	}
+	if prefs.MeshConfig == nil {
+		prefs.MeshConfig = map[string]string{}
+	}
+	return prefs
+}
+
+func saveFleetPreferences(prefs FleetPreferences) error {
+	data, err := json.Marshal(prefs)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(FleetPrefsFile, data, 0644)
+}
+
 func assembleAdminStatus() AdminStatus {
 	conf := loadKVFile(MeshConfFile)
 	registry := parseRegistry()
 	pending := getPendingConfig()
+	prefs := loadFleetPreferences()
 
 	currentConfig := map[string]string{
 		"node_hostname":     conf["node_hostname"],
@@ -92,6 +121,12 @@ func assembleAdminStatus() AdminStatus {
 		}
 	}
 
+	myMAC := getMyMAC()
+	localAck := ""
+	if b, err := os.ReadFile(AckVersionFile); err == nil {
+		localAck = strings.TrimSpace(string(b))
+	}
+
 	var adminNodes []AdminNode
 	activeCount := 0
 	for _, rn := range registry {
@@ -99,12 +134,23 @@ func assembleAdminStatus() AdminStatus {
 		if state == "ACTIVE" {
 			activeCount++
 		}
+		mac := normMAC(rn["MAC_ADDRESS"])
+		profile := prefs.NodeProfiles[mac]
+		if profile == "" {
+			profile = "default"
+		}
+		ack := rn["CONFIG_ACK_VERSION"]
+		if mac == myMAC && localAck != "" {
+			ack = localAck
+		}
 		adminNodes = append(adminNodes, AdminNode{
 			Hostname:  rn["HOSTNAME"],
 			IP:        rn["IPV4_ADDRESS"],
-			Ack:       rn["CONFIG_ACK_VERSION"],
+			MAC:       rn["MAC_ADDRESS"],
+			Ack:       ack,
 			LastSeen:  rn["LAST_SEEN_TIMESTAMP"],
 			NodeState: state,
+			Profile:   profile,
 		})
 	}
 
@@ -115,6 +161,7 @@ func assembleAdminStatus() AdminStatus {
 		TotalNodes:    len(registry),
 		ActiveNodes:   activeCount,
 		MyHostname:    getMyHostname(),
+		Preferences:   prefs,
 	}
 }
 

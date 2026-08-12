@@ -720,7 +720,7 @@ func refreshMeshDNS() {
 	exec.Command("systemctl", "restart", "mesh-manager").Run()
 }
 
-func appletHostRedirect(next http.Handler) http.Handler {
+func appletHostRedirect(next http.Handler, webRoot string) http.Handler {
 	var mu sync.Mutex
 	var dnsMap map[string]string
 	var lastLoad time.Time
@@ -728,7 +728,7 @@ func appletHostRedirect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := strings.Split(r.Host, ":")[0]
 
-		if strings.HasSuffix(host, ".mesh") && r.URL.Path == "/" {
+		if strings.HasSuffix(host, ".mesh") {
 			mu.Lock()
 			if dnsMap == nil || time.Since(lastLoad) > 30*time.Second {
 				dnsMap = appletDNSMap()
@@ -737,9 +737,15 @@ func appletHostRedirect(next http.Handler) http.Handler {
 			applet := dnsMap[host]
 			mu.Unlock()
 
-			if applet != "" {
-				http.Redirect(w, r, "/applets/"+applet+"/frontend/", http.StatusFound)
-				return
+			if applet != "" && r.URL.Path == "/" {
+				data, err := os.ReadFile(filepath.Join(webRoot, "index.html"))
+				if err == nil {
+					tag := fmt.Sprintf(`<script>window.__meshApplet='%s';if(!location.hash)location.hash='#applets/%s'</script>`, applet, applet)
+					html := strings.Replace(string(data), "<head>", "<head>"+tag, 1)
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					w.Write([]byte(html))
+					return
+				}
 			}
 		}
 

@@ -385,6 +385,7 @@ func main() {
 	mux.HandleFunc("/api/admin/status", apiAdminStatus)
 	mux.HandleFunc("/api/daemons", apiDaemons)
 	mux.HandleFunc("/api/atak-package", apiATAKPackage)
+	mux.HandleFunc("/api/mesh-ctrl.apk", apiDownloadAPK)
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
 			apiServiceAction(w, r)
@@ -409,6 +410,7 @@ func main() {
 	mux.HandleFunc("/api/admin/stage", apiAdminStage)
 	mux.HandleFunc("/api/admin/activate", apiAdminActivate)
 	mux.HandleFunc("/api/admin/cancel", apiAdminCancel)
+	mux.HandleFunc("/api/admin/preferences", apiFleetPreferences)
 
 	// Perf APIs
 	mux.HandleFunc("/api/iperf/server/start", apiIperfServerStart)
@@ -437,7 +439,7 @@ func main() {
 	// Static files (SPA fallback)
 	mux.HandleFunc("/", serveStatic(*webRoot))
 
-	handler := appletHostRedirect(mux)
+	handler := appletHostRedirect(mux, *webRoot)
 
 	go func() {
 		sig := make(chan os.Signal, 1)

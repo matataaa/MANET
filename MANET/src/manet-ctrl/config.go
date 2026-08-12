@@ -21,6 +21,7 @@ const (
 	GPSStatusFile    = "/run/gps_status.json"
 	BatteryFile      = "/run/battery_status.json"
 	AckVersionFile   = "/var/run/mesh_config_ack_version"
+	FleetPrefsFile   = "/var/run/fleet_preferences.json"
 	NoMeshIfFile     = "/var/lib/no_mesh_if"
 	RefreshMS        = 15000
 	PerfAuthCookie   = "manet_perf_auth"
@@ -67,11 +68,13 @@ type AppletBrief struct {
 }
 
 type Edge struct {
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Type   string `json:"type"`
-	Via    string `json:"via,omitempty"`
-	TQ     *int   `json:"tq"`
+	Source     string   `json:"source"`
+	Target     string   `json:"target"`
+	Type       string   `json:"type"`
+	Via        string   `json:"via,omitempty"`
+	TQ         *int     `json:"tq"`
+	Throughput *float64 `json:"throughput,omitempty"`
+	GWRoute    bool     `json:"gw_route,omitempty"`
 }
 
 type BatteryInfo struct {
@@ -145,6 +148,20 @@ type ThrottleInfo struct {
 	WasSoftTemp    bool   `json:"was_soft_temp_limit"`
 }
 
+type NetworkState struct {
+	Gateway       bool   `json:"gateway"`
+	GatewayIP     string `json:"gateway_ip,omitempty"`
+	DefaultGW     string `json:"default_gw,omitempty"`
+	UpstreamIface string `json:"upstream_iface,omitempty"`
+	EUDMode       string `json:"eud_mode"`
+	EUDActive     bool   `json:"eud_active"`
+	EUDIface      string `json:"eud_iface,omitempty"`
+	APActive      bool   `json:"ap_active"`
+	USBTether     bool   `json:"usb_tether"`
+	USBIface      string `json:"usb_iface,omitempty"`
+	NTP           bool   `json:"ntp"`
+}
+
 type LocalData struct {
 	Hostname   string            `json:"hostname"`
 	IP         string            `json:"ip"`
@@ -159,10 +176,12 @@ type LocalData struct {
 	APSSID     string            `json:"ap_ssid"`
 	MeshSSID   string            `json:"mesh_ssid"`
 	Throttle   *ThrottleInfo     `json:"throttle,omitempty"`
+	Network    *NetworkState     `json:"network,omitempty"`
 }
 
 type BatOriginator struct {
 	TQ       int
+	RawTP    float64
 	Nexthop  string
 	Iface    string
 	LastSeen float64
@@ -217,14 +236,28 @@ type AdminStatus struct {
 	TotalNodes    int               `json:"total_nodes"`
 	ActiveNodes   int               `json:"active_nodes"`
 	MyHostname    string            `json:"my_hostname"`
+	Preferences   FleetPreferences  `json:"preferences"`
 }
 
 type AdminNode struct {
 	Hostname  string `json:"hostname"`
 	IP        string `json:"ip"`
+	MAC       string `json:"mac"`
 	Ack       string `json:"ack"`
 	LastSeen  string `json:"last_seen"`
 	NodeState string `json:"node_state"`
+	Profile   string `json:"profile"`
+}
+
+type FleetProfile struct {
+	Name   string            `json:"name"`
+	Config map[string]string `json:"config"`
+}
+
+type FleetPreferences struct {
+	Profiles     map[string]FleetProfile `json:"profiles"`
+	NodeProfiles map[string]string       `json:"node_profiles"`
+	MeshConfig   map[string]string       `json:"mesh_config"`
 }
 
 // --- Config file utilities ---

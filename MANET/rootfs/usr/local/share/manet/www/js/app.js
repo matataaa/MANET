@@ -10,8 +10,12 @@ let _lastBadgeCounts = {};
 // Tab routing
 function switchTab(tab) {
   if (activeTab === 'voice' && tab !== 'voice' && typeof voiceDeactivate === 'function') voiceDeactivate();
+  if (activeTab === 'hardware' && tab !== 'hardware' && typeof hardwareDeactivate === 'function') hardwareDeactivate();
+  if (activeTab === 'fleet' && tab !== 'fleet' && typeof fleetDeactivate === 'function') fleetDeactivate();
+  var overlay = document.querySelector('.applet-iframe-overlay');
+  if (overlay) overlay.remove();
   activeTab = tab;
-  var moreTabs = ['perf', 'terminal', 'applets', 'docs', 'registry'];
+  var moreTabs = ['perf', 'terminal', 'applets', 'fleet', 'docs', 'registry'];
   document.querySelectorAll('#tab-nav .tab[data-tab]').forEach(el => {
     el.classList.toggle('active', el.dataset.tab === tab);
   });
@@ -34,6 +38,7 @@ function onTabActivated(tab) {
   else if (tab === 'services') servicesActivate();
   else if (tab === 'terminal') terminalActivate();
   else if (tab === 'applets') appletsActivate();
+  else if (tab === 'fleet') fleetActivate();
   else if (tab === 'docs') docsActivate();
   else if (tab === 'registry') registryActivate();
 }
@@ -45,7 +50,7 @@ function routeFromHash() {
   const parts = raw.split('/');
   let tab = parts[0];
   const sub = parts.slice(1).join('/');
-  const valid = ['dashboard', 'mesh', 'nodes', 'config', 'hardware', 'voice', 'perf', 'services', 'terminal', 'applets', 'docs', 'registry'];
+  const valid = ['dashboard', 'mesh', 'nodes', 'config', 'hardware', 'voice', 'perf', 'services', 'terminal', 'applets', 'fleet', 'docs', 'registry'];
   switchTab(valid.includes(tab) ? tab : 'dashboard');
   if (tab === 'applets' && sub && !document.querySelector('.applet-iframe-overlay')) {
     var subParts = sub.split('/');
@@ -75,10 +80,18 @@ document.querySelectorAll('#tab-nav .tab[data-tab]').forEach(el => {
   var menu = document.getElementById('nav-more-menu');
   if (!btn || !menu) return;
   btn.addEventListener('click', function(e) {
+    e.preventDefault();
     e.stopPropagation();
+    var opening = !menu.classList.contains('show');
     menu.classList.toggle('show');
+    if (opening) {
+      var rect = btn.getBoundingClientRect();
+      menu.style.top = (rect.bottom + 4) + 'px';
+    }
   });
-  document.addEventListener('click', function() { menu.classList.remove('show'); });
+  document.addEventListener('click', function(e) {
+    if (!menu.contains(e.target) && e.target !== btn) menu.classList.remove('show');
+  });
 })();
 
 // Data polling
