@@ -76,6 +76,6 @@
 .dl-name { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
 .dl-desc { font-size: 11px; color: var(--muted); margin-bottom: 10px; }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   .measure-form { grid-template-columns: 1fr; }
 }

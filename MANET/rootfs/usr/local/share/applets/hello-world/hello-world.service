@@ -1,0 +1,13 @@
+[Unit]
+Description=Hello World Mesh Applet
+After=network-online.target manet-ctrl.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/share/manet/applets/hello-world/hello-world -port 9820
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

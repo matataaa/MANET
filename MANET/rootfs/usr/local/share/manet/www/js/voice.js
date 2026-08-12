@@ -2,9 +2,11 @@ let voiceInitialized = false;
 let voiceData = null;
 let voiceClient = null;
 let voicePollTimer = null;
+let voiceChannelTimer = null;
 let voiceAudioDevices = { inputs: [], outputs: [] };
 let voiceSelectedInput = '';
 let voiceSelectedOutput = '';
+let voiceChannelData = null;
 
 function voiceActivate() {
   var panel = document.getElementById('tab-voice');
@@ -14,7 +16,9 @@ function voiceActivate() {
   }
   voiceEnumerateDevices();
   voiceFetch();
+  voiceChannelFetch();
   voicePollTimer = setInterval(voiceFetchLive, 1000);
+  voiceChannelTimer = setInterval(voiceChannelPoll, 500);
 }
 
 async function voiceEnumerateDevices() {
@@ -38,6 +42,7 @@ async function voiceEnumerateDevices() {
 
 function voiceDeactivate() {
   if (voicePollTimer) { clearInterval(voicePollTimer); voicePollTimer = null; }
+  if (voiceChannelTimer) { clearInterval(voiceChannelTimer); voiceChannelTimer = null; }
 }
 
 async function voiceFetch() {
@@ -120,6 +125,21 @@ function voiceRender() {
   }
   html += '</div>';
 
+  // --- Channel card (between client and PTT) ---
+  html += '<div class="card voice-channel-card">';
+  html += '<div class="card-header">CHANNELS <span id="voice-ch-info" class="voice-ch-info"></span></div>';
+  html += '<div class="voice-ch-list">';
+  for (var i = 1; i <= 21; i++) {
+    html += '<div class="voice-ch-row" id="voice-ch-row-' + i + '">';
+    html += '<span class="voice-ch-num">' + i + '</span>';
+    html += '<span class="voice-ch-dot" id="voice-ch-dot-' + i + '"></span>';
+    html += '<button class="voice-ch-listen" id="voice-ch-rx-' + i + '" onclick="voiceToggleRxChannel(' + i + ')">Listen</button>';
+    html += '<button class="voice-ch-tx" id="voice-ch-tx-' + i + '" onclick="voiceSetTxChannel(' + i + ')">TX</button>';
+    html += '</div>';
+  }
+  html += '</div>';
+  html += '</div>';
+
   // --- Service + live PTT card ---
   html += '<div class="card voice-status-card">';
   html += '<div class="card-header">HARDWARE PTT</div>';
@@ -171,7 +191,19 @@ function voiceRender() {
   }
   html += '</div>';
 
-  html += '<div class="voice-config-hint">Voice settings in <a href="#config">Config</a> tab</div>';
+  // Volume controls
+  var micVol = d.mic_volume || '80';
+  var spkVol = d.speaker_volume || '80';
+  html += '<div class="voice-vol-section">';
+  html += '<div class="voice-vol-row"><label class="voice-vol-label">Mic</label>';
+  html += '<input type="range" min="0" max="100" class="voice-vol-slider" id="voice-vol-mic" value="' + escHtml(micVol) + '" oninput="voiceVolChanged()">';
+  html += '<span class="voice-vol-val" id="voice-vol-mic-val">' + escHtml(micVol) + '%</span></div>';
+  html += '<div class="voice-vol-row"><label class="voice-vol-label">Speaker</label>';
+  html += '<input type="range" min="0" max="100" class="voice-vol-slider" id="voice-vol-spk" value="' + escHtml(spkVol) + '" oninput="voiceVolChanged()">';
+  html += '<span class="voice-vol-val" id="voice-vol-spk-val">' + escHtml(spkVol) + '%</span></div>';
+  html += '</div>';
+
+  html += '<div class="voice-config-hint">Startup defaults in <a href="#config">Config</a> tab</div>';
   html += '</div>';
 
   html += '</div>';
@@ -434,4 +466,109 @@ function voiceUpdateClientIndicators() {
   if (rxDot) rxDot.className = 'voice-dot ' + (voiceClient.receiving ? 'rx' : 'off');
   if (rxLabel) rxLabel.textContent = voiceClient.receiving ? 'RX Web' : 'RX Web Silent';
   if (pttBtn) pttBtn.classList.toggle('active', voiceClient.transmitting);
+}
+
+// --- Channels ---
+
+async function voiceChannelFetch() {
+  try {
+    var r = await fetch('/api/voice/channels');
+    voiceChannelData = await r.json();
+    voiceChannelUpdateIndicators();
+  } catch(e) {}
+}
+
+async function voiceChannelPoll() {
+  try {
+    var r = await fetch('/api/voice/channels');
+    voiceChannelData = await r.json();
+    voiceChannelUpdateIndicators();
+  } catch(e) {}
+}
+
+function voiceChannelUpdateIndicators() {
+  if (!voiceChannelData || !voiceChannelData.channels) return;
+  var info = document.getElementById('voice-ch-info');
+  if (info) {
+    info.textContent = 'TX: Ch ' + voiceChannelData.tx_channel +
+      ' · RX: ' + (voiceChannelData.rx_channels || []).length;
+  }
+  voiceChannelData.channels.forEach(function(ch) {
+    var rxBtn = document.getElementById('voice-ch-rx-' + ch.channel);
+    var txBtn = document.getElementById('voice-ch-tx-' + ch.channel);
+    var dot = document.getElementById('voice-ch-dot-' + ch.channel);
+    if (rxBtn) {
+      rxBtn.classList.toggle('active', ch.rx);
+    }
+    if (txBtn) {
+      txBtn.classList.toggle('active', ch.tx);
+    }
+    if (dot) {
+      dot.className = 'voice-ch-dot' + (ch.active ? ' ch-active' : '');
+    }
+  });
+}
+
+async function voiceToggleRxChannel(ch) {
+  if (!voiceChannelData) return;
+  var rxList = (voiceChannelData.rx_channels || []).slice();
+  var txCh = voiceChannelData.tx_channel;
+  var idx = rxList.indexOf(ch);
+  if (idx >= 0) {
+    if (ch === txCh) return;
+    rxList.splice(idx, 1);
+  } else {
+    rxList.push(ch);
+  }
+  try {
+    var r = await fetch('/api/voice/channels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rx: rxList })
+    });
+    voiceChannelData = await r.json();
+    voiceChannelUpdateIndicators();
+  } catch(e) {}
+}
+
+async function voiceSetTxChannel(ch) {
+  try {
+    var rxList = (voiceChannelData.rx_channels || []).slice();
+    if (rxList.indexOf(ch) < 0) rxList.push(ch);
+    var r = await fetch('/api/voice/channels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tx: ch, rx: rxList })
+    });
+    voiceChannelData = await r.json();
+    voiceChannelUpdateIndicators();
+  } catch(e) {}
+}
+
+// --- Volume control ---
+
+var voiceVolTimer = null;
+
+function voiceVolChanged() {
+  var micEl = document.getElementById('voice-vol-mic');
+  var spkEl = document.getElementById('voice-vol-spk');
+  var micVal = document.getElementById('voice-vol-mic-val');
+  var spkVal = document.getElementById('voice-vol-spk-val');
+  if (micEl && micVal) micVal.textContent = micEl.value + '%';
+  if (spkEl && spkVal) spkVal.textContent = spkEl.value + '%';
+  if (voiceVolTimer) clearTimeout(voiceVolTimer);
+  voiceVolTimer = setTimeout(voiceVolSend, 300);
+}
+
+async function voiceVolSend() {
+  var micEl = document.getElementById('voice-vol-mic');
+  var spkEl = document.getElementById('voice-vol-spk');
+  if (!micEl || !spkEl) return;
+  try {
+    await fetch('/api/voice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'volume', mic_volume: micEl.value, speaker_volume: spkEl.value })
+    });
+  } catch(e) {}
 }

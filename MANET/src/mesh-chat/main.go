@@ -761,12 +761,25 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	fetchMu.Lock()
+	var activeFetches []map[string]interface{}
+	for _, fp := range fetchProgress {
+		activeFetches = append(activeFetches, map[string]interface{}{
+			"file_id":  fp.FileID,
+			"name":     fp.Name,
+			"total":    fp.Total,
+			"received": fp.Received,
+		})
+	}
+	fetchMu.Unlock()
+
 	mu.Lock()
 	clients[conn] = true
 	init := map[string]interface{}{
-		"hostname": hostname,
-		"peers":    peerList(),
-		"unread":   unreadCount(),
+		"hostname":       hostname,
+		"peers":          peerList(),
+		"unread":         unreadCount(),
+		"active_fetches": activeFetches,
 	}
 	conn.WriteJSON(map[string]interface{}{"event": "init", "data": init})
 	mu.Unlock()

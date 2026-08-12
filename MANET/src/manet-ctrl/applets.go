@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -51,7 +52,12 @@ type appletManifest struct {
 		Page string `json:"page"`
 		File string `json:"file"`
 	} `json:"config"`
-	DNS []appletDNSRecord `json:"dns,omitempty"`
+	DNS   []appletDNSRecord `json:"dns,omitempty"`
+	Hooks struct {
+		Binary     string `json:"binary,omitempty"`
+		PreInstall string `json:"pre_install,omitempty"`
+		PostRemove string `json:"post_remove,omitempty"`
+	} `json:"hooks,omitempty"`
 }
 
 func collectAppletDNS(myIP, myHostname string) []map[string]interface{} {
@@ -441,6 +447,17 @@ func apiAppletUninstall(w http.ResponseWriter, r *http.Request, name string) {
 	svc := m.serviceName()
 	systemctl("stop", svc)
 	systemctl("disable", svc)
+
+	if m.Hooks.PostRemove != "" {
+		appletDir := filepath.Join(appletsDir, name)
+		hookOut, err := runHook(appletDir, m, "post-remove")
+		if err != nil {
+			log.Printf("applet %s post-remove hook error: %v — %s", name, err, hookOut)
+		} else if hookOut != "" {
+			log.Printf("applet %s post-remove: %s", name, hookOut)
+		}
+	}
+
 	os.Remove(filepath.Join(systemdDir, svc))
 	os.RemoveAll(filepath.Join(appletsDir, name))
 	exec.Command("systemctl", "daemon-reload").Run()
@@ -505,6 +522,19 @@ func apiAppletInstall(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(manifest.Name, "/") || strings.Contains(manifest.Name, "..") {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "invalid applet name"})
 		return
+	}
+
+	if manifest.Hooks.PreInstall != "" {
+		hookOut, err := runHook(extractDir, &manifest, "pre-install")
+		if err != nil {
+			msg := "pre-install hook failed"
+			if hookOut != "" {
+				msg = hookOut
+			}
+			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": msg})
+			return
+		}
+		log.Printf("applet %s pre-install: %s", manifest.Name, hookOut)
 	}
 
 	dest := filepath.Join(appletsDir, manifest.Name)
@@ -714,6 +744,23 @@ func copyFile(src, dst string) error {
 		os.Chmod(dst, info.Mode())
 	}
 	return nil
+}
+
+func runHook(dir string, m *appletManifest, action string) (string, error) {
+	hookBin := m.Hooks.Binary
+	if hookBin == "" {
+		hookBin = "applet-hooks"
+	}
+	binPath := filepath.Join(dir, hookBin)
+	if _, err := os.Stat(binPath); err != nil {
+		return "", nil
+	}
+	os.Chmod(binPath, 0755)
+	cmd := exec.Command(binPath, action, m.Name)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "APPLET_DIR="+dir)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
 }
 
 func refreshMeshDNS() {

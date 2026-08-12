@@ -116,6 +116,7 @@ func run(ctx context.Context, cfg Config) error {
 
 	// PTT source
 	pttCh := make(chan bool, 4)
+	vlmCh := make(chan bool, 4)
 	switch cfg.PTTSource {
 	case "always":
 		broadcasting.Store(true)
@@ -127,7 +128,7 @@ func run(ctx context.Context, cfg Config) error {
 		pttState.setConnected(true)
 		log.Printf("PTT: GPIO evdev (key=%s)", cfg.GPIOKey)
 	case "openvlm":
-		go openvlmPTTLoop(ctx, pttCh)
+		go openvlmPTTLoop(ctx, pttCh, vlmCh)
 		log.Println("PTT: OpenVLM HID (GPIO3)")
 	case "vox":
 		log.Println("PTT: VOX (not yet implemented, using always-on)")
@@ -138,17 +139,18 @@ func run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("unknown PTT source: %s", cfg.PTTSource)
 	}
 
-	// Audio device idle management
-	var captureMu sync.Mutex
+	// Audio device management — handles hot-plug of USB audio (VLM)
+	var audioMu sync.Mutex
 	var captureRunning atomic.Bool
-	var playbackMu sync.Mutex
 	var playbackRunning atomic.Bool
+	var malgoCtxPtr *malgo.AllocatedContext
 	var captureDevicePtr *malgo.Device
 	var playbackDevicePtr *malgo.Device
+	var canCapture bool
 
 	ensureCapture := func() {
-		captureMu.Lock()
-		defer captureMu.Unlock()
+		audioMu.Lock()
+		defer audioMu.Unlock()
 		if captureRunning.Load() || captureDevicePtr == nil {
 			return
 		}
@@ -160,8 +162,8 @@ func run(ctx context.Context, cfg Config) error {
 	}
 
 	pauseCapture := func() {
-		captureMu.Lock()
-		defer captureMu.Unlock()
+		audioMu.Lock()
+		defer audioMu.Unlock()
 		if !captureRunning.Load() || captureDevicePtr == nil {
 			return
 		}
@@ -170,8 +172,8 @@ func run(ctx context.Context, cfg Config) error {
 	}
 
 	ensurePlayback := func() {
-		playbackMu.Lock()
-		defer playbackMu.Unlock()
+		audioMu.Lock()
+		defer audioMu.Unlock()
 		if playbackRunning.Load() || playbackDevicePtr == nil {
 			return
 		}
@@ -183,8 +185,8 @@ func run(ctx context.Context, cfg Config) error {
 	}
 
 	pausePlayback := func() {
-		playbackMu.Lock()
-		defer playbackMu.Unlock()
+		audioMu.Lock()
+		defer audioMu.Unlock()
 		if !playbackRunning.Load() || playbackDevicePtr == nil {
 			return
 		}
@@ -225,44 +227,10 @@ func run(ctx context.Context, cfg Config) error {
 	ssrc := uint32(os.Getpid() & 0xFFFFFFFF)
 	var lastRxTime atomic.Int64
 
-	// miniaudio context
-	malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
-	if err != nil {
-		return fmt.Errorf("malgo context: %w", err)
-	}
-	defer malgoCtx.Free()
-	defer malgoCtx.Uninit()
-
 	var wg sync.WaitGroup
 
-	// === TX: capture → channel → encoder goroutine → multicast ===
-	canCapture := false
-	captureCfg := malgo.DefaultDeviceConfig(malgo.Capture)
-	captureCfg.Capture.Format = malgo.FormatS16
-	captureCfg.Capture.Channels = channels
-	captureCfg.SampleRate = sampleRate
-	captureCfg.PeriodSizeInFrames = uint32(frameSize)
-
+	// Capture channel and encoder goroutine (always running, no-ops without device)
 	captureCh := make(chan []int16, 8)
-
-	captureCallbacks := malgo.DeviceCallbacks{
-		Data: func(outputSamples, inputSamples []byte, framecount uint32) {
-			if !broadcasting.Load() {
-				return
-			}
-			nSamples := len(inputSamples) / 2
-			samples := make([]int16, nSamples)
-			for i := 0; i < nSamples; i++ {
-				samples[i] = int16(inputSamples[i*2]) | int16(inputSamples[i*2+1])<<8
-			}
-			select {
-			case captureCh <- samples:
-			default:
-			}
-		},
-	}
-
-	// Encoder goroutine — keeps encoding off the audio callback thread
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -294,42 +262,29 @@ func run(ctx context.Context, cfg Config) error {
 		}
 	}()
 
-	captureDevice, err := malgo.InitDevice(malgoCtx.Context, captureCfg, captureCallbacks)
-	if err != nil {
-		log.Printf("no capture device available — running receive-only: %v", err)
-	} else {
-		captureDevicePtr = captureDevice
-		defer captureDevice.Uninit()
-		alwaysOn := cfg.PTTSource == "always" || cfg.PTTSource == "vox"
-		if alwaysOn {
-			if err := captureDevice.Start(); err != nil {
-				log.Printf("capture start failed — running receive-only: %v", err)
-			} else {
-				canCapture = true
-				captureRunning.Store(true)
-				defer captureDevice.Stop()
-			}
-		} else {
-			canCapture = true
-		}
-	}
-
-	if !canCapture {
-		log.Println("TX disabled (no microphone), RX still active")
-		broadcasting.Store(false)
-	}
-
-	// === RX: multicast → decode → jitter buffer → playback ===
-	playbackCfg := malgo.DefaultDeviceConfig(malgo.Playback)
-	playbackCfg.Playback.Format = malgo.FormatS16
-	playbackCfg.Playback.Channels = channels
-	playbackCfg.SampleRate = sampleRate
-	playbackCfg.PeriodSizeInFrames = uint32(frameSize)
-
-	const jitterFrames = 3 // ~60ms pre-buffer before playback starts
+	// Jitter buffer (shared across playback device lifecycles)
+	const jitterFrames = 3
 	var jbMu sync.Mutex
 	jitterBuf := make([][]int16, 0, 32)
 	var jbPlaying atomic.Bool
+
+	// Callbacks reference captureCh and jitterBuf — safe across device reinit
+	captureCallbacks := malgo.DeviceCallbacks{
+		Data: func(outputSamples, inputSamples []byte, framecount uint32) {
+			if !broadcasting.Load() {
+				return
+			}
+			nSamples := len(inputSamples) / 2
+			samples := make([]int16, nSamples)
+			for i := 0; i < nSamples; i++ {
+				samples[i] = int16(inputSamples[i*2]) | int16(inputSamples[i*2+1])<<8
+			}
+			select {
+			case captureCh <- samples:
+			default:
+			}
+		},
+	}
 
 	playbackCallbacks := malgo.DeviceCallbacks{
 		Data: func(outputSamples, inputSamples []byte, framecount uint32) {
@@ -373,17 +328,141 @@ func run(ctx context.Context, cfg Config) error {
 		},
 	}
 
-	playbackDevice, err := malgo.InitDevice(malgoCtx.Context, playbackCfg, playbackCallbacks)
-	if err != nil {
-		return fmt.Errorf("playback device: %w", err)
-	}
-	playbackDevicePtr = playbackDevice
-	defer playbackDevice.Uninit()
-	defer func() {
-		if playbackRunning.Load() {
-			playbackDevice.Stop()
+	alwaysOn := cfg.PTTSource == "always" || cfg.PTTSource == "vox"
+
+	// initAudioDevices creates capture and playback devices. Non-fatal — service
+	// runs without hardware audio (web clients still work via manet-ctrl relay).
+	initAudioDevices := func() {
+		audioMu.Lock()
+		defer audioMu.Unlock()
+
+		if captureDevicePtr != nil {
+			return
 		}
-	}()
+
+		mctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+		if err != nil {
+			log.Printf("audio: no context available: %v", err)
+			return
+		}
+		malgoCtxPtr = mctx
+
+		capCfg := malgo.DefaultDeviceConfig(malgo.Capture)
+		capCfg.Capture.Format = malgo.FormatS16
+		capCfg.Capture.Channels = channels
+		capCfg.SampleRate = sampleRate
+		capCfg.PeriodSizeInFrames = uint32(frameSize)
+
+		capDev, err := malgo.InitDevice(mctx.Context, capCfg, captureCallbacks)
+		if err != nil {
+			log.Printf("audio: no capture device: %v", err)
+			malgoCtxPtr = nil
+			mctx.Uninit()
+			mctx.Free()
+			return
+		}
+
+		pbCfg := malgo.DefaultDeviceConfig(malgo.Playback)
+		pbCfg.Playback.Format = malgo.FormatS16
+		pbCfg.Playback.Channels = channels
+		pbCfg.SampleRate = sampleRate
+		pbCfg.PeriodSizeInFrames = uint32(frameSize)
+
+		pbDev, err := malgo.InitDevice(mctx.Context, pbCfg, playbackCallbacks)
+		if err != nil {
+			log.Printf("audio: no playback device: %v", err)
+			capDev.Uninit()
+			malgoCtxPtr = nil
+			mctx.Uninit()
+			mctx.Free()
+			return
+		}
+
+		captureDevicePtr = capDev
+		playbackDevicePtr = pbDev
+		canCapture = true
+
+		if alwaysOn {
+			if err := capDev.Start(); err != nil {
+				log.Printf("capture start: %v", err)
+			} else {
+				captureRunning.Store(true)
+			}
+		}
+
+		log.Println("audio: capture and playback devices initialized")
+	}
+
+	teardownAudioDevices := func() {
+		audioMu.Lock()
+		defer audioMu.Unlock()
+
+		if captureDevicePtr == nil && playbackDevicePtr == nil {
+			return
+		}
+
+		if captureRunning.Load() && captureDevicePtr != nil {
+			captureDevicePtr.Stop()
+			captureRunning.Store(false)
+		}
+		if playbackRunning.Load() && playbackDevicePtr != nil {
+			playbackDevicePtr.Stop()
+			playbackRunning.Store(false)
+		}
+
+		if captureDevicePtr != nil {
+			captureDevicePtr.Uninit()
+			captureDevicePtr = nil
+		}
+		if playbackDevicePtr != nil {
+			playbackDevicePtr.Uninit()
+			playbackDevicePtr = nil
+		}
+		if malgoCtxPtr != nil {
+			malgoCtxPtr.Uninit()
+			malgoCtxPtr.Free()
+			malgoCtxPtr = nil
+		}
+		canCapture = false
+		broadcasting.Store(false)
+
+		jbMu.Lock()
+		jitterBuf = jitterBuf[:0]
+		jbPlaying.Store(false)
+		jbMu.Unlock()
+
+		log.Println("audio: devices torn down")
+	}
+
+	// Initial audio attempt (may fail if no USB audio yet)
+	initAudioDevices()
+
+	if !canCapture && !alwaysOn {
+		log.Println("audio: no devices available — waiting for hot-plug")
+	}
+
+	// VLM hot-plug handler: reinit audio when device appears/disappears
+	if cfg.PTTSource == "openvlm" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case connected := <-vlmCh:
+					if connected {
+						time.Sleep(500 * time.Millisecond)
+						initAudioDevices()
+					} else {
+						teardownAudioDevices()
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	defer teardownAudioDevices()
 
 	go func() {
 		<-ctx.Done()
@@ -467,13 +546,12 @@ func run(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-
 // buildRTPPacket creates a minimal RTP packet (version 2, no extensions).
 func buildRTPPacket(seq uint16, ssrc uint32, payload []byte) []byte {
 	// 12-byte RTP header
 	pkt := make([]byte, 12+len(payload))
-	pkt[0] = 0x80       // V=2, P=0, X=0, CC=0
-	pkt[1] = 111        // PT=111 (dynamic, Opus)
+	pkt[0] = 0x80 // V=2, P=0, X=0, CC=0
+	pkt[1] = 111  // PT=111 (dynamic, Opus)
 	pkt[2] = byte(seq >> 8)
 	pkt[3] = byte(seq)
 	// timestamp increments by frameSize each packet

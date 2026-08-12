@@ -144,7 +144,7 @@
   font-family: var(--font); padding: 40px; line-height: 1.8;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   .term-wrap { height: calc(100vh - 140px); border-radius: 8px; }
   .term-cred-input { width: 80px; }
   .term-multi-grid { grid-template-columns: 1fr; }

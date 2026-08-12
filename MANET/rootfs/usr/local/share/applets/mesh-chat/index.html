@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Mesh Chat</title>
+<title>MESHCOM</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--text:#e4e4e7;--muted:#6b7280;--accent:#3b82f6;--good:#22c55e;--warn:#f59e0b;--bad:#ef4444;--unread:#2563eb;--font:-apple-system,system-ui,'Segoe UI',sans-serif}
@@ -121,7 +121,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 <body>
 <div id="header">
   <span class="conn-dot" id="conn-dot"></span>
-  <h1>Mesh Chat</h1>
+  <h1>MESHCOM</h1>
   <span class="peer-count" id="peer-count">0 peers</span>
   <div class="hdr-right">
     <span class="unread-badge" id="unread-badge" style="display:none">0</span>
@@ -314,7 +314,9 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
     inboxEl.querySelectorAll('.msg-act.del:not(.del-all)').forEach(function(btn) {
       btn.addEventListener('click', function(e) {
         e.stopPropagation();
-        deleteMsg(btn.dataset.id);
+        showDialog('Delete this message locally?', function() {
+          deleteMsg(btn.dataset.id);
+        });
       });
     });
     inboxEl.querySelectorAll('.msg-act.del-all').forEach(function(btn) {
@@ -649,6 +651,13 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
           myHostname = evt.data.hostname;
           updatePeers(evt.data.peers);
           updateToDisplay();
+          if (evt.data.active_fetches && evt.data.active_fetches.length > 0) {
+            for (var ai = 0; ai < evt.data.active_fetches.length; ai++) {
+              var af = evt.data.active_fetches[ai];
+              fetchingFiles[af.file_id] = {received: af.received, total: af.total};
+            }
+            renderInbox();
+          }
           return;
         }
         if (evt.event === 'message') {
@@ -664,7 +673,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
             if (m.from !== myHostname && !m.read) {
               try {
                 if (window.parent && window.parent.notify) {
-                  window.parent.notify('Mesh Chat', m.from + ': ' + (m.body || m.type), {type:'info'});
+                  window.parent.notify('MESHCOM', m.from + ': ' + (m.body || m.type), {type:'info'});
                 }
               } catch(ex) {}
             }
@@ -696,6 +705,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
           return;
         }
         if (evt.event === 'file_progress') {
+          var alreadyLocal = allMessages.some(function(m) {
+            return m.file && m.file.id === evt.data.file_id && m.file.local;
+          });
+          if (alreadyLocal) return;
           var isNew = !fetchingFiles[evt.data.file_id];
           fetchingFiles[evt.data.file_id] = {received: evt.data.received, total: evt.data.total};
           delete fileErrors[evt.data.file_id];

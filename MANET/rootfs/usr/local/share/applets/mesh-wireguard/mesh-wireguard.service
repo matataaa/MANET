@@ -1,0 +1,13 @@
+[Unit]
+Description=Mesh WireGuard VPN Applet
+After=network-online.target manet-ctrl.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/share/manet/applets/mesh-wireguard/mesh-wireguard -port 9811
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

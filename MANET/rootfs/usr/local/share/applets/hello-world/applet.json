@@ -1,0 +1,29 @@
+{
+  "name": "hello-world",
+  "label": "Hello World",
+  "version": "1.0.0",
+  "description": "Example applet — demonstrates the applet spec, hooks, and mesh DNS",
+  "author": "Frost Technologies",
+  "type": "go",
+  "backend": {
+    "binary": "hello-world",
+    "port": 9820,
+    "args": ["-port", "9820"],
+    "service": "hello-world.service"
+  },
+  "frontend": {
+    "entrypoint": "index.html"
+  },
+  "config": {
+    "page": "",
+    "file": ""
+  },
+  "dns": [
+    {"name": "helloworld.mesh", "scope": "local"}
+  ],
+  "hooks": {
+    "binary": "applet-hooks",
+    "pre_install": "pre-install.sh",
+    "post_remove": "post-remove.sh"
+  }
+}

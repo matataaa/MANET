@@ -116,13 +116,16 @@ function configRenderView(panel, cfg) {
       { label: 'NAT Masquerade', key: 'gateway_nat', yesno: true },
       { label: 'MSS Clamping', key: 'gateway_mss_clamp', yesno: true },
       { label: 'Bandwidth Advertisement', key: 'gateway_bandwidth' },
+      { label: 'DNS Servers', key: 'dns_servers' },
     ]},
     { title: 'Access', fields: [
       { label: 'Admin Key', key: 'admin_password', masked: true },
     ]},
     { title: 'Voice', voice: true, fields: [
       { label: 'PTT Mode', voiceKey: 'ptt_mode' },
-      { label: 'Multicast Address', voiceKey: 'mcast_addr', fallback: '239.69.0.1' },
+      { label: 'TX Channel', voiceKey: 'channel', fmt: function(v) { return 'Ch ' + (v || '1'); } },
+      { label: 'Mic Volume', key: 'voice_mic_volume', fmt: function(v) { return (v || '80') + '%'; } },
+      { label: 'Speaker Volume', key: 'voice_speaker_volume', fmt: function(v) { return (v || '80') + '%'; } },
       { label: 'Port', voiceKey: 'port', fallback: '4370' },
       { label: 'Interface', voiceKey: 'interface', fallback: 'br0' },
     ]},
@@ -150,7 +153,13 @@ function configRenderView(panel, cfg) {
 
   html += '<div id="qos-card" class="card cfg-section"><div class="card-header">QOS PRIORITY</div><div class="loading-msg" style="padding:12px">Loading...</div></div>';
 
-  html += '<div style="padding:4px 0"><button class="cfg-btn cfg-btn-primary" id="cfg-edit-btn">Edit Configuration</button></div>';
+  var hasPending = configData && configData.pending;
+  if (hasPending) {
+    html += '<div class="card cfg-section" style="border-color:var(--warn);background:rgba(245,158,11,.06)">' +
+      '<div style="padding:12px;font-size:12px;color:var(--warn);font-weight:700">Fleet config is staged — activate or cancel it before editing locally</div></div>';
+  }
+  html += '<div style="padding:4px 0"><button class="cfg-btn cfg-btn-primary" id="cfg-edit-btn"' +
+    (hasPending ? ' disabled style="opacity:.5;cursor:not-allowed"' : '') + '>Edit Configuration</button></div>';
   html += '</div>';
   panel.innerHTML = html;
 
@@ -192,11 +201,17 @@ function configRenderEdit(panel, cfg) {
       {v:'',l:'Auto (batman default)'},{v:'2M/2M',l:'2M/2M'},{v:'5M/5M',l:'5M/5M'},{v:'10M/10M',l:'10M/10M'},
       {v:'20M/20M',l:'20M/20M'},{v:'50M/50M',l:'50M/50M'},{v:'100M/100M',l:'100M/100M'}
     ] },
+    { label: 'DNS Servers', key: 'dns_servers', type: 'text', hint: 'Comma-separated (e.g. 8.8.8.8,8.8.4.4)' },
     { section: 'Voice' },
     { label: 'PTT Mode', key: 'voice_ptt_mode', type: 'select', options: [
       {v:'always',l:'Always On'},{v:'gpio',l:'GPIO Button'},{v:'openvlm',l:'OpenVLM HID'},{v:'vox',l:'VOX (auto)'}
     ], voiceKey: 'ptt_mode', fallback: 'always' },
-    { label: 'Multicast Address', key: 'voice_mcast_addr', type: 'text', voiceKey: 'mcast_addr', fallback: '239.69.0.1' },
+    { label: 'TX Channel', key: 'voice_channel', type: 'select', options: (function() {
+      var opts = []; for (var i = 1; i <= 21; i++) opts.push({v: String(i), l: 'Channel ' + i});
+      return opts;
+    })() },
+    { label: 'Mic Volume', key: 'voice_mic_volume', type: 'range', min: 0, max: 100 },
+    { label: 'Speaker Volume', key: 'voice_speaker_volume', type: 'range', min: 0, max: 100 },
     { label: 'Port', key: 'voice_port', type: 'text', voiceKey: 'port', fallback: '4370' },
     { label: 'Interface', key: 'voice_iface', type: 'text', voiceKey: 'interface', fallback: 'br0' },
   ];
@@ -220,6 +235,13 @@ function configRenderEdit(panel, cfg) {
         html += '<option value="' + val + '"' + sel + '>' + label + '</option>';
       });
       html += '</select>';
+    } else if (f.type === 'range') {
+      var rangeVal = curVal || '80';
+      html += '<div class="cfg-range-wrap"><input class="cfg-input cfg-range" type="range"' +
+        ' min="' + (f.min || 0) + '" max="' + (f.max || 100) + '"' +
+        ' id="cfg-f-' + f.key + '" value="' + escHtml(rangeVal) + '"' +
+        ' oninput="document.getElementById(\'cfg-rv-' + f.key + '\').textContent=this.value+\'%\'">' +
+        '<span class="cfg-range-val" id="cfg-rv-' + f.key + '">' + escHtml(rangeVal) + '%</span></div>';
     } else {
       html += '<input class="cfg-input" type="' + f.type + '" id="cfg-f-' + f.key + '" value="' + escHtml(curVal) + '">';
       if (f.preview) html += '<div class="cfg-hostname-preview" id="cfg-hostname-preview"></div>';
@@ -262,19 +284,24 @@ function configRenderEdit(panel, cfg) {
 async function configSave() {
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','mesh_ssid','mesh_key',
     'ipv4_network','regulatory_domain','halow_bw','multicast_mode','battery_monitor','admin_password',
-    'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth'];
+    'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
+    'voice_mic_volume','voice_speaker_volume','voice_channel'];
   const config = {};
   meshFields.forEach(f => {
     const el = document.getElementById('cfg-f-' + f);
     if (el) config[f] = el.value;
   });
 
+  var chVal = (document.getElementById('cfg-f-voice_channel') || {}).value || '1';
+  var chAddr = '239.69.0.' + chVal;
   const voiceCfg = {
     action: 'configure',
     ptt_mode: (document.getElementById('cfg-f-voice_ptt_mode') || {}).value || 'always',
-    mcast_addr: (document.getElementById('cfg-f-voice_mcast_addr') || {}).value || '239.69.0.1',
+    mcast_addr: chAddr,
     port: (document.getElementById('cfg-f-voice_port') || {}).value || '4370',
     interface: (document.getElementById('cfg-f-voice_iface') || {}).value || 'br0',
+    mic_volume: (document.getElementById('cfg-f-voice_mic_volume') || {}).value || '',
+    speaker_volume: (document.getElementById('cfg-f-voice_speaker_volume') || {}).value || '',
   };
 
   var base = configBaseUrl();

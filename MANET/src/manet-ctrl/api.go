@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -195,6 +196,26 @@ func apiVoiceConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if action == "volume" {
+		micVol := jsonStr(body, "mic_volume", "")
+		spkVol := jsonStr(body, "speaker_volume", "")
+		if micVol == "" && spkVol == "" {
+			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "no volume specified"})
+			return
+		}
+		volUpdates := map[string]string{}
+		if micVol != "" {
+			volUpdates["voice_mic_volume"] = micVol
+		}
+		if spkVol != "" {
+			volUpdates["voice_speaker_volume"] = spkVol
+		}
+		saveKVFile(MeshConfFile, volUpdates)
+		applyVoiceVolume(loadKVFile(MeshConfFile))
+		writeJSON(w, 200, map[string]interface{}{"ok": true})
+		return
+	}
+
 	if action != "configure" {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "unknown action"})
 		return
@@ -204,6 +225,8 @@ func apiVoiceConfig(w http.ResponseWriter, r *http.Request) {
 	iface := jsonStr(body, "interface", "br0")
 	addr := jsonStr(body, "mcast_addr", "239.69.0.1")
 	port := jsonStr(body, "port", "4370")
+	micVol := jsonStr(body, "mic_volume", "")
+	spkVol := jsonStr(body, "speaker_volume", "")
 
 	validPTT := map[string]bool{"always": true, "gpio": true, "openvlm": true, "vox": true}
 	if !validPTT[ptt] {
@@ -222,6 +245,19 @@ func apiVoiceConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil || portNum < 1024 || portNum > 65535 {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "invalid port"})
 		return
+	}
+
+	// Save and apply volume if provided
+	if micVol != "" || spkVol != "" {
+		volUpdates := map[string]string{}
+		if micVol != "" {
+			volUpdates["voice_mic_volume"] = micVol
+		}
+		if spkVol != "" {
+			volUpdates["voice_speaker_volume"] = spkVol
+		}
+		saveKVFile(MeshConfFile, volUpdates)
+		applyVoiceVolume(loadKVFile(MeshConfFile))
 	}
 
 	execLine := fmt.Sprintf("/usr/local/bin/mesh-voice -iface %s -addr %s -port %s -ptt %s", iface, addr, port, ptt)
@@ -699,9 +735,17 @@ var saveableKeys = map[string]bool{
 	"battery_monitor": true, "admin_password": true,
 	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
 	"multicast_mode": true,
+	"voice_mic_volume": true, "voice_speaker_volume": true,
+	"voice_channel": true, "voice_rx_channels": true,
+	"voice_ptt_mode": true,
+	"dns_servers": true,
 }
 
 func apiAdminSave(w http.ResponseWriter, r *http.Request) {
+	if getPendingConfig() != nil {
+		writeJSON(w, 409, map[string]interface{}{"ok": false, "error": "Cannot save while fleet config is staged — activate or cancel it first"})
+		return
+	}
 	body := readBody(r)
 	configRaw, ok := body["config"]
 	if !ok {
@@ -776,6 +820,28 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		applied["multicast_applied"] = true
 	}
 
+	// Apply voice volume
+	if updates["voice_mic_volume"] != "" || updates["voice_speaker_volume"] != "" {
+		applyVoiceVolume(conf)
+		applied["voice_volume_applied"] = true
+	}
+
+	// Apply voice PTT mode / channel changes
+	if updates["voice_ptt_mode"] != "" || updates["voice_channel"] != "" {
+		txCh := int(voiceTxCh.Load())
+		if txCh <= 0 {
+			txCh = 1
+		}
+		voiceRestartDaemon(txCh)
+		applied["voice_restarted"] = true
+	}
+
+	// Apply DNS servers
+	if updates["dns_servers"] != "" {
+		applyDNSServers(updates["dns_servers"])
+		applied["dns_applied"] = true
+	}
+
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "saved": saved, "applied": applied})
 }
 
@@ -818,6 +884,7 @@ func apiAdminStage(w http.ResponseWriter, r *http.Request) {
 	savePendingConfig(pkg)
 	os.WriteFile(AckVersionFile, []byte(version), 0644)
 	broadcastConfigPackage(pkg)
+	go fleetMcastSendAck(version)
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "version": version, "dangerous": dangerous})
 }
@@ -867,7 +934,11 @@ func apiAdminActivate(w http.ResponseWriter, r *http.Request) {
 
 func apiAdminCancel(w http.ResponseWriter, r *http.Request) {
 	clearPendingConfig()
-	os.Remove(AckVersionFile)
+	// Keep AckVersionFile so fleetPollAlfred won't re-stage the same version from Alfred
+	// Clear the Alfred slot to stop other nodes from picking it up
+	cmd := exec.Command("alfred", "-s", "70")
+	cmd.Stdin = strings.NewReader("")
+	cmd.Run()
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
 }
 
@@ -1379,6 +1450,60 @@ func applyMulticastMode(mode string) {
 		runCmd(3*time.Second, "batctl", "bat0", "multicast_forceflood", "1")
 		os.WriteFile("/sys/devices/virtual/net/br0/bridge/multicast_snooping", []byte("0"), 0644)
 		os.WriteFile("/sys/devices/virtual/net/br0/bridge/multicast_querier", []byte("0"), 0644)
+	}
+}
+
+func applyDNSServers(csv string) {
+	servers := strings.Split(csv, ",")
+	var lines []string
+	for _, s := range servers {
+		s = strings.TrimSpace(s)
+		if s != "" && net.ParseIP(s) != nil {
+			lines = append(lines, "nameserver "+s)
+		}
+	}
+	if len(lines) == 0 {
+		lines = []string{"nameserver 8.8.8.8", "nameserver 8.8.4.4"}
+	}
+	os.WriteFile("/etc/resolv.conf", []byte(strings.Join(lines, "\n")+"\n"), 0644)
+	runCmd(5*time.Second, "systemctl", "restart", "dnsmasq")
+}
+
+func findOpenVLMCard() string {
+	matches, _ := filepath.Glob("/proc/asound/card*/usbid")
+	target := fmt.Sprintf("%04x:%04x", 0x0D8C, 0x0012)
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(strings.ToLower(string(data))) != target {
+			continue
+		}
+		cardDir := filepath.Base(filepath.Dir(path))
+		return strings.TrimPrefix(cardDir, "card")
+	}
+	return ""
+}
+
+func applyVoiceVolume(conf map[string]string) {
+	card := findOpenVLMCard()
+	if card == "" {
+		return
+	}
+	mic := confGet(conf, "voice_mic_volume", "")
+	spk := confGet(conf, "voice_speaker_volume", "")
+	if mic != "" {
+		v, err := strconv.Atoi(mic)
+		if err == nil && v >= 0 && v <= 100 {
+			runCmd(3*time.Second, "amixer", "-c", card, "set", "Mic", fmt.Sprintf("%d%%", v))
+		}
+	}
+	if spk != "" {
+		v, err := strconv.Atoi(spk)
+		if err == nil && v >= 0 && v <= 100 {
+			runCmd(3*time.Second, "amixer", "-c", card, "set", "Speaker", fmt.Sprintf("%d%%", v))
+		}
 	}
 }
 

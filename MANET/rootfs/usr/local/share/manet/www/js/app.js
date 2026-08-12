@@ -28,19 +28,12 @@ function switchTab(tab) {
 }
 
 function onTabActivated(tab) {
-  if (tab === 'dashboard') dashboardActivate();
-  else if (tab === 'mesh') meshActivate();
-  else if (tab === 'nodes') nodesActivate();
-  else if (tab === 'config') configActivate();
-  else if (tab === 'hardware') hardwareActivate();
-  else if (tab === 'voice') voiceActivate();
-  else if (tab === 'perf') perfActivate();
-  else if (tab === 'services') servicesActivate();
-  else if (tab === 'terminal') terminalActivate();
-  else if (tab === 'applets') appletsActivate();
-  else if (tab === 'fleet') fleetActivate();
-  else if (tab === 'docs') docsActivate();
-  else if (tab === 'registry') registryActivate();
+  var fn = window[tab + 'Activate'] || window[tab.charAt(0).toUpperCase() + tab.slice(1) + 'Activate'];
+  if (!fn) {
+    var map = {dashboard:'dashboardActivate',mesh:'meshActivate',nodes:'nodesActivate',config:'configActivate',hardware:'hardwareActivate',voice:'voiceActivate',perf:'perfActivate',services:'servicesActivate',terminal:'terminalActivate',applets:'appletsActivate',fleet:'fleetActivate',docs:'docsActivate',registry:'registryActivate'};
+    fn = window[map[tab]];
+  }
+  if (typeof fn === 'function') fn();
 }
 
 // Hash routing
@@ -80,21 +73,40 @@ document.querySelectorAll('#tab-nav .tab[data-tab]').forEach(el => {
   var menu = document.getElementById('nav-more-menu');
   if (!btn || !menu) return;
   document.body.appendChild(menu);
+
+  function positionMenu() {
+    var rect = btn.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.top = (rect.bottom + 4) + 'px';
+    menu.style.left = '';
+    var right = window.innerWidth - rect.right;
+    if (right < 0) right = 4;
+    menu.style.right = right + 'px';
+  }
+
   btn.addEventListener('click', function(e) {
     e.preventDefault();
     e.stopPropagation();
     var opening = !menu.classList.contains('show');
     menu.classList.toggle('show');
-    if (opening) {
-      var rect = btn.getBoundingClientRect();
-      menu.style.position = 'fixed';
-      menu.style.top = (rect.bottom + 4) + 'px';
-      menu.style.right = (window.innerWidth - rect.right) + 'px';
-      menu.style.left = '';
-    }
+    if (opening) positionMenu();
   });
+
+  menu.addEventListener('click', function(e) {
+    var link = e.target.closest('.tab[data-tab]');
+    if (!link) return;
+    e.preventDefault();
+    e.stopPropagation();
+    menu.classList.remove('show');
+    window.location.hash = link.dataset.tab;
+  });
+
   document.addEventListener('click', function(e) {
     if (!menu.contains(e.target) && !btn.contains(e.target)) menu.classList.remove('show');
+  });
+
+  window.addEventListener('resize', function() {
+    if (menu.classList.contains('show')) positionMenu();
   });
 })();
 

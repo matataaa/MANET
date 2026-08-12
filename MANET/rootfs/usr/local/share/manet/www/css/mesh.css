@@ -86,6 +86,6 @@
 .qos-rule-band:focus { border-color: var(--accent2); outline: none; }
 .qos-disabled { opacity: .4; pointer-events: none; }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   .mesh-grid { grid-template-columns: 1fr; }
 }

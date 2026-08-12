@@ -205,11 +205,59 @@
 }
 
 
-@media (max-width: 768px) {
+/* Fleet status bubble on topology */
+.topo-fleet-bubble {
+  position: absolute; top: 12px; right: 12px; z-index: 15;
+  background: var(--surface); border: 1px solid var(--accent2);
+  border-radius: 10px; padding: 10px 12px;
+  max-width: 240px; min-width: 180px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  font-size: 11px; cursor: pointer;
+  transition: opacity .2s;
+}
+.topo-fleet-bubble::after {
+  content: ''; position: absolute; top: -6px; right: 16px;
+  width: 10px; height: 10px; background: var(--surface);
+  border-left: 1px solid var(--accent2); border-top: 1px solid var(--accent2);
+  transform: rotate(45deg);
+}
+.topo-fleet-title {
+  font-size: 10px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--accent2); margin-bottom: 6px;
+  display: flex; align-items: center; gap: 6px;
+}
+.topo-fleet-title .voice-dot { width: 6px; height: 6px; }
+.topo-fleet-diff {
+  font-size: 10px; color: var(--text); line-height: 1.5;
+}
+.topo-fleet-diff-row {
+  display: flex; justify-content: space-between; gap: 6px;
+  padding: 1px 0; border-bottom: 1px solid var(--border2);
+}
+.topo-fleet-diff-row:last-child { border-bottom: none; }
+.topo-fleet-diff-key { color: var(--muted); font-weight: 600; }
+.topo-fleet-diff-val { color: var(--good); font-weight: 600; }
+.topo-fleet-ack {
+  margin-top: 6px; font-size: 10px; color: var(--muted);
+  display: flex; align-items: center; gap: 6px;
+}
+.topo-fleet-ack-bar {
+  flex: 1; height: 4px; border-radius: 2px; background: var(--border);
+  overflow: hidden;
+}
+.topo-fleet-ack-fill {
+  height: 100%; background: var(--accent2); border-radius: 2px;
+  transition: width .3s;
+}
+
+@media (max-width: 900px) {
   #tab-dashboard.active {
     grid-template-columns: 1fr;
     gap: 10px;
+    height: auto;
+    overflow: visible;
   }
-  #tab-dashboard.active { height: auto; overflow: visible; }
-  .topo-panel { min-height: 300px; }
+  .topo-panel { min-height: 0; height: 280px; }
+  .topo-panel > svg { touch-action: pan-y !important; }
+  .dash-side { overflow-y: visible; }
 }

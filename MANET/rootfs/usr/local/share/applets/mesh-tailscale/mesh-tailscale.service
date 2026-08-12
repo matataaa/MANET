@@ -1,0 +1,13 @@
+[Unit]
+Description=Mesh Tailscale VPN Applet
+After=network-online.target manet-ctrl.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/share/manet/applets/mesh-tailscale/mesh-tailscale -port 9810
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

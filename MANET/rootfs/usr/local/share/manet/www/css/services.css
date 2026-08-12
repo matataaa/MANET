@@ -118,7 +118,7 @@
   font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   .svc-grid { grid-template-columns: 1fr; }
   .daemon-grid { grid-template-columns: 1fr; }
 }

@@ -21,7 +21,7 @@ func makeConfigVersion(config map[string]string) string {
 	for i, k := range keys {
 		parts[i] = fmt.Sprintf(`"%s":"%s"`, k, config[k])
 	}
-	data := "{" + strings.Join(parts, ",") + "}"
+	data := fmt.Sprintf("{%s}@%d", strings.Join(parts, ","), time.Now().UnixNano())
 	h := sha256.Sum256([]byte(data))
 	return fmt.Sprintf("%x", h)[:8]
 }
@@ -108,8 +108,14 @@ func assembleAdminStatus() AdminStatus {
 		"gateway_bandwidth": confGet(conf, "gateway_bandwidth", ""),
 		"halow_bw":          confGet(conf, "halow_bw", ""),
 		"multicast_mode":    confGet(conf, "multicast_mode", "flood"),
-		"lan_ap_channel":    conf["lan_ap_channel"],
-		"lan_ap_bw":         confGet(conf, "lan_ap_bw", "20"),
+		"lan_ap_channel":      conf["lan_ap_channel"],
+		"lan_ap_bw":           confGet(conf, "lan_ap_bw", "20"),
+		"voice_mic_volume":     confGet(conf, "voice_mic_volume", "80"),
+		"voice_speaker_volume": confGet(conf, "voice_speaker_volume", "80"),
+		"voice_channel":        confGet(conf, "voice_channel", "1"),
+		"voice_rx_channels":    confGet(conf, "voice_rx_channels", "1"),
+		"voice_ptt_mode":       confGet(conf, "voice_ptt_mode", "always"),
+		"dns_servers":          confGet(conf, "dns_servers", "8.8.8.8,8.8.4.4"),
 	}
 
 	if currentConfig["halow_bw"] == "" {

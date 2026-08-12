@@ -1,0 +1,26 @@
+{
+  "name": "mesh-wireguard",
+  "label": "WireGuard",
+  "version": "1.0.0",
+  "description": "WireGuard VPN tunnel for secure site-to-site mesh links",
+  "author": "Frost Technologies",
+  "type": "go",
+  "backend": {
+    "binary": "mesh-wireguard",
+    "port": 9811,
+    "args": ["-port", "9811"],
+    "service": "mesh-wireguard.service"
+  },
+  "frontend": {
+    "entrypoint": "index.html"
+  },
+  "config": {
+    "page": "",
+    "file": "/etc/mesh-wireguard.conf"
+  },
+  "hooks": {
+    "binary": "applet-hooks",
+    "pre_install": "pre-install.sh",
+    "post_remove": "post-remove.sh"
+  }
+}

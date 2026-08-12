@@ -17,6 +17,8 @@
 .fleet-btn-danger { background: #dc2626; color: #fff; border-color: #dc2626; }
 .fleet-btn-cancel { background: transparent; color: var(--muted); border-color: var(--border); }
 .fleet-btn:disabled { opacity: .5; cursor: not-allowed; }
+.fleet-btn-go { background: #16a34a; color: #fff; border-color: #16a34a; }
+.fleet-btn-go:hover { background: #15803d; }
 
 .fleet-confirm-bar {
   background: var(--surface); border: 2px solid var(--accent2); border-radius: 10px;

@@ -915,6 +915,12 @@ func getVoiceStatus() VoiceStatus {
 		vs.PTTConnected = true
 		vs.PTTDevice = "always"
 	}
+
+	conf := loadKVFile(MeshConfFile)
+	vs.MicVolume = confGet(conf, "voice_mic_volume", "80")
+	vs.SpeakerVolume = confGet(conf, "voice_speaker_volume", "80")
+	vs.Channel = int(voiceTxCh.Load())
+	vs.RxChannels = voiceGetRxChannels()
 	return vs
 }
 

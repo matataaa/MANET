@@ -56,7 +56,7 @@ DOCS_TABS.overview = [
 '<tr><td><strong>Nodes</strong></td><td>Full table of all mesh nodes — hostname, IP, DNS (.mesh), TQ, hops, battery, uptime, last seen. Sortable columns.</td></tr>',
 '<tr><td><strong>Config</strong></td><td>View and edit node configuration. Hostname, SSID, keys, network, regulatory domain, EUD mode, services.</td></tr>',
 '<tr><td><strong>Hardware</strong></td><td>Radio interfaces (driver, channel, TX power, MCS), network interfaces, GPS status/coordinates, system info.</td></tr>',
-'<tr><td><strong>Voice</strong></td><td>Mesh voice (PTT) service status — active/inactive, uptime, multicast address.</td></tr>',
+'<tr><td><strong>Voice</strong></td><td>Multi-channel voice PTT. 21 channels with independent TX/RX selection. Web client (browser mic via WebSocket) and hardware PTT (OpenVLM HID). Per-channel activity indicators. Multicast listeners only run on subscribed RX channels.</td></tr>',
 '<tr><td><strong>Perf</strong></td><td>Performance testing — iperf3 throughput, ping latency, streaming results.</td></tr>',
 '<tr><td><strong>Services</strong></td><td>All systemd services grouped by category. Start/stop/restart controls.</td></tr>',
 '<tr><td><strong>Mesh</strong></td><td>Raw batman-adv data — originators, neighbors, gateways, interface membership.</td></tr>',
@@ -125,6 +125,15 @@ DOCS_TABS.config = [
 '<tr><td><code>max_euds_per_node</code></td><td>integer</td><td>Yes</td><td>Maximum number of EUD clients allowed on this node\'s AP.</td></tr>',
 '</tbody></table>',
 
+'<h4>Gateway</h4>',
+'<table class="docs-table"><thead><tr><th>Key</th><th>Values</th><th>UI</th><th>Description</th></tr></thead><tbody>',
+'<tr><td><code>gateway</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Allow this node to act as a mesh gateway, providing internet access to other nodes.</td></tr>',
+'<tr><td><code>gateway_nat</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Enable NAT masquerade on the upstream interface so mesh traffic can reach the internet.</td></tr>',
+'<tr><td><code>gateway_mss_clamp</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Clamp TCP MSS to prevent fragmentation through the mesh-to-internet path.</td></tr>',
+'<tr><td><code>gateway_bandwidth</code></td><td>string (e.g. <code>10M/10M</code>)</td><td>Yes</td><td>Advertised bandwidth for batman-adv gateway selection. Empty = auto.</td></tr>',
+'<tr><td><code>dns_servers</code></td><td>comma-separated IPs</td><td>Yes</td><td>Upstream DNS servers written to <code>/etc/resolv.conf</code>. Used by dnsmasq for forwarding EUD queries. Default: <code>8.8.8.8,8.8.4.4</code>. Changing this restarts dnsmasq.</td></tr>',
+'</tbody></table>',
+
 '<h4>Services</h4>',
 '<table class="docs-table"><thead><tr><th>Key</th><th>Values</th><th>UI</th><th>Description</th></tr></thead><tbody>',
 '<tr><td><code>battery_monitor</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Enable battery monitoring via Waveshare UPS HAT (E) I2C interface.</td></tr>',
@@ -145,7 +154,8 @@ DOCS_TABS.api = [
 '<tr><td>GET</td><td><code>/api/data</code></td><td>Full mesh topology — all nodes, edges, neighbors, gateways, TQ values</td></tr>',
 '<tr><td>GET</td><td><code>/api/local</code></td><td>This node\'s detailed state — hostname, IP, interfaces, GPS, battery, services</td></tr>',
 '<tr><td>GET</td><td><code>/api/peer/{ip}</code></td><td>Proxy to a peer node\'s <code>/api/local</code></td></tr>',
-'<tr><td>GET</td><td><code>/api/voice</code></td><td>Mesh voice service status</td></tr>',
+'<tr><td>GET</td><td><code>/api/voice</code></td><td>Mesh voice service status — active, uptime, PTT mode, multicast address, TX/RX state</td></tr>',
+'<tr><td>GET</td><td><code>/api/voice/channels</code></td><td>Voice channel state — 21 channels with tx, rx (subscribed), and active (traffic in last 500ms) flags</td></tr>',
 '<tr><td>GET</td><td><code>/api/admin/status</code></td><td>Config state — current config, pending changes, node ACKs</td></tr>',
 '<tr><td>GET</td><td><code>/api/services</code></td><td>All registered services with systemd status, category, and available actions</td></tr>',
 '<tr><td>GET</td><td><code>/api/mesh</code></td><td>Raw batman-adv data (bat0 info, gateways, neighbors, originators)</td></tr>',
@@ -184,10 +194,23 @@ DOCS_TABS.api = [
 '<tr><td>POST</td><td><code>/api/services/{id}</code></td><td><code>{"action":"restart"}</code></td><td>Start, stop, restart, or reload a systemd service by registry ID</td></tr>',
 '</tbody></table>',
 
+'<h3>Voice</h3>',
+'<table class="docs-table"><thead><tr><th>Method</th><th>Endpoint</th><th>Body</th><th>Description</th></tr></thead><tbody>',
+'<tr><td>POST</td><td><code>/api/voice</code></td><td><code>{"action":"start|stop|restart"}</code></td><td>Control the hardware PTT voice service (mesh-voice daemon)</td></tr>',
+'<tr><td>POST</td><td><code>/api/voice/channels</code></td><td><code>{"tx":4,"rx":[1,4,8]}</code></td><td>Set TX channel and/or RX channel list. TX channel is always included in RX. Persisted to mesh.conf. Changing TX restarts the mesh-voice daemon.</td></tr>',
+'</tbody></table>',
+
+'<h3>Downloads</h3>',
+'<table class="docs-table"><thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead><tbody>',
+'<tr><td>GET</td><td><code>/api/mesh-ctrl.apk</code></td><td>Download the Android companion app APK. Returns 404 if not installed on this node.</td></tr>',
+'<tr><td>GET</td><td><code>/api/atak-package</code></td><td>Download ATAK data package (ZIP) pre-configured with this mesh\'s CoT multicast stream (239.2.3.1:6969/udp). Import into ATAK to receive blue-force tracking from mesh nodes.</td></tr>',
+'</tbody></table>',
+
 '<h3>WebSocket</h3>',
 '<table class="docs-table"><thead><tr><th>Endpoint</th><th>Description</th></tr></thead><tbody>',
 '<tr><td><code>/ws/terminal</code></td><td>PTY shell session. Binary frames for terminal I/O. Send 5-byte resize: <code>[0x01, cols_hi, cols_lo, rows_hi, rows_lo]</code>. Query params: <code>target</code>, <code>protocol</code>, <code>user</code>, <code>password</code> for SSH to remote nodes.</td></tr>',
 '<tr><td><code>/ws/logs</code></td><td>Live journalctl stream. Query params: <code>unit</code> (filter to service), <code>lines</code> (initial backlog, default 200).</td></tr>',
+'<tr><td><code>/ws/voice</code></td><td>Browser voice client. Send raw Opus frames as binary; receive RTP packets (12-byte header + Opus payload). Each connection gets a unique SSRC. Loopback is suppressed — you won\'t hear your own audio.</td></tr>',
 '</tbody></table>',
 ].join('\n');
 
@@ -220,8 +243,29 @@ DOCS_TABS.services = [
 '<table class="docs-table"><thead><tr><th>Service</th><th>Unit</th><th>Description</th></tr></thead><tbody>',
 '<tr><td>Mesh Voice</td><td><code>mesh-voice</code></td><td>Push-to-talk voice over multicast RTP. Opus 48kHz/32kbps. Supports OpenVLM HID USB, GPIO evdev, always-on, and VOX PTT modes. Half-duplex with remote-active detection. 60ms jitter buffer for smooth playback.</td></tr>',
 '</tbody></table>',
-'<p><strong>Voice QoS:</strong> Voice packets are marked with DSCP EF (Expedited Forwarding, TOS 0xB8) on the UDP socket. batman-adv preserves this through encapsulation, mapping to WMM Access Category Voice (AC_VO) on the wireless interface — shortest contention window, highest air-time priority.</p>',
+
+'<h4>Multi-Channel Voice</h4>',
+'<p>21 voice channels available (1–21). Each channel maps to a separate multicast group (<code>239.69.0.{ch}:4370</code>). A node has one TX channel and one or more RX channels.</p>',
+'<table class="docs-table"><thead><tr><th>Setting</th><th>mesh.conf key</th><th>Description</th></tr></thead><tbody>',
+'<tr><td>TX Channel</td><td><code>voice_channel</code></td><td>Channel to transmit on. Default: 1. Changing TX restarts the mesh-voice daemon.</td></tr>',
+'<tr><td>RX Channels</td><td><code>voice_rx_channels</code></td><td>Comma-separated list of channels to receive. TX channel is always included. Multicast UDP listeners only run on subscribed channels.</td></tr>',
+'<tr><td>Mic Volume</td><td><code>voice_mic_volume</code></td><td>Microphone input volume (0–100). Default: 80.</td></tr>',
+'<tr><td>Speaker Volume</td><td><code>voice_speaker_volume</code></td><td>Speaker output volume (0–100). Default: 80.</td></tr>',
+'</tbody></table>',
+'<p>The Voice tab shows all 21 channels with <strong>Listen</strong> (RX subscribe, solid green when active) and <strong>TX</strong> (transmit channel select, hollow red when active) buttons. A blue activity dot pulses when traffic is detected on a subscribed channel within the last 500ms.</p>',
+
+'<h4>Web Voice Client</h4>',
+'<p>The Voice tab includes a browser-based voice client that connects your device mic to the mesh voice channel via WebSocket (<code>/ws/voice</code>). Requires HTTPS for microphone access. Uses the WebCodecs API (AudioEncoder/AudioDecoder) for Opus encoding at 48kHz mono, 32kbps. Push-to-talk only — hold the PTT button to transmit.</p>',
+
+'<h4>Voice QoS</h4>',
+'<p>Voice packets are marked with DSCP EF (Expedited Forwarding, TOS 0xB8) on the UDP socket. batman-adv preserves this through encapsulation, mapping to WMM Access Category Voice (AC_VO) on the wireless interface — shortest contention window, highest air-time priority.</p>',
 '<p>Additionally, <code>mesh-manager</code> configures a <code>tc prio</code> qdisc on <code>br0</code> at startup that puts DSCP EF traffic and voice multicast (port 4370) in band 0 (highest priority). Bulk data goes to band 2. This ensures voice packets are dequeued before other traffic under load.</p>',
+
+'<h4>Android App (APK)</h4>',
+'<p>The MANET Mesh Ctrl companion app for Android is available for download from any node at <code>/api/mesh-ctrl.apk</code>. An EUD connected to a node\'s WiFi can browse to <code>http://&lt;node-ip&gt;/api/mesh-ctrl.apk</code> to install it. The APK is pre-installed at <code>/usr/local/share/manet/mesh-ctrl.apk</code> on nodes that include it in their image.</p>',
+
+'<h4>ATAK Integration</h4>',
+'<p>Download the ATAK data package from <code>/api/atak-package</code> and import it into ATAK. The package pre-configures the CoT multicast stream (<code>239.2.3.1:6969/udp</code>) so ATAK receives blue-force tracking from mesh nodes running <code>cot-emitter</code>. Each node broadcasts its GPS position as Cursor on Target XML.</p>',
 
 '<h3>Applications & Applets</h3>',
 '<table class="docs-table"><thead><tr><th>Service</th><th>Unit</th><th>Description</th></tr></thead><tbody>',

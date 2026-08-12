@@ -100,7 +100,8 @@ const (
 )
 
 // openvlmPTTLoop handles USB hot-plug: retries on disconnect, reports connection state.
-func openvlmPTTLoop(ctx context.Context, ch chan<- bool) {
+// devCh signals audio device availability: true=connected, false=disconnected.
+func openvlmPTTLoop(ctx context.Context, ch chan<- bool, devCh chan<- bool) {
 	if err := hid.Init(); err != nil {
 		log.Printf("OpenVLM PTT: hid init failed: %v", err)
 		return
@@ -126,12 +127,20 @@ func openvlmPTTLoop(ctx context.Context, ch chan<- bool) {
 		log.Printf("OpenVLM PTT: connected (VID=0x%04X PID=0x%04X)", openvlmVID, openvlmPID)
 		pttState.setConnected(true)
 		detectALSACard()
+		select {
+		case devCh <- true:
+		default:
+		}
 
 		openvlmReadLoop(ctx, dev, ch)
 
 		dev.Close()
 		pttState.setConnected(false)
 		ch <- false
+		select {
+		case devCh <- false:
+		default:
+		}
 		log.Println("OpenVLM PTT: disconnected, waiting for reconnect...")
 	}
 }

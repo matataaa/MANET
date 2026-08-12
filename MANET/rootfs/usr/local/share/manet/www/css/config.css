@@ -36,6 +36,9 @@
   font-size: 12px; padding: 5px 8px;
 }
 .cfg-input:focus { outline: none; border-color: var(--accent2); }
+.cfg-range-wrap { flex: 1; display: flex; align-items: center; gap: 10px; }
+.cfg-range { flex: 1; accent-color: var(--accent2); cursor: pointer; }
+.cfg-range-val { font-size: 12px; font-weight: 600; color: var(--text); min-width: 36px; text-align: right; }
 .cfg-hostname-preview {
   font-size: 10px; color: var(--teal); padding: 3px 0 0; font-weight: 700;
 }
@@ -73,6 +76,6 @@
 .ack-dot-yes { background: var(--good); }
 .ack-dot-no  { background: var(--muted); }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   .config-layout { grid-template-columns: 1fr; }
 }

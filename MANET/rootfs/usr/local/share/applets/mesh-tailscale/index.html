@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tailscale</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--text:#e4e4e7;--muted:#6b7280;--accent:#3b82f6;--good:#22c55e;--warn:#f59e0b;--bad:#ef4444;--font:-apple-system,system-ui,'Segoe UI',sans-serif}
+body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+.header{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;background:var(--surface);flex-shrink:0}
+.header h1{font-size:14px;font-weight:700}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--bad)}
+.status-dot.on{background:var(--good);box-shadow:0 0 8px rgba(34,197,94,.4)}
+.status-text{font-size:11px;color:var(--muted)}
+.hdr-actions{margin-left:auto;display:flex;gap:6px}
+
+.btn{border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:6px;padding:6px 14px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font)}
+.btn:hover{border-color:var(--accent)}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-primary:hover{opacity:.9}
+.btn-danger{background:transparent;color:var(--bad);border-color:rgba(239,68,68,.3)}
+.btn-danger:hover{background:rgba(239,68,68,.08)}
+.btn:disabled{opacity:.4;cursor:default}
+
+.tabs{display:flex;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
+.tab{padding:8px 16px;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-color:var(--accent)}
+
+.panels{flex:1;overflow-y:auto}
+.panel{display:none;padding:16px}
+.panel.active{display:block}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px}
+.card-title{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:10px}
+
+.field{margin-bottom:10px}
+.field label{display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:.3px}
+.field input,.field select{width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;font-family:var(--font)}
+.field input:focus{outline:none;border-color:var(--accent)}
+.field-row{display:flex;gap:10px}
+.field-row .field{flex:1}
+.field-hint{font-size:10px;color:var(--muted);margin-top:2px}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:6px 0}
+.toggle-label{font-size:12px;font-weight:600}
+.toggle{position:relative;width:36px;height:20px}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;inset:0;background:var(--border);border-radius:10px;cursor:pointer;transition:.2s}
+.toggle-slider::before{content:'';position:absolute;height:14px;width:14px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s}
+.toggle input:checked+.toggle-slider{background:var(--accent)}
+.toggle input:checked+.toggle-slider::before{transform:translateX(16px)}
+
+.peer-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px}
+.peer-row:last-child{border-bottom:none}
+.peer-name{font-weight:600;min-width:120px}
+.peer-ip{color:var(--muted);font-family:'SF Mono','Fira Code',monospace;font-size:11px;min-width:120px}
+.peer-os{color:var(--muted);font-size:11px}
+.peer-status{margin-left:auto;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px}
+.peer-online{background:rgba(34,197,94,.1);color:var(--good)}
+.peer-offline{background:rgba(107,114,128,.1);color:var(--muted)}
+
+.info-row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px}
+.info-row:last-child{border-bottom:none}
+.info-key{color:var(--muted);font-weight:600}
+.info-val{font-family:'SF Mono','Fira Code',monospace;font-size:11px}
+
+.empty{text-align:center;padding:40px;color:var(--muted);font-size:13px}
+.error-msg{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--bad);margin-bottom:12px}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 16px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,.4);z-index:100;display:none}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="status-dot" id="statusDot"></div>
+  <h1>Tailscale</h1>
+  <span class="status-text" id="statusText">checking...</span>
+  <div class="hdr-actions">
+    <button class="btn btn-primary" id="btnUp" onclick="tsUp()">Connect</button>
+    <button class="btn btn-danger" id="btnDown" onclick="tsDown()" style="display:none">Disconnect</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="status" onclick="switchTab('status')">Status</div>
+  <div class="tab" data-tab="peers" onclick="switchTab('peers')">Peers</div>
+  <div class="tab" data-tab="config" onclick="switchTab('config')">Config</div>
+</div>
+
+<div class="panels">
+  <div class="panel active" id="panel-status">
+    <div id="statusError"></div>
+    <div class="card">
+      <div class="card-title">Connection</div>
+      <div id="statusInfo"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-peers">
+    <div class="card">
+      <div class="card-title">Tailscale Peers</div>
+      <div id="peersList"><div class="empty">No peers</div></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-config">
+    <div class="card">
+      <div class="card-title">Tailscale Configuration</div>
+      <div class="field">
+        <label>Auth Key</label>
+        <input type="password" id="cfgAuthKey" placeholder="tskey-auth-...">
+        <div class="field-hint">Pre-auth key from Tailscale admin console</div>
+      </div>
+      <div class="field">
+        <label>Hostname</label>
+        <input type="text" id="cfgHostname" placeholder="mesh-node-1">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Exit Node</label>
+          <input type="text" id="cfgExitNode" placeholder="100.x.x.x or hostname">
+          <div class="field-hint">Route all traffic through this peer</div>
+        </div>
+        <div class="field">
+          <label>Advertise Routes</label>
+          <input type="text" id="cfgRoutes" placeholder="10.0.0.0/24,192.168.1.0/24">
+          <div class="field-hint">Subnet routes to share</div>
+        </div>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label">Accept DNS</span>
+        <label class="toggle"><input type="checkbox" id="cfgAcceptDNS"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="field" style="margin-top:10px">
+        <label>Extra Flags</label>
+        <input type="text" id="cfgExtraFlags" placeholder="--accept-routes --snat-subnet-routes=false">
+      </div>
+      <div style="margin-top:14px;display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="saveConfig()">Save</button>
+        <button class="btn" onclick="loadConfig()">Reset</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var PROXY = '/api/applets/mesh-tailscale/proxy';
+var pollTimer;
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(function(t) { t.classList.toggle('active', t.dataset.tab === name); });
+  document.querySelectorAll('.panel').forEach(function(p) { p.classList.toggle('active', p.id === 'panel-' + name); });
+  if (name === 'config') loadConfig();
+  if (name === 'peers') loadPeers();
+}
+
+function toast(msg) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(function() { el.style.display = 'none'; }, 3000);
+}
+
+function poll() {
+  fetch(PROXY + '/status').then(function(r) { return r.json(); }).then(function(data) {
+    var dot = document.getElementById('statusDot');
+    var text = document.getElementById('statusText');
+    var btnUp = document.getElementById('btnUp');
+    var btnDown = document.getElementById('btnDown');
+    var errEl = document.getElementById('statusError');
+
+    var backendState = (data.BackendState || '').toLowerCase();
+    var running = backendState === 'running';
+
+    dot.className = 'status-dot' + (running ? ' on' : '');
+    text.textContent = data.BackendState || (data.running === false ? 'Stopped' : 'Unknown');
+    btnUp.style.display = running ? 'none' : '';
+    btnDown.style.display = running ? '' : 'none';
+
+    if (data.error && !running) {
+      errEl.innerHTML = '<div class="error-msg">' + escHtml(data.error) + '</div>';
+    } else {
+      errEl.innerHTML = '';
+    }
+
+    var info = document.getElementById('statusInfo');
+    if (data.Self) {
+      var self = data.Self;
+      var rows = '';
+      rows += infoRow('Hostname', self.HostName || '-');
+      rows += infoRow('Tailscale IP', (self.TailscaleIPs || []).join(', ') || '-');
+      rows += infoRow('State', data.BackendState || '-');
+      rows += infoRow('Version', data.Version || '-');
+      if (data.MagicDNSSuffix) rows += infoRow('DNS Suffix', data.MagicDNSSuffix);
+      if (data.CertDomains && data.CertDomains.length) rows += infoRow('Cert Domains', data.CertDomains.join(', '));
+      info.innerHTML = rows;
+    } else {
+      info.innerHTML = '<div class="empty">' + (running ? 'Connecting...' : 'Not connected') + '</div>';
+    }
+
+    if (data.Peer) updatePeersFromStatus(data.Peer);
+  }).catch(function() {
+    document.getElementById('statusDot').className = 'status-dot';
+    document.getElementById('statusText').textContent = 'Backend unreachable';
+  });
+}
+
+function infoRow(k, v) {
+  return '<div class="info-row"><span class="info-key">' + escHtml(k) + '</span><span class="info-val">' + escHtml(v) + '</span></div>';
+}
+
+function updatePeersFromStatus(peerMap) {
+  var el = document.getElementById('peersList');
+  var keys = Object.keys(peerMap);
+  if (!keys.length) { el.innerHTML = '<div class="empty">No peers connected</div>'; return; }
+  var html = '';
+  keys.forEach(function(k) {
+    var p = peerMap[k];
+    var online = p.Online;
+    var ips = (p.TailscaleIPs || []).join(', ');
+    html += '<div class="peer-row">';
+    html += '<span class="peer-name">' + escHtml(p.HostName || k) + '</span>';
+    html += '<span class="peer-ip">' + escHtml(ips || '-') + '</span>';
+    html += '<span class="peer-os">' + escHtml(p.OS || '') + '</span>';
+    html += '<span class="peer-status ' + (online ? 'peer-online' : 'peer-offline') + '">' + (online ? 'online' : 'offline') + '</span>';
+    html += '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function loadPeers() {
+  fetch(PROXY + '/peers').then(function(r) { return r.json(); }).then(function(data) {
+    var el = document.getElementById('peersList');
+    if (!data.peers || !data.peers.length) { el.innerHTML = '<div class="empty">No peers</div>'; return; }
+    var html = '';
+    data.peers.forEach(function(p) {
+      var ips = (p.TailscaleIPs || []).join(', ');
+      html += '<div class="peer-row">';
+      html += '<span class="peer-name">' + escHtml(p.HostName || p.PublicKey || '-') + '</span>';
+      html += '<span class="peer-ip">' + escHtml(ips || '-') + '</span>';
+      html += '<span class="peer-os">' + escHtml(p.OS || '') + '</span>';
+      html += '<span class="peer-status ' + (p.Online ? 'peer-online' : 'peer-offline') + '">' + (p.Online ? 'online' : 'offline') + '</span>';
+      html += '</div>';
+    });
+    el.innerHTML = html;
+  });
+}
+
+function loadConfig() {
+  fetch(PROXY + '/config').then(function(r) { return r.json(); }).then(function(c) {
+    document.getElementById('cfgAuthKey').value = c.auth_key || '';
+    document.getElementById('cfgHostname').value = c.hostname || '';
+    document.getElementById('cfgExitNode').value = c.exit_node || '';
+    document.getElementById('cfgRoutes').value = c.advertise_routes || '';
+    document.getElementById('cfgAcceptDNS').checked = !!c.accept_dns;
+    document.getElementById('cfgExtraFlags').value = c.extra_flags || '';
+  });
+}
+
+function saveConfig() {
+  var body = {
+    auth_key: document.getElementById('cfgAuthKey').value,
+    hostname: document.getElementById('cfgHostname').value,
+    exit_node: document.getElementById('cfgExitNode').value,
+    advertise_routes: document.getElementById('cfgRoutes').value,
+    accept_dns: document.getElementById('cfgAcceptDNS').checked,
+    extra_flags: document.getElementById('cfgExtraFlags').value
+  };
+  fetch(PROXY + '/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
+    .then(function(r) { return r.json(); })
+    .then(function(d) { toast(d.ok ? 'Config saved' : 'Error: ' + d.error); });
+}
+
+function tsUp() {
+  document.getElementById('btnUp').disabled = true;
+  fetch(PROXY + '/up', {method:'POST'}).then(function(r) { return r.json(); }).then(function(d) {
+    document.getElementById('btnUp').disabled = false;
+    if (d.ok) { toast('Connected'); poll(); } else { toast('Error: ' + (d.error || 'unknown')); }
+  }).catch(function() { document.getElementById('btnUp').disabled = false; });
+}
+
+function tsDown() {
+  fetch(PROXY + '/down', {method:'POST'}).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) { toast('Disconnected'); poll(); } else { toast('Error: ' + (d.error || 'unknown')); }
+  });
+}
+
+function escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+poll();
+pollTimer = setInterval(poll, 5000);
+</script>
+</body>
+</html>

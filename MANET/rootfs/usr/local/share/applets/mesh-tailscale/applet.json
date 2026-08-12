@@ -1,0 +1,26 @@
+{
+  "name": "mesh-tailscale",
+  "label": "Tailscale",
+  "version": "1.0.0",
+  "description": "Tailscale VPN overlay for beyond-line-of-sight mesh connectivity",
+  "author": "Frost Technologies",
+  "type": "go",
+  "backend": {
+    "binary": "mesh-tailscale",
+    "port": 9810,
+    "args": ["-port", "9810"],
+    "service": "mesh-tailscale.service"
+  },
+  "frontend": {
+    "entrypoint": "index.html"
+  },
+  "config": {
+    "page": "",
+    "file": "/etc/mesh-tailscale.conf"
+  },
+  "hooks": {
+    "binary": "applet-hooks",
+    "pre_install": "pre-install.sh",
+    "post_remove": "post-remove.sh"
+  }
+}

@@ -382,6 +382,7 @@ func main() {
 	mux.HandleFunc("/api/local", apiLocal)
 	mux.HandleFunc("/api/peer/", apiPeer)
 	mux.HandleFunc("/api/voice", apiVoice)
+	mux.HandleFunc("/api/voice/channels", apiVoiceChannels)
 	mux.HandleFunc("/api/admin/status", apiAdminStatus)
 	mux.HandleFunc("/api/daemons", apiDaemons)
 	mux.HandleFunc("/api/atak-package", apiATAKPackage)
@@ -438,6 +439,10 @@ func main() {
 
 	// Static files (SPA fallback)
 	mux.HandleFunc("/", serveStatic(*webRoot))
+
+	voiceInitChannels()
+	go fleetConfigWatcher()
+	go fleetMcastListener()
 
 	handler := appletHostRedirect(mux, *webRoot)
 

@@ -8,12 +8,19 @@ const MESH_FIELDS = [
   { key: 'mesh_key', label: 'Mesh Key', dangerous: true, type: 'password' },
   { key: 'ipv4_network', label: 'IPv4 Network', dangerous: true },
   { key: 'halow_bw', label: 'HaLow Bandwidth', type: 'select', options: ['1MHz','2MHz','4MHz','8MHz'] },
-  { key: 'multicast_mode', label: 'Multicast Mode', type: 'select', options: ['flood','filter'] },
+  { key: 'multicast_mode', label: 'Multicast Mode', type: 'select', options: [
+    {v:'flood',l:'Flood (recommended ≤10 nodes)'},{v:'optimized',l:'Optimized IGMP (10+ nodes)'}
+  ] },
   { key: 'regulatory_domain', label: 'Reg Domain' },
+  { key: 'dns_servers', label: 'DNS Servers', hint: 'Comma-separated (e.g. 8.8.8.8,8.8.4.4)' },
   { key: 'admin_password', label: 'Admin Password', type: 'password' },
 ];
 
 const PROFILE_SECTIONS = [
+  { id: 'node', cat: 'Node', fields: [
+    { key: 'node_hostname', label: 'Hostname Prefix', hint: 'Prefix — full: {this}-{ssid}-{mac}' },
+    { key: 'battery_monitor', label: 'Battery Monitor', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
+  ]},
   { id: 'gateway', cat: 'Gateway', fields: [
     { key: 'gateway', label: 'Gateway Enabled', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { key: 'gateway_nat', label: 'NAT Masquerade', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
@@ -34,6 +41,11 @@ const PROFILE_SECTIONS = [
     { key: 'lan_ap_channel', label: 'AP Channel' },
     { key: 'lan_ap_bw', label: 'AP Bandwidth', type: 'select', options: [
       {v:'20',l:'20 MHz'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
+    ] },
+  ]},
+  { id: 'voice', cat: 'Voice', fields: [
+    { key: 'voice_ptt_mode', label: 'PTT Mode', type: 'select', options: [
+      {v:'always',l:'Always On'},{v:'gpio',l:'GPIO Button'},{v:'openvlm',l:'OpenVLM HID'},{v:'vox',l:'VOX (auto)'}
     ] },
   ]},
 ];
@@ -202,12 +214,14 @@ function fleetRenderPending(pkg, status) {
   if (hasDangerous) {
     html += '<div class="fleet-dangerous">Includes mesh SSID, key, or network changes — nodes may lose connectivity</div>';
   }
+  var sensitiveKeys = ['admin_password', 'mesh_key', 'lan_ap_key'];
   if (diffs.length) {
     html += '<div class="fleet-diff">';
     diffs.forEach(function(d) {
+      var masked = sensitiveKeys.indexOf(d.key) !== -1;
       html += '<div class="fleet-diff-row"><span class="fleet-diff-key">' + escHtml(d.key) + '</span>';
-      html += '<span class="fleet-diff-old">' + escHtml(d.old) + '</span>';
-      html += '<span class="fleet-diff-new">' + escHtml(d.new) + '</span></div>';
+      html += '<span class="fleet-diff-old">' + (masked ? '••••••' : escHtml(d.old)) + '</span>';
+      html += '<span class="fleet-diff-new">' + (masked ? '••••••' : escHtml(d.new)) + '</span></div>';
     });
     html += '</div>';
   }
@@ -226,10 +240,12 @@ function fleetRenderPending(pkg, status) {
 
   html += '<div class="fleet-actions">';
   if (!activateAt) {
-    html += '<button class="fleet-btn fleet-btn-primary" id="fleet-activate-btn">Activate</button>';
+    var allAcked = acked === total && total > 0;
+    html += '<button class="fleet-btn ' + (allAcked ? 'fleet-btn-go' : '') + '" id="fleet-activate-btn"' +
+      (!allAcked ? ' disabled' : '') + '>Activate</button>';
     if (acked < total) html += '<button class="fleet-btn fleet-btn-danger" id="fleet-force-btn">Force Activate</button>';
   }
-  html += '<button class="fleet-btn fleet-btn-cancel" id="fleet-cancel-btn">Cancel</button>';
+  html += '<button class="fleet-btn fleet-btn-danger" id="fleet-cancel-btn">Cancel</button>';
   html += '</div></div>';
   return html;
 }
@@ -319,7 +335,8 @@ function fleetRenderField(f, val, prefix) {
     });
     html += '</select>';
   } else {
-    html += '<input type="text" id="fleet-f-' + prefix + f.key + '" value="' + escHtml(val) + '"' +
+    var inputType = f.type === 'password' ? 'password' : 'text';
+    html += '<input type="' + inputType + '" id="fleet-f-' + prefix + f.key + '" value="' + escHtml(val) + '"' +
       (f.hint ? ' placeholder="' + escHtml(f.hint) + '"' : '') + '>';
   }
   if (f.dangerous) html += '<div class="fleet-field-hint">Changing this may disconnect nodes</div>';
@@ -565,6 +582,18 @@ function fleetCancelConfig() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
+      });
+      // Reset preferences mesh_config back to the running config
+      var curCfg = fleetData ? fleetData.current_config || {} : {};
+      var prefs = (fleetData && fleetData.preferences) ? fleetData.preferences : {};
+      await fetch('/api/admin/preferences', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mesh_config: curCfg,
+          profiles: prefs.profiles || {},
+          node_profiles: prefs.node_profiles || {},
+        }),
       });
       fleetToast('Staged configuration cancelled', 'info');
       fleetEditing = false;
