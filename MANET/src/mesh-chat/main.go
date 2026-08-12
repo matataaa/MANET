@@ -449,6 +449,8 @@ func multicastListener() {
 			handleSyncBeacon(buf[:n])
 		case "text", "file":
 			handleIncomingMessage(buf[:n])
+		case "remote-delete":
+			handleRemoteDeleteMulticast(buf[:n])
 		}
 	}
 }
@@ -1196,6 +1198,127 @@ func handleReadAll(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "marked": count})
 }
 
+// --- Remote delete ---
+
+func applyRemoteDelete(msgID string) string {
+	if deletedSet[msgID] {
+		return ""
+	}
+	var fileID string
+	for _, m := range messages {
+		if m.ID == msgID && m.File != nil {
+			fileID = m.File.ID
+			break
+		}
+	}
+	deletedSet[msgID] = true
+	saveState()
+	wsEvent("deleted", map[string]string{"id": msgID})
+	wsEvent("unread", map[string]int{"count": unreadCount()})
+	return fileID
+}
+
+func sendRemoteDelete(peerIP, msgID string) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	data, _ := json.Marshal(map[string]string{
+		"msg_id": msgID, "from": hostname,
+	})
+	resp, err := client.Post(
+		fmt.Sprintf("http://%s:%d/remote-delete", peerIP, cfg.Port),
+		"application/json", strings.NewReader(string(data)))
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
+func handleDeleteFromAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	var req struct {
+		MsgID string `json:"msg_id"`
+	}
+	if json.NewDecoder(r.Body).Decode(&req) != nil || req.MsgID == "" {
+		http.Error(w, "bad request", 400)
+		return
+	}
+
+	mu.Lock()
+	fileID := applyRemoteDelete(req.MsgID)
+	targets := make(map[string]string)
+	for _, p := range peers {
+		targets[p.Hostname] = p.IP
+	}
+	mu.Unlock()
+
+	if fileID != "" {
+		os.Remove(filepath.Join(filesDir(), fileID))
+	}
+
+	go func() {
+		for _, ip := range targets {
+			sendRemoteDelete(ip, req.MsgID)
+		}
+		data, _ := json.Marshal(map[string]string{
+			"type": "remote-delete", "msg_id": req.MsgID, "from": hostname,
+		})
+		multicastSend(data)
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+func handleRemoteDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+	if err != nil {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	var req struct {
+		MsgID string `json:"msg_id"`
+		From  string `json:"from"`
+	}
+	if json.Unmarshal(body, &req) != nil || req.MsgID == "" {
+		http.Error(w, "bad request", 400)
+		return
+	}
+
+	mu.Lock()
+	fileID := applyRemoteDelete(req.MsgID)
+	mu.Unlock()
+
+	if fileID != "" {
+		os.Remove(filepath.Join(filesDir(), fileID))
+	}
+
+	log.Printf("remote-delete %s by %s", req.MsgID, req.From)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+func handleRemoteDeleteMulticast(data []byte) {
+	var req struct {
+		MsgID string `json:"msg_id"`
+		From  string `json:"from"`
+	}
+	if json.Unmarshal(data, &req) != nil || req.MsgID == "" || req.From == hostname {
+		return
+	}
+	mu.Lock()
+	fileID := applyRemoteDelete(req.MsgID)
+	mu.Unlock()
+	if fileID != "" {
+		os.Remove(filepath.Join(filesDir(), fileID))
+	}
+	log.Printf("remote-delete (mcast) %s by %s", req.MsgID, req.From)
+}
+
 // --- Delivery helper ---
 
 func tryDeliver(msg Message) {
@@ -1340,6 +1463,8 @@ func main() {
 	mux.HandleFunc("/receipt", handleReceipt)
 	mux.HandleFunc("/clear", handleDeleteAll)
 	mux.HandleFunc("/read-all", handleReadAll)
+	mux.HandleFunc("/delete-from-all", handleDeleteFromAll)
+	mux.HandleFunc("/remote-delete", handleRemoteDelete)
 
 	listen := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	log.Printf("mesh-chat v3: host=%s ip=%s listen=%s mcast=%s", hostname, meshIP, listen, cfg.MulticastAddr)

@@ -298,6 +298,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
       html += '<div class="msg-actions">';
       if (isUnread) html += '<button class="msg-act read-btn" data-id="' + esc(m.id) + '">Mark Read</button>';
       html += '<button class="msg-act del" data-id="' + esc(m.id) + '">Delete</button>';
+      html += '<button class="msg-act del del-all" data-id="' + esc(m.id) + '">Delete From All</button>';
       html += '</div>';
 
       html += '</div>';
@@ -310,10 +311,18 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
         markRead(btn.dataset.id);
       });
     });
-    inboxEl.querySelectorAll('.msg-act.del').forEach(function(btn) {
+    inboxEl.querySelectorAll('.msg-act.del:not(.del-all)').forEach(function(btn) {
       btn.addEventListener('click', function(e) {
         e.stopPropagation();
         deleteMsg(btn.dataset.id);
+      });
+    });
+    inboxEl.querySelectorAll('.msg-act.del-all').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        showDialog('Delete this message from all nodes?', function() {
+          deleteFromAll(btn.dataset.id);
+        });
       });
     });
     inboxEl.querySelectorAll('.msg-card').forEach(function(card) {
@@ -439,6 +448,18 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 
   function deleteMsg(id) {
     fetch(PROXY + '/messages/' + id, {method:'DELETE'}).then(function() {
+      allMessages = allMessages.filter(function(m) { return m.id !== id; });
+      renderInbox();
+      updateUnreadBadge();
+    }).catch(function() {});
+  }
+
+  function deleteFromAll(id) {
+    fetch(PROXY + '/delete-from-all', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({msg_id: id})
+    }).then(function() {
       allMessages = allMessages.filter(function(m) { return m.id !== id; });
       renderInbox();
       updateUnreadBadge();
