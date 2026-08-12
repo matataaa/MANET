@@ -24,7 +24,7 @@ import (
 const (
 	voiceChannelCount = 21
 	voiceMcastBase    = "239.69.0."
-	voiceMcastPort    = 4370
+	voiceMcastPortBase = 4370
 	voiceMcastIface   = "br0"
 )
 
@@ -49,61 +49,11 @@ func voiceChannelAddr(ch int) string {
 	return fmt.Sprintf("%s%d", voiceMcastBase, ch)
 }
 
-// voiceListenMulticast binds to the specific multicast group address instead of
-// INADDR_ANY so the kernel only delivers packets for this group to this socket.
-func voiceListenMulticast(channel int) (*net.UDPConn, error) {
-	mcastIP := net.ParseIP(voiceChannelAddr(channel)).To4()
-	if mcastIP == nil {
-		return nil, fmt.Errorf("invalid channel %d", channel)
+func voiceChannelPort(ch int) int {
+	if ch < 1 || ch > voiceChannelCount {
+		ch = 1
 	}
-
-	lc := net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			var opErr error
-			c.Control(func(fd uintptr) {
-				opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
-			})
-			return opErr
-		},
-	}
-
-	pc, err := lc.ListenPacket(context.Background(), "udp4", fmt.Sprintf("%s:%d", mcastIP, voiceMcastPort))
-	if err != nil {
-		return nil, err
-	}
-	conn := pc.(*net.UDPConn)
-
-	iface, _ := net.InterfaceByName(voiceMcastIface)
-	rc, err := conn.SyscallConn()
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-
-	var joinErr error
-	rc.Control(func(fd uintptr) {
-		mreq := &syscall.IPMreq{}
-		copy(mreq.Multiaddr[:], mcastIP)
-		if iface != nil {
-			if addrs, aErr := iface.Addrs(); aErr == nil {
-				for _, a := range addrs {
-					if ipnet, ok := a.(*net.IPNet); ok {
-						if ip4 := ipnet.IP.To4(); ip4 != nil {
-							copy(mreq.Interface[:], ip4)
-							break
-						}
-					}
-				}
-			}
-		}
-		joinErr = syscall.SetsockoptIPMreq(int(fd), syscall.IPPROTO_IP, syscall.IP_ADD_MEMBERSHIP, mreq)
-	})
-	if joinErr != nil {
-		conn.Close()
-		return nil, fmt.Errorf("join group %s: %w", mcastIP, joinErr)
-	}
-
-	return conn, nil
+	return voiceMcastPortBase + ch - 1
 }
 
 func init() {
@@ -199,7 +149,10 @@ func voiceGetRxChannels() []int {
 }
 
 func voiceRxLoop(ctx context.Context, channel int) {
-	rxConn, err := voiceListenMulticast(channel)
+	iface, _ := net.InterfaceByName(voiceMcastIface)
+	mcastIP := net.ParseIP(voiceChannelAddr(channel))
+	port := voiceChannelPort(channel)
+	rxConn, err := net.ListenMulticastUDP("udp4", iface, &net.UDPAddr{IP: mcastIP, Port: port})
 	if err != nil {
 		log.Printf("voice rx ch%d: %v", channel, err)
 		return
@@ -248,7 +201,7 @@ func voiceGetTxConn(ch int) *net.UDPConn {
 	if v, ok := voiceTxPool.Load(ch); ok {
 		return v.(*net.UDPConn)
 	}
-	addr := &net.UDPAddr{IP: net.ParseIP(voiceChannelAddr(ch)), Port: voiceMcastPort}
+	addr := &net.UDPAddr{IP: net.ParseIP(voiceChannelAddr(ch)), Port: voiceChannelPort(ch)}
 	conn, err := net.DialUDP("udp4", nil, addr)
 	if err != nil {
 		log.Printf("voice tx conn ch%d: %v", ch, err)
@@ -435,10 +388,7 @@ func voiceRestartDaemon(txCh int) {
 	if iface == "" {
 		iface = "br0"
 	}
-	port := vs.Port
-	if port == "" {
-		port = "4370"
-	}
+	port := strconv.Itoa(voiceChannelPort(txCh))
 	ptt := vs.PTTMode
 	if ptt == "" {
 		ptt = "always"

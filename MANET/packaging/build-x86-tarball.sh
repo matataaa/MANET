@@ -192,5 +192,6 @@ if command -v xattr >/dev/null 2>&1; then
 fi
 find "$STAGE" -name '._*' -delete 2>/dev/null || true
 
+chmod 755 "$STAGE"
 tar --owner=0 --group=0 --numeric-owner -czf "$OUT" -C "$STAGE" .
 echo "Built x86 tarball: $OUT ($(du -h "$OUT" | cut -f1))"
