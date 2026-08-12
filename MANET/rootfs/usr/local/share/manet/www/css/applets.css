@@ -2,7 +2,7 @@
 .applets-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .applets-header h2 { font-size: 18px; font-weight: 700; }
 .applet-upload-btn {
-  background: var(--accent, #3b82f6); color: #fff; border: none; border-radius: 6px;
+  background: var(--accent2, #00928f); color: #fff; border: none; border-radius: 6px;
   padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
 }
 .applet-upload-btn:hover { filter: brightness(1.1); }

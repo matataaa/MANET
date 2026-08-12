@@ -348,6 +348,7 @@ func apiAppletFrontend(w http.ResponseWriter, r *http.Request, name, subPath str
 		http.Error(w, "forbidden", 403)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 	http.ServeFile(w, r, fp)
 }
 

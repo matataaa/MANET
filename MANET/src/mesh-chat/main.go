@@ -428,6 +428,7 @@ func handlePresence(data []byte) {
 		mu.Lock()
 		wsEvent("peers", peerList())
 		mu.Unlock()
+		go resyncPendingFiles()
 	}
 }
 
@@ -626,6 +627,43 @@ func peerList() []Peer {
 	return list
 }
 
+// --- File resync ---
+
+func pendingFiles() []Message {
+	mu.Lock()
+	defer mu.Unlock()
+	var pending []Message
+	for _, m := range messages {
+		if m.File == nil || m.File.ID == "" || deletedSet[m.ID] {
+			continue
+		}
+		localPath := filepath.Join(filesDir(), m.File.ID)
+		if _, err := os.Stat(localPath); err == nil {
+			continue
+		}
+		fetchMu.Lock()
+		_, fetching := fetchProgress[m.File.ID]
+		fetchMu.Unlock()
+		if fetching {
+			continue
+		}
+		pending = append(pending, m)
+	}
+	return pending
+}
+
+func resyncPendingFiles() {
+	pending := pendingFiles()
+	if len(pending) == 0 {
+		return
+	}
+	log.Printf("resync: %d unsynced files, retrying", len(pending))
+	for _, m := range pending {
+		go autoFetchFile(m)
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 // --- Presence loop ---
 
 func presenceLoop() {
@@ -633,22 +671,28 @@ func presenceLoop() {
 	sendPresence()
 	sendSync()
 
-	tick := time.NewTicker(presenceInterval)
-	for range tick.C {
-		sendPresence()
-		mu.Lock()
-		now := time.Now().Unix()
-		changed := false
-		for h, p := range peers {
-			if now-p.LastSeen > int64(peerTimeout.Seconds()) {
-				delete(peers, h)
-				changed = true
+	presenceTick := time.NewTicker(presenceInterval)
+	resyncTick := time.NewTicker(60 * time.Second)
+	for {
+		select {
+		case <-presenceTick.C:
+			sendPresence()
+			mu.Lock()
+			now := time.Now().Unix()
+			changed := false
+			for h, p := range peers {
+				if now-p.LastSeen > int64(peerTimeout.Seconds()) {
+					delete(peers, h)
+					changed = true
+				}
 			}
+			if changed {
+				wsEvent("peers", peerList())
+			}
+			mu.Unlock()
+		case <-resyncTick.C:
+			resyncPendingFiles()
 		}
-		if changed {
-			wsEvent("peers", peerList())
-		}
-		mu.Unlock()
 	}
 }
 
@@ -998,6 +1042,17 @@ func handleSyncReq(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
+func handleResync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	pending := pendingFiles()
+	go resyncPendingFiles()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "pending": len(pending)})
+}
+
 func handlePeers(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	list := peerList()
@@ -1196,6 +1251,7 @@ func main() {
 	mux.HandleFunc("/files/", handleFiles)
 	mux.HandleFunc("/unread", handleUnread)
 	mux.HandleFunc("/sync", handleSyncReq)
+	mux.HandleFunc("/resync", handleResync)
 	mux.HandleFunc("/peers", handlePeers)
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/config", handleConfig)

@@ -279,6 +279,17 @@ func meshMACLookup() map[string]map[string]string {
 			}
 		}
 	}
+	registryCacheMu.Lock()
+	for mac, cached := range registryCache {
+		if _, ok := lookup[mac]; !ok && cached["HOSTNAME"] != "" && cached["IPV4_ADDRESS"] != "" {
+			lookup[mac] = map[string]string{
+				"hostname":  cached["HOSTNAME"],
+				"ip":        cached["IPV4_ADDRESS"],
+				"last_seen": cached["LAST_SEEN_TIMESTAMP"],
+			}
+		}
+	}
+	registryCacheMu.Unlock()
 	return lookup
 }
 

@@ -22,7 +22,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 
 #main{flex:1;display:flex;flex-direction:column;overflow:hidden}
 
-#compose{padding:10px 16px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
+#compose{padding:10px 16px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0;display:flex;flex-direction:column;gap:8px}
 .compose-row{display:flex;align-items:center;gap:8px}
 .compose-to{display:flex;align-items:center;gap:6px;flex-shrink:0}
 .compose-to label{font-size:11px;font-weight:600;color:var(--muted)}
@@ -35,7 +35,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .to-picker-dd label:hover{background:rgba(255,255,255,.05)}
 .to-picker-dd label input{accent-color:var(--accent)}
 .to-picker-dd .to-sep{border-top:1px solid var(--border);margin:2px 0}
-.compose-input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:13px;font-family:var(--font);outline:none;min-width:0}
+.compose-input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:13px;font-family:var(--font);outline:none;resize:none}
 .compose-input:focus{border-color:var(--accent)}
 .compose-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:4px;line-height:1;flex-shrink:0}
 .compose-btn:hover{color:var(--accent)}
@@ -134,11 +134,11 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
           <div class="to-picker-dd" id="to-dropdown"></div>
         </div>
       </div>
-      <input class="compose-input" id="msg-input" type="text" placeholder="Message all nodes..." autocomplete="off" disabled>
       <input type="file" id="file-input" hidden>
       <button class="compose-btn" id="attach-btn" title="Attach file">&#128206;</button>
       <button class="send-btn" id="send-btn" disabled>Send</button>
     </div>
+    <textarea class="compose-input" id="msg-input" placeholder="Message all nodes..." autocomplete="off" rows="2" disabled></textarea>
   </div>
   <div class="clear-bar">
     <button class="bar-btn" id="read-all-btn">Read All</button>
@@ -500,9 +500,17 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
     overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
     overlay.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') { e.preventDefault(); overlay.remove(); }
-      if (e.key === 'Enter') { e.preventDefault(); overlay.remove(); onConfirm(); }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        overlay.remove();
+        onConfirm();
+        document.addEventListener('keyup', function stop(ev) {
+          if (ev.key === 'Enter') ev.preventDefault();
+          document.removeEventListener('keyup', stop, true);
+        }, true);
+      }
     });
-    cancelBtn.focus();
+    confirmBtn.focus();
   }
 
   function doReadAll() {
@@ -587,10 +595,15 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
     ws = new WebSocket(proto + '//' + location.host + PROXY + '/ws');
 
     ws.onopen = function() {
+      var wasOff = !connDot.classList.contains('on');
       connDot.classList.add('on');
       inputEl.disabled = false;
       sendBtn.disabled = false;
       inputEl.focus();
+      if (wasOff) {
+        loadMessages();
+        fetch(PROXY + '/resync', {method:'POST'}).catch(function(){});
+      }
     };
 
     ws.onmessage = function(e) {
@@ -702,7 +715,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
   // --- Events ---
 
   sendBtn.onclick = sendMessage;
-  inputEl.onkeydown = function(e) { if (e.key === 'Enter') sendMessage(); };
+  inputEl.onkeydown = function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } };
   toBtn.onclick = function(e) {
     e.stopPropagation();
     var open = toDropdown.classList.contains('show');

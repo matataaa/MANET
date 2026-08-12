@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 )
 
 const (
@@ -297,6 +298,38 @@ var registryRE = regexp.MustCompile(`NODE_([A-Fa-f0-9]+)_([A-Z0-9_]+)='([^']*)'`
 
 type RegistryNode map[string]string
 
+var (
+	registryCacheMu sync.Mutex
+	registryCache   = make(map[string]RegistryNode)
+)
+
+func updateRegistryCache(nodes map[string]RegistryNode) {
+	registryCacheMu.Lock()
+	defer registryCacheMu.Unlock()
+	for _, rn := range nodes {
+		if rn["HOSTNAME"] == "" || rn["IPV4_ADDRESS"] == "" {
+			continue
+		}
+		mac := normMAC(rn["MAC_ADDRESS"])
+		if mac != "" {
+			registryCache[mac] = rn
+		}
+		for _, m := range strings.Split(rn["MAC_ADDRESSES"], ",") {
+			m = normMAC(m)
+			if m != "" {
+				registryCache[m] = rn
+			}
+		}
+	}
+}
+
+func getCachedRegistryNode(mac string) (RegistryNode, bool) {
+	registryCacheMu.Lock()
+	defer registryCacheMu.Unlock()
+	rn, ok := registryCache[normMAC(mac)]
+	return rn, ok
+}
+
 func parseRegistry() map[string]RegistryNode {
 	nodes := make(map[string]RegistryNode)
 	data, err := os.ReadFile(RegistryFile)
@@ -310,6 +343,7 @@ func parseRegistry() map[string]RegistryNode {
 		}
 		nodes[id][field] = val
 	}
+	updateRegistryCache(nodes)
 	return nodes
 }
 

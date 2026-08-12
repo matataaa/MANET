@@ -143,6 +143,40 @@ func assembleStatusData() StatusData {
 
 	myIP := stateIP(state)
 
+	// Collect MACs already in registry
+	regMACs := make(map[string]bool)
+	for _, rn := range registry {
+		mac := normMAC(rn["MAC_ADDRESS"])
+		if mac != "" {
+			regMACs[mac] = true
+		}
+		for _, m := range strings.Split(rn["MAC_ADDRESSES"], ",") {
+			m = normMAC(m)
+			if m != "" {
+				regMACs[m] = true
+			}
+		}
+	}
+
+	// For batman-visible MACs not in registry, inject cached data so they
+	// keep their hostname/IP instead of appearing as bare MACs.
+	for mac := range origMap {
+		if regMACs[mac] {
+			continue
+		}
+		if cached, ok := getCachedRegistryNode(mac); ok {
+			registry[cached["id"]] = cached
+		}
+	}
+	for _, nb := range neighbors {
+		if regMACs[nb.MAC] {
+			continue
+		}
+		if cached, ok := getCachedRegistryNode(nb.MAC); ok {
+			registry[cached["id"]] = cached
+		}
+	}
+
 	// Build node list from registry
 	var nodes []Node
 	macToNodeID := make(map[string]string)
@@ -274,53 +308,6 @@ func assembleStatusData() StatusData {
 
 		nodes = append(nodes, node)
 		nodeByID[rn["id"]] = &nodes[len(nodes)-1]
-	}
-
-	// Merge batctl-discovered nodes not already covered by registry
-	knownMACs := make(map[string]bool)
-	knownMACs[myMAC] = true
-	for _, n := range nodes {
-		for _, m := range n.AllMACs {
-			knownMACs[m] = true
-		}
-	}
-	for mac, orig := range origMap {
-		if knownMACs[mac] {
-			continue
-		}
-		knownMACs[mac] = true
-		tq := orig.TQ
-		node := Node{
-			ID:       mac,
-			Hostname: mac,
-			MAC:      mac,
-			TQ:       &tq,
-			IsDirect: neighborMACs[mac],
-			AllMACs:  []string{mac},
-			BestLink: map[string]interface{}{"iface": orig.Iface, "nexthop": orig.Nexthop, "tq": orig.TQ},
-		}
-		macToNodeID[mac] = mac
-		nodes = append(nodes, node)
-		nodeByID[mac] = &nodes[len(nodes)-1]
-	}
-	for _, nb := range neighbors {
-		if knownMACs[nb.MAC] {
-			continue
-		}
-		knownMACs[nb.MAC] = true
-		tq := nb.TQ
-		node := Node{
-			ID:       nb.MAC,
-			Hostname: nb.MAC,
-			MAC:      nb.MAC,
-			TQ:       &tq,
-			IsDirect: true,
-			AllMACs:  []string{nb.MAC},
-			BestLink: make(map[string]interface{}),
-		}
-		macToNodeID[nb.MAC] = nb.MAC
-		nodes = append(nodes, node)
-		nodeByID[nb.MAC] = &nodes[len(nodes)-1]
 	}
 
 	// Inject self if not in registry
