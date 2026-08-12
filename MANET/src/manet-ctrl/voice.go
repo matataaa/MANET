@@ -49,6 +49,63 @@ func voiceChannelAddr(ch int) string {
 	return fmt.Sprintf("%s%d", voiceMcastBase, ch)
 }
 
+// voiceListenMulticast binds to the specific multicast group address instead of
+// INADDR_ANY so the kernel only delivers packets for this group to this socket.
+func voiceListenMulticast(channel int) (*net.UDPConn, error) {
+	mcastIP := net.ParseIP(voiceChannelAddr(channel)).To4()
+	if mcastIP == nil {
+		return nil, fmt.Errorf("invalid channel %d", channel)
+	}
+
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var opErr error
+			c.Control(func(fd uintptr) {
+				opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+			})
+			return opErr
+		},
+	}
+
+	pc, err := lc.ListenPacket(context.Background(), "udp4", fmt.Sprintf("%s:%d", mcastIP, voiceMcastPort))
+	if err != nil {
+		return nil, err
+	}
+	conn := pc.(*net.UDPConn)
+
+	iface, _ := net.InterfaceByName(voiceMcastIface)
+	rc, err := conn.SyscallConn()
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	var joinErr error
+	rc.Control(func(fd uintptr) {
+		mreq := &syscall.IPMreq{}
+		copy(mreq.Multiaddr[:], mcastIP)
+		if iface != nil {
+			if addrs, aErr := iface.Addrs(); aErr == nil {
+				for _, a := range addrs {
+					if ipnet, ok := a.(*net.IPNet); ok {
+						if ip4 := ipnet.IP.To4(); ip4 != nil {
+							copy(mreq.Interface[:], ip4)
+							break
+						}
+					}
+				}
+			}
+		}
+		joinErr = syscall.SetsockoptIPMreq(int(fd), syscall.IPPROTO_IP, syscall.IP_ADD_MEMBERSHIP, mreq)
+	})
+	if joinErr != nil {
+		conn.Close()
+		return nil, fmt.Errorf("join group %s: %w", mcastIP, joinErr)
+	}
+
+	return conn, nil
+}
+
 func init() {
 	var seed [2]byte
 	cryptoRand.Read(seed[:])
@@ -142,9 +199,7 @@ func voiceGetRxChannels() []int {
 }
 
 func voiceRxLoop(ctx context.Context, channel int) {
-	iface, _ := net.InterfaceByName(voiceMcastIface)
-	mcastIP := net.ParseIP(voiceChannelAddr(channel))
-	rxConn, err := net.ListenMulticastUDP("udp4", iface, &net.UDPAddr{IP: mcastIP, Port: voiceMcastPort})
+	rxConn, err := voiceListenMulticast(channel)
 	if err != nil {
 		log.Printf("voice rx ch%d: %v", channel, err)
 		return
@@ -248,14 +303,6 @@ func handleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		if txConn := voiceGetTxConn(ch); txConn != nil {
 			txConn.Write(rtp)
 		}
-
-		voiceClientsMu.RLock()
-		for c := range voiceClients {
-			if c != conn {
-				c.WriteMessage(websocket.BinaryMessage, rtp)
-			}
-		}
-		voiceClientsMu.RUnlock()
 	}
 
 	log.Printf("voice ws disconnected %s", r.RemoteAddr)
@@ -343,7 +390,12 @@ func voiceSetChannels(w http.ResponseWriter, r *http.Request) {
 		rxChans = append(rxChans, txCh)
 	}
 
-	voiceTxCh.Store(int32(txCh))
+	oldTx := int(voiceTxCh.Swap(int32(txCh)))
+	if oldTx != txCh {
+		if v, ok := voiceTxPool.LoadAndDelete(oldTx); ok {
+			v.(*net.UDPConn).Close()
+		}
+	}
 	voiceSetRxChannels(rxChans)
 
 	rxStrs := make([]string, len(rxChans))
