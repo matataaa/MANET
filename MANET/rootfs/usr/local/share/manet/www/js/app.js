@@ -74,11 +74,12 @@ document.querySelectorAll('#tab-nav .tab[data-tab]').forEach(el => {
   });
 });
 
-// More dropdown
+// More dropdown — move menu to body so mobile overflow-x:auto on #tab-nav can't clip it
 (function() {
   var btn = document.getElementById('nav-more-btn');
   var menu = document.getElementById('nav-more-menu');
   if (!btn || !menu) return;
+  document.body.appendChild(menu);
   btn.addEventListener('click', function(e) {
     e.preventDefault();
     e.stopPropagation();
@@ -86,11 +87,14 @@ document.querySelectorAll('#tab-nav .tab[data-tab]').forEach(el => {
     menu.classList.toggle('show');
     if (opening) {
       var rect = btn.getBoundingClientRect();
+      menu.style.position = 'fixed';
       menu.style.top = (rect.bottom + 4) + 'px';
+      menu.style.right = (window.innerWidth - rect.right) + 'px';
+      menu.style.left = '';
     }
   });
   document.addEventListener('click', function(e) {
-    if (!menu.contains(e.target) && e.target !== btn) menu.classList.remove('show');
+    if (!menu.contains(e.target) && !btn.contains(e.target)) menu.classList.remove('show');
   });
 })();
 

@@ -250,7 +250,6 @@ body {
   .hdr-brand { width: 100%; }
   #tab-nav { width: 100%; overflow-x: auto; overflow-y: visible; margin: 0; }
   .nav-more { position: static; }
-  .nav-more-menu { position: fixed; top: auto; right: 10px; margin-top: 0; }
   #tab-nav .tab { padding: 6px 10px; font-size: 11px; }
   #hdr-right { width: 100%; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
   #content { padding: 10px; }
