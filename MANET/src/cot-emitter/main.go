@@ -28,7 +28,6 @@ const (
 	// ATAK. 10s gives a margin of eleven packets instead of three.
 	mcastInterval = 10 * time.Second
 	staleSeconds  = 120
-	unicastPort   = 4349
 	mcastGroup    = "239.2.3.1"
 	mcastPort     = 6969
 	cotType       = "a-f-G-U-C"
@@ -108,6 +107,40 @@ func readMeshConf(key string) string {
 		}
 	}
 	return ""
+}
+
+// eudPort returns the UDP port for unicast CoT delivery to EUDs.
+// Defaults to mcastPort (6969) so ATAK receives it on the same socket as
+// its SA multicast input. Overridable via mesh.conf cot_eud_port.
+func eudPort() int {
+	if v := readMeshConf("cot_eud_port"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p > 0 && p < 65536 {
+			return p
+		}
+	}
+	return mcastPort
+}
+
+// eudInterfaces returns bridge members of br0 that face end-user devices,
+// excluding bat0 (mesh) and the active uplink interface (gateway ethernet).
+func eudInterfaces() []string {
+	entries, err := os.ReadDir("/sys/class/net/br0/brif")
+	if err != nil {
+		return nil
+	}
+	var uplinkIface string
+	if data, err := os.ReadFile("/var/run/upstream_iface"); err == nil {
+		uplinkIface = strings.TrimSpace(string(data))
+	}
+	var eud []string
+	for _, e := range entries {
+		name := e.Name()
+		if name == "bat0" || name == uplinkIface {
+			continue
+		}
+		eud = append(eud, name)
+	}
+	return eud
 }
 
 func getCallsign() string {
@@ -268,6 +301,8 @@ func relayLoop(uid string) {
 	setRelayErr("")
 	log.Printf("Relay listening on %s:%d via %s", mcastGroup, mcastPort, controlIface)
 
+	port := eudPort()
+
 	sender, err := net.ListenPacket("udp4", ":0")
 	if err != nil {
 		setRelayErr("sender socket: " + err.Error())
@@ -275,9 +310,17 @@ func relayLoop(uid string) {
 		return
 	}
 	defer sender.Close()
+	if uc, ok := sender.(*net.UDPConn); ok {
+		if rc, err := uc.SyscallConn(); err == nil {
+			rc.Control(func(fd uintptr) {
+				syscall.SetsockoptString(int(fd), syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, controlIface)
+			})
+		}
+	}
 
 	selfIPs := localIPv4s()
-	lastRefresh := time.Now()
+	var lastRefresh time.Time
+	var lastEUDLog time.Time
 	buf := make([]byte, 8192)
 
 	for {
@@ -289,14 +332,11 @@ func relayLoop(uid string) {
 			continue
 		}
 
-		// Our own addresses change when mesh-manager reassigns a chunk.
 		if time.Since(lastRefresh) > time.Minute {
 			selfIPs = localIPv4s()
 			lastRefresh = time.Now()
 		}
 
-		// Drop our own transmissions — by source address, and by UID in case
-		// the packet arrives via an address we have not learned yet.
 		if selfIPs[src.IP.String()] {
 			continue
 		}
@@ -307,8 +347,17 @@ func relayLoop(uid string) {
 
 		relayReceived.Add(1)
 
+		eudIfs := eudInterfaces()
+		if len(eudIfs) == 0 {
+			if time.Since(lastEUDLog) > 5*time.Minute {
+				log.Printf("relay: no EUD interfaces on br0, skipping forward")
+				lastEUDLog = time.Now()
+			}
+			continue
+		}
+
 		for _, ip := range getEUDIPs() {
-			addr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", ip, unicastPort))
+			addr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", ip, port))
 			if err != nil {
 				continue
 			}
@@ -340,8 +389,13 @@ func main() {
 	if uc, ok := sock.(*net.UDPConn); ok {
 		if rc, err := uc.SyscallConn(); err == nil {
 			rc.Control(func(fd uintptr) {
-				syscall.SetsockoptString(int(fd), syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, "br0")
+				syscall.SetsockoptString(int(fd), syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, controlIface)
 				syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_TOS, 0x20)
+				if iface, err := net.InterfaceByName(controlIface); err == nil {
+					mreq := &syscall.IPMreqn{Ifindex: int32(iface.Index)}
+					syscall.SetsockoptIPMreqn(int(fd), syscall.IPPROTO_IP, syscall.IP_MULTICAST_IF, mreq)
+				}
+				syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_MULTICAST_TTL, 5)
 			})
 		}
 	}
@@ -349,6 +403,8 @@ func main() {
 	mcastAddr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", mcastGroup, mcastPort))
 	var lastMcast time.Time
 	var totalSent int64
+	port := eudPort()
+	log.Printf("EUD unicast port: %d", port)
 
 	for {
 		gps := readGPS()
@@ -370,13 +426,13 @@ func main() {
 		var lastErr string
 
 		for _, ip := range eudIPs {
-			addr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", ip, unicastPort))
+			addr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", ip, port))
 			if err != nil {
 				continue
 			}
 			if _, err := sock.WriteTo(event, addr); err != nil {
 				lastErr = fmt.Sprintf("unicast to %s: %v", ip, err)
-				log.Printf("unicast to %s:%d failed: %v", ip, unicastPort, err)
+				log.Printf("unicast to %s:%d failed: %v", ip, port, err)
 			} else {
 				totalSent++
 			}

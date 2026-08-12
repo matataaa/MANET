@@ -1057,6 +1057,76 @@ func apiPingStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
 }
 
+func apiTracerouteStream(w http.ResponseWriter, r *http.Request) {
+	body := readBody(r)
+	target := jsonStr(body, "target", "")
+
+	if !validateTargetRE.MatchString(target) {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Invalid target"})
+		return
+	}
+
+	killStream("traceroute")
+
+	cmd := exec.Command("bash", "-c",
+		`TARGET="$1"
+MAC=$(ip neigh show dev bat0 "$TARGET" 2>/dev/null | awk '{print $5}' | head -1)
+if [ -n "$MAC" ] && command -v batctl >/dev/null 2>&1; then
+  echo "=== Mesh Route (batctl traceroute $MAC) ==="
+  batctl traceroute "$MAC" 2>&1 || true
+  echo ""
+fi
+if command -v traceroute >/dev/null 2>&1; then
+  echo "=== IP Traceroute ==="
+  traceroute -n -w 3 -m 15 "$TARGET" 2>&1 || true
+else
+  echo "=== IP Route ==="
+  ip route get "$TARGET" 2>&1 || true
+fi`, "--", target)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Start(); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+
+	activeStreamMu.Lock()
+	activeStreams["traceroute"] = cmd
+	activeStreamMu.Unlock()
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(200)
+
+	flusher, _ := w.(http.Flusher)
+	buf := make([]byte, 4096)
+	for {
+		n, err := stdout.Read(buf)
+		if n > 0 {
+			w.Write(buf[:n])
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	cmd.Wait()
+	killStream("traceroute")
+}
+
+func apiTracerouteStop(w http.ResponseWriter, r *http.Request) {
+	killStream("traceroute")
+	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
 // --- Terminal HTTP fallback ---
 
 var blockedCmdRE = regexp.MustCompile(`(?i)\b(rm\s+-rf\s+/|mkfs|dd\s+if=|shutdown|halt|poweroff)\b`)

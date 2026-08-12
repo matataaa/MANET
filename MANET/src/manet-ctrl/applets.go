@@ -612,9 +612,12 @@ func apiAppletsRouter(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 		}
 	case "DELETE":
-		if action == "" {
+		switch action {
+		case "":
 			apiAppletUninstall(w, r, name)
-		} else {
+		case "proxy":
+			apiAppletProxy(w, r, name, sub)
+		default:
 			http.NotFound(w, r)
 		}
 	default:

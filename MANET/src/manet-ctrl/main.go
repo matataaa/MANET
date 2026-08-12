@@ -419,6 +419,8 @@ func main() {
 	mux.HandleFunc("/api/ping/run", apiPingRun)
 	mux.HandleFunc("/api/ping/stream", apiPingStream)
 	mux.HandleFunc("/api/ping/stop", apiPingStop)
+	mux.HandleFunc("/api/traceroute/stream", apiTracerouteStream)
+	mux.HandleFunc("/api/traceroute/stop", apiTracerouteStop)
 
 	// Terminal HTTP fallback
 	mux.HandleFunc("/api/terminal/exec", apiTerminalExec)

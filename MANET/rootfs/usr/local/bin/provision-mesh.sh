@@ -85,8 +85,10 @@ elif [ "rpi5" = "rpi5" ]; then
 			# Expand the partition
 			raspi-config --expand-rootfs
 
-			# Resize the filesystem to fill the new partition
-			resize2fs /dev/mmcblk0p2
+			# Resize the filesystem to fill the new partition.
+			# Derive the device — /dev/mmcblk0p2 is SD/eMMC only and
+			# silently no-ops on NVMe, USB or virtio roots.
+			resize2fs "$(findmnt -no SOURCE / 2>/dev/null)"
 
 			echo "Expansion complete"
 		else
@@ -110,8 +112,10 @@ elif [ "rpi5" = "rpi4" ]; then
 			# Expand the partition
 			raspi-config --expand-rootfs
 
-			# Resize the filesystem to fill the new partition
-			resize2fs /dev/mmcblk0p2
+			# Resize the filesystem to fill the new partition.
+			# Derive the device — /dev/mmcblk0p2 is SD/eMMC only and
+			# silently no-ops on NVMe, USB or virtio roots.
+			resize2fs "$(findmnt -no SOURCE / 2>/dev/null)"
 
 			echo "Expansion complete"
 		else

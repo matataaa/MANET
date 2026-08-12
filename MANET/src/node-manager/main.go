@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -94,20 +95,25 @@ func loadConf(key string) string {
 	return ""
 }
 
+func ifaceExists(name string) bool {
+	_, err := net.InterfaceByName(name)
+	return err == nil
+}
+
 func meshIfaces() (iface24, iface5 string) {
 	data, err := os.ReadFile(meshIfFile)
 	if err != nil {
-		return "wlan0", ""
+		if ifaceExists("wlan0") {
+			return "wlan0", ""
+		}
+		return "", ""
 	}
 	lines := strings.Fields(strings.TrimSpace(string(data)))
-	if len(lines) > 0 {
+	if len(lines) > 0 && ifaceExists(lines[0]) {
 		iface24 = lines[0]
 	}
-	if len(lines) > 1 {
+	if len(lines) > 1 && ifaceExists(lines[1]) {
 		iface5 = lines[1]
-	}
-	if iface24 == "" {
-		iface24 = "wlan0"
 	}
 	return
 }
@@ -183,8 +189,10 @@ func ensureStaticIfaceChannel(iface, confPath, staticFreq, band string) {
 
 func ensureStaticChannels() {
 	iface24, iface5 := meshIfaces()
-	conf24 := "/etc/wpa_supplicant/wpa_supplicant-" + iface24 + ".conf"
-	ensureStaticIfaceChannel(iface24, conf24, staticFreq24, "2.4 GHz")
+	if iface24 != "" {
+		conf24 := "/etc/wpa_supplicant/wpa_supplicant-" + iface24 + ".conf"
+		ensureStaticIfaceChannel(iface24, conf24, staticFreq24, "2.4 GHz")
+	}
 	if iface5 != "" {
 		conf5 := "/etc/wpa_supplicant/wpa_supplicant-" + iface5 + ".conf"
 		ensureStaticIfaceChannel(iface5, conf5, staticFreq5, "5 GHz")

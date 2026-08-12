@@ -5,6 +5,8 @@ var topoZoom = null;
 var topoTooltip = null;
 var topoNodeMap = {};
 var topoInitialized = false;
+var topoStreamAbort = null;
+var topoStreamType = null;
 
 function topoInit(container) {
   container.innerHTML = '';
@@ -257,6 +259,7 @@ function topoUpdate(data) {
   var tooltip = topoTooltip;
   nodeAll
     .on('mouseover', function(event, d) {
+      if (document.querySelector('.topo-node-menu')) return;
       var html = '<div class="tt-host">' + escHtml(d.hostname || d.id) + '</div>';
       if (d.ip) html += '<div class="tt-row"><span class="tt-label">IP</span>' + escHtml(d.ip) + '</div>';
       html += '<div class="tt-row"><span class="tt-label">DNS</span>' + escHtml((d.hostname || '') + '.mesh') + '</div>';
@@ -271,6 +274,7 @@ function topoUpdate(data) {
       tooltip.classList.add('visible');
     })
     .on('mousemove', function(event) {
+      if (document.querySelector('.topo-node-menu')) return;
       var rect = svg.node().parentNode.getBoundingClientRect();
       tooltip.style.left = (event.clientX - rect.left + 14) + 'px';
       tooltip.style.top = (event.clientY - rect.top - 10) + 'px';
@@ -333,24 +337,43 @@ function topoUpdate(data) {
 
 function topoShowNodeMenu(mouseEvent, d) {
   topoDismissMenu();
+  if (topoTooltip) topoTooltip.classList.remove('visible');
   var menu = document.createElement('div');
   menu.className = 'topo-node-menu';
   menu.innerHTML =
     '<div class="topo-menu-title">' + escHtml(d.hostname || d.id) + '</div>' +
     '<button class="topo-menu-btn" data-action="config">Config</button>' +
     '<button class="topo-menu-btn" data-action="shell">Shell</button>' +
-    '<button class="topo-menu-btn" data-action="logs">Logs</button>';
+    '<button class="topo-menu-btn" data-action="logs">Logs</button>' +
+    '<div class="topo-menu-sep"></div>' +
+    '<button class="topo-menu-btn" data-action="ping">Ping</button>' +
+    '<button class="topo-menu-btn" data-action="traceroute">Trace Route</button>';
   var container = topoSvg.node().parentNode;
   var rect = container.getBoundingClientRect();
-  menu.style.left = (mouseEvent.clientX - rect.left + 8) + 'px';
-  menu.style.top = (mouseEvent.clientY - rect.top + 8) + 'px';
+  menu.style.visibility = 'hidden';
   container.appendChild(menu);
+  var mRect = menu.getBoundingClientRect();
+  var x = mouseEvent.clientX - rect.left + 8;
+  var y = mouseEvent.clientY - rect.top + 8;
+  if (mouseEvent.clientY + 8 + mRect.height > rect.bottom) {
+    y = mouseEvent.clientY - rect.top - mRect.height - 8;
+  }
+  if (mouseEvent.clientX + 8 + mRect.width > rect.right) {
+    x = mouseEvent.clientX - rect.left - mRect.width - 8;
+  }
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.style.visibility = '';
   menu.querySelectorAll('.topo-menu-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
       var action = btn.dataset.action;
       topoDismissMenu();
       if (action === 'config') {
         openNodeConfig(d.ip, d.hostname);
+      } else if (action === 'ping') {
+        topoStreamPanel(d.ip, d.hostname, 'ping');
+      } else if (action === 'traceroute') {
+        topoStreamPanel(d.ip, d.hostname, 'traceroute');
       } else {
         openNodeTerminal(d.ip, d.hostname, action === 'logs' ? 'logs' : 'terminal');
       }
@@ -372,7 +395,91 @@ function topoDismissMenu() {
   if (old) old.remove();
 }
 
+function topoStreamPanel(ip, hostname, type) {
+  topoStopStream();
+  var old = document.querySelector('.topo-stream-panel');
+  if (old) old.remove();
+
+  var container = topoSvg.node().parentNode;
+  var title = type === 'ping' ? 'Ping ' + hostname + ' (' + ip + ')' : 'Trace Route to ' + hostname;
+  var panel = document.createElement('div');
+  panel.className = 'topo-stream-panel';
+  panel.innerHTML =
+    '<div class="topo-stream-hdr"><span>' + escHtml(title) + '</span>' +
+    '<div class="topo-stream-btns">' +
+    '<button class="topo-stream-stop">Stop</button>' +
+    '<button class="topo-stream-close">&times;</button>' +
+    '</div></div>' +
+    '<pre class="topo-stream-pre"></pre>';
+  container.appendChild(panel);
+
+  var pre = panel.querySelector('pre');
+  var stopBtn = panel.querySelector('.topo-stream-stop');
+
+  panel.querySelector('.topo-stream-close').onclick = function() {
+    topoStopStream();
+    panel.remove();
+  };
+  stopBtn.onclick = function() { topoStopStream(); };
+
+  var controller = new AbortController();
+  topoStreamAbort = controller;
+  topoStreamType = type;
+
+  var url, body;
+  if (type === 'ping') {
+    url = '/api/ping/stream';
+    body = JSON.stringify({target: ip, count: 10});
+  } else {
+    url = '/api/traceroute/stream';
+    body = JSON.stringify({target: ip});
+  }
+
+  fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: body,
+    signal: controller.signal
+  }).then(function(resp) {
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    function read() {
+      reader.read().then(function(result) {
+        if (result.done) {
+          stopBtn.textContent = 'Done';
+          stopBtn.classList.add('done');
+          return;
+        }
+        pre.textContent += decoder.decode(result.value, {stream: true});
+        pre.scrollTop = pre.scrollHeight;
+        read();
+      }).catch(function() {});
+    }
+    read();
+  }).catch(function(err) {
+    if (err.name !== 'AbortError') {
+      pre.textContent += '\nError: ' + err.message;
+    }
+  });
+}
+
+function topoStopStream() {
+  if (topoStreamAbort) {
+    topoStreamAbort.abort();
+    topoStreamAbort = null;
+  }
+  if (topoStreamType === 'ping') {
+    fetch('/api/ping/stop', {method: 'POST'}).catch(function(){});
+  } else if (topoStreamType === 'traceroute') {
+    fetch('/api/traceroute/stop', {method: 'POST'}).catch(function(){});
+  }
+  topoStreamType = null;
+}
+
 function topoDestroy() {
+  topoStopStream();
+  var panel = document.querySelector('.topo-stream-panel');
+  if (panel) panel.remove();
   if (topoSim) { topoSim.stop(); topoSim = null; }
   topoSvg = null;
   topoTooltip = null;

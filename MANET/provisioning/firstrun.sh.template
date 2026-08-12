@@ -139,13 +139,33 @@ if [ "__HARDWARE_MODEL__" = "rpi5" ] || [ "__HARDWARE_MODEL__" = "rpi4" ]; then
 		echo "Root filesystem is ${USAGE_PERCENT}% full"
 		if [ $USAGE_PERCENT -gt 70 ]; then
 			echo "Filesystem nearly full, expanding partition..."
-			raspi-config --expand-rootfs
-			resize2fs /dev/mmcblk0p2
-			echo "Expansion complete"
+			# Derive the root device instead of assuming /dev/mmcblk0p2 —
+			# that assumption holds for SD/eMMC only and silently does
+			# nothing on NVMe (nvme0n1p2), USB (sda2) or virtio (vda2).
+			ROOT_PART=$(findmnt -no SOURCE / 2>/dev/null)
+			ROOT_DISK=$(lsblk -no pkname "$ROOT_PART" 2>/dev/null | head -1)
+			PART_NUM=$(echo "$ROOT_PART" | grep -oE '[0-9]+$')
+			echo "Root partition: $ROOT_PART (disk $ROOT_DISK, part $PART_NUM)"
+
+			raspi-config --expand-rootfs 2>/dev/null || \
+			  { [ -n "$ROOT_DISK" ] && [ -n "$PART_NUM" ] && \
+			    parted -s "/dev/$ROOT_DISK" resizepart "$PART_NUM" 100%; } || \
+			  echo "WARNING: could not grow the partition"
+			partprobe "/dev/$ROOT_DISK" 2>/dev/null || true
+
+			# Only record success if the filesystem actually grew, so a
+			# failed expansion is retried on the next boot instead of being
+			# masked by the done-marker.
+			if resize2fs "$ROOT_PART"; then
+				echo "Expansion complete: $(df -h / | tail -1 | awk '{print $4}') free"
+				touch /var/lib/expand-root-done
+			else
+				echo "ERROR: resize2fs failed on $ROOT_PART — apt install will likely run out of space"
+			fi
 		else
 			echo "Filesystem has room (${USAGE_PERCENT}%), skipping expansion."
+			touch /var/lib/expand-root-done
 		fi
-		touch /var/lib/expand-root-done
 fi
 
 #

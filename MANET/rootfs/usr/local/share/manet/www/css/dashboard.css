@@ -5,7 +5,9 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+  height: calc(100vh - 80px);
+  overflow: hidden;
 }
 
 /* Topology panel */
@@ -19,7 +21,7 @@
   border-radius: 18px;
   overflow: hidden;
 }
-.topo-panel > svg { width: 100%; min-height: 520px; display: block; }
+.topo-panel > svg { width: 100%; height: 100%; display: block; }
 .topo-loading {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
@@ -56,6 +58,37 @@
   font-weight: 700; font-family: var(--font); cursor: pointer;
 }
 .topo-menu-btn:hover { background: var(--accent2); color: #fff; }
+.topo-menu-sep { border-top: 1px solid var(--border); margin: 4px 0; }
+
+.topo-stream-panel {
+  position: absolute; z-index: 25; bottom: 16px; right: 16px;
+  width: 440px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 12px 30px rgba(2,0,13,.25);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.topo-stream-hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  font-size: 11px; font-weight: 800;
+}
+.topo-stream-btns { display: flex; gap: 6px; align-items: center; }
+.topo-stream-stop {
+  background: var(--bad); color: #fff; border: none; border-radius: 4px;
+  padding: 2px 10px; font-size: 10px; font-weight: 700; cursor: pointer; font-family: var(--font);
+}
+.topo-stream-stop:hover { opacity: .85; }
+.topo-stream-stop.done { background: var(--good); cursor: default; }
+.topo-stream-close {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px;
+}
+.topo-stream-close:hover { color: var(--text); }
+.topo-stream-pre {
+  overflow-y: auto; padding: 8px 12px; margin: 0;
+  font-family: 'SF Mono','Fira Code',monospace; font-size: 11px;
+  line-height: 1.5; color: var(--text); white-space: pre-wrap;
+  word-break: break-all; min-height: 60px; max-height: 280px;
+}
 
 /* Topology header */
 .topo-hdr {
@@ -121,6 +154,7 @@
 .dash-side {
   width: 100%;
   display: flex; flex-direction: column; gap: 12px;
+  overflow-y: auto;
 }
 .node-row {
   padding: 10px 12px; border-bottom: 1px solid var(--border2);
@@ -176,5 +210,6 @@
     grid-template-columns: 1fr;
     gap: 10px;
   }
+  #tab-dashboard.active { height: auto; overflow: visible; }
   .topo-panel { min-height: 300px; }
 }
