@@ -303,6 +303,14 @@ func handleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		if txConn := voiceGetTxConn(ch); txConn != nil {
 			txConn.Write(rtp)
 		}
+
+		voiceClientsMu.RLock()
+		for c := range voiceClients {
+			if c != conn {
+				c.WriteMessage(websocket.BinaryMessage, rtp)
+			}
+		}
+		voiceClientsMu.RUnlock()
 	}
 
 	log.Printf("voice ws disconnected %s", r.RemoteAddr)
