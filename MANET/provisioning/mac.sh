@@ -461,14 +461,19 @@ fi
 WRAPPER_HEAD
     echo "$firstrun_body" | tail -n +2 >> "$boot_mount/firstrun.sh"
 
-    # Copy the tools tarball into the boot partition so firstrun.sh
-    # can use it without downloading from the internet.
-    local tarball_name=""
+    # Build and embed the tools tarball so firstrun.sh doesn't need internet.
+    local tarball_name="" build_script=""
     case "$HARDWARE_MODEL" in
-        cm4|rpi4) tarball_name="cm4-tools.tar.gz" ;;
-        rpi5)     tarball_name="rpi5-tools.tar.gz" ;;
+        cm4|rpi4) tarball_name="cm4-tools.tar.gz"; build_script="build-cm4-tarball.sh" ;;
+        rpi5)     tarball_name="rpi5-tools.tar.gz"; build_script="build-rpi5-tarball.sh" ;;
     esac
     local tarball_path="../install_packages/${tarball_name}"
+    if [ -n "$build_script" ] && [ -f "../packaging/${build_script}" ]; then
+        echo "Rebuilding ${tarball_name}..."
+        mkdir -p ../install_packages
+        (cd ../packaging && bash "$build_script" "$tarball_path")
+        echo "Tarball rebuilt: $(du -h "$tarball_path" | cut -f1)"
+    fi
     if [ -n "$tarball_name" ] && [ -f "$tarball_path" ]; then
         cp "$tarball_path" "$boot_mount/mesh-tools.tar.gz"
         echo "Embedded tools tarball: $tarball_name ($(du -h "$tarball_path" | cut -f1))"

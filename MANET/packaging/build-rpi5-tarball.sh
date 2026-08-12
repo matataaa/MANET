@@ -136,6 +136,7 @@ for unit in \
     mesh-manager.service \
     mesh-registry.service \
     mesh-voice.service \
+    morse-spi-watchdog.service \
     node-manager.service \
     sae-watchdog.service
 do
