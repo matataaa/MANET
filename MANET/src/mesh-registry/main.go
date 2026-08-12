@@ -332,7 +332,11 @@ func getGatewayInfo() (string, string) {
 	for _, line := range strings.Split(string(data), "\n")[1:] {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && fields[1] == "00000000" {
-			return "true", fields[0]
+			iface := fields[0]
+			if iface == "br0" || iface == "bat0" {
+				continue
+			}
+			return "true", iface
 		}
 	}
 	return "false", ""
@@ -451,14 +455,21 @@ func getDirectNeighbors() string {
 	if err != nil {
 		return ""
 	}
-	var macs []string
+	var entries []string
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 3 && strings.Contains(fields[0], ":") {
-			macs = append(macs, fields[0])
+			entry := fields[0]
+			if len(fields) >= 4 {
+				speed := strings.Trim(fields[3], "()")
+				if _, err := strconv.ParseFloat(speed, 64); err == nil {
+					entry += "=" + speed
+				}
+			}
+			entries = append(entries, entry)
 		}
 	}
-	return strings.Join(macs, ",")
+	return strings.Join(entries, ",")
 }
 
 func getTQAverage() string {

@@ -161,5 +161,15 @@ fi
 #  Pack
 # ---------------------------------------------------------------------------
 mkdir -p "$(dirname "$OUT")"
+# macOS: strip extended attributes from the stage and disable AppleDouble
+# generation before packing. Without this, bsdtar emits a ._<name> member for
+# every xattr-carrying file; macOS tar hides them when listing, but GNU tar on
+# the node extracts all of them as real 163-byte junk files.
+export COPYFILE_DISABLE=1
+if command -v xattr >/dev/null 2>&1; then
+    xattr -rc "$STAGE" 2>/dev/null || true
+fi
+find "$STAGE" -name '._*' -delete 2>/dev/null || true
+
 tar --owner=0 --group=0 --numeric-owner -czf "$OUT" -C "$STAGE" .
 echo "Built: $OUT  ($(du -sh "$OUT" | cut -f1))"

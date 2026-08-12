@@ -8,33 +8,65 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
 
 const (
-	gpsStatusPath    = "/run/gps_status.json"
-	meshConfPath     = "/etc/mesh.conf"
-	cotStatusPath    = "/run/cot_emitter_status.json"
-	pollInterval     = 10 * time.Second
-	mcastInterval    = 30 * time.Second
-	staleSeconds     = 120
-	unicastPort      = 4349
-	mcastGroup       = "239.2.3.1"
-	mcastPort        = 6969
-	cotType          = "a-f-G-U-C"
+	gpsStatusPath = "/run/gps_status.json"
+	meshConfPath  = "/etc/mesh.conf"
+	cotStatusPath = "/run/cot_emitter_status.json"
+	pollInterval  = 10 * time.Second
+	// Multicast over 802.11 is broadcast at the lowest basic rate with no
+	// retries, so frames are lost routinely. At the old 30s interval, four
+	// consecutive losses exceeded staleSeconds and the marker vanished from
+	// ATAK. 10s gives a margin of eleven packets instead of three.
+	mcastInterval = 10 * time.Second
+	staleSeconds  = 120
+	unicastPort   = 4349
+	mcastGroup    = "239.2.3.1"
+	mcastPort     = 6969
+	cotType       = "a-f-G-U-C"
+	controlIface  = "br0"
 )
 
 type cotStatus struct {
-	Running       bool   `json:"running"`
-	LastSentUTC   string `json:"last_sent_utc,omitempty"`
-	UnicastCount  int    `json:"unicast_targets"`
-	McastEnabled  bool   `json:"mcast_enabled"`
-	TotalSent     int64  `json:"total_sent"`
-	LastError     string `json:"last_error,omitempty"`
-	Timestamp     int64  `json:"timestamp"`
+	Running        bool   `json:"running"`
+	LastSentUTC    string `json:"last_sent_utc,omitempty"`
+	UnicastCount   int    `json:"unicast_targets"`
+	McastEnabled   bool   `json:"mcast_enabled"`
+	TotalSent      int64  `json:"total_sent"`
+	RelayReceived  int64  `json:"relay_received"`
+	RelayForwarded int64  `json:"relay_forwarded"`
+	RelayError     string `json:"relay_error,omitempty"`
+	LastError      string `json:"last_error,omitempty"`
+	Timestamp      int64  `json:"timestamp"`
+}
+
+// Relay counters — written by the relay goroutine, read by the emit loop when
+// it writes the status file, so only one goroutine ever touches the file.
+var (
+	relayReceived  atomic.Int64
+	relayForwarded atomic.Int64
+	relayErrMu     sync.Mutex
+	relayErr       string
+)
+
+func setRelayErr(s string) {
+	relayErrMu.Lock()
+	relayErr = s
+	relayErrMu.Unlock()
+}
+
+func getRelayErr() string {
+	relayErrMu.Lock()
+	defer relayErrMu.Unlock()
+	return relayErr
 }
 
 func writeCotStatus(s cotStatus) {
@@ -58,6 +90,7 @@ type gpsData struct {
 	Longitude float64 `json:"longitude"`
 	Altitude  float64 `json:"altitude"`
 	HDOP      float64 `json:"hdop"`
+	Timestamp int64   `json:"timestamp"`
 }
 
 func readMeshConf(key string) string {
@@ -90,6 +123,8 @@ func getUID() string {
 	return "MANET-" + h
 }
 
+var lastGPSStale time.Time
+
 func readGPS() *gpsData {
 	data, err := os.ReadFile(gpsStatusPath)
 	if err != nil {
@@ -98,6 +133,22 @@ func readGPS() *gpsData {
 	var gps gpsData
 	if err := json.Unmarshal(data, &gps); err != nil || !gps.HasFix {
 		return nil
+	}
+	if gps.Timestamp > 0 && time.Now().Unix()-gps.Timestamp > 30 {
+		if lastGPSStale.IsZero() {
+			lastGPSStale = time.Now()
+			log.Printf("GPS file stale (%ds old), ignoring", time.Now().Unix()-gps.Timestamp)
+		}
+		if time.Since(lastGPSStale) > 2*time.Minute {
+			log.Printf("GPS stale for >2m, restarting gps-reader")
+			exec.Command("systemctl", "restart", "gps-reader").Run()
+			lastGPSStale = time.Now()
+		}
+		return nil
+	}
+	if !lastGPSStale.IsZero() {
+		log.Printf("GPS fix recovered")
+		lastGPSStale = time.Time{}
 	}
 	return &gps
 }
@@ -163,6 +214,113 @@ func getEUDIPs() []string {
 	return nil
 }
 
+// localIPv4s returns every IPv4 address on this host, used to drop our own
+// multicast when it loops back to the relay socket.
+func localIPv4s() map[string]bool {
+	out := make(map[string]bool)
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return out
+	}
+	for _, a := range addrs {
+		if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.To4() != nil {
+			out[ipnet.IP.String()] = true
+		}
+	}
+	return out
+}
+
+// relayLoop joins the CoT multicast group and forwards everything it hears
+// from *other* nodes to this node's own EUDs as unicast.
+//
+// Without this, a tablet attached to node B can only learn node A's position
+// from the raw multicast, which has to survive the 802.11 hop as an unretried
+// broadcast frame — Android drops those in Wi-Fi power save. Unicast to the
+// DHCP lease is retried by the AP and gets through.
+//
+// It also runs independently of GPS: a node with no fix still relays its
+// peers' positions, which is exactly the case that used to go dark.
+func relayLoop(uid string) {
+	group, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", mcastGroup, mcastPort))
+	if err != nil {
+		setRelayErr("resolve: " + err.Error())
+		log.Printf("relay: resolve failed: %v", err)
+		return
+	}
+
+	var conn *net.UDPConn
+	for {
+		iface, ierr := net.InterfaceByName(controlIface)
+		if ierr == nil {
+			conn, err = net.ListenMulticastUDP("udp4", iface, group)
+			if err == nil {
+				break
+			}
+		} else {
+			err = ierr
+		}
+		// br0 may not exist yet at boot; keep trying rather than giving up.
+		setRelayErr("join: " + err.Error())
+		log.Printf("relay: cannot join %s on %s (%v), retrying in 15s", mcastGroup, controlIface, err)
+		time.Sleep(15 * time.Second)
+	}
+	defer conn.Close()
+	setRelayErr("")
+	log.Printf("Relay listening on %s:%d via %s", mcastGroup, mcastPort, controlIface)
+
+	sender, err := net.ListenPacket("udp4", ":0")
+	if err != nil {
+		setRelayErr("sender socket: " + err.Error())
+		log.Printf("relay: sender socket failed: %v", err)
+		return
+	}
+	defer sender.Close()
+
+	selfIPs := localIPv4s()
+	lastRefresh := time.Now()
+	buf := make([]byte, 8192)
+
+	for {
+		n, src, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			setRelayErr("read: " + err.Error())
+			log.Printf("relay: read error: %v", err)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		// Our own addresses change when mesh-manager reassigns a chunk.
+		if time.Since(lastRefresh) > time.Minute {
+			selfIPs = localIPv4s()
+			lastRefresh = time.Now()
+		}
+
+		// Drop our own transmissions — by source address, and by UID in case
+		// the packet arrives via an address we have not learned yet.
+		if selfIPs[src.IP.String()] {
+			continue
+		}
+		payload := buf[:n]
+		if strings.Contains(string(payload), `uid="`+uid+`"`) {
+			continue
+		}
+
+		relayReceived.Add(1)
+
+		for _, ip := range getEUDIPs() {
+			addr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", ip, unicastPort))
+			if err != nil {
+				continue
+			}
+			if _, err := sender.WriteTo(payload, addr); err != nil {
+				setRelayErr(fmt.Sprintf("forward to %s: %v", ip, err))
+				continue
+			}
+			relayForwarded.Add(1)
+		}
+	}
+}
+
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("[cot-emitter] ")
@@ -170,6 +328,9 @@ func main() {
 	callsign := getCallsign()
 	uid := getUID()
 	log.Printf("Starting CoT emitter: uid=%s callsign=%s", uid, callsign)
+
+	// Relay peers' CoT to our own EUDs. Runs regardless of local GPS state.
+	go relayLoop(uid)
 
 	sock, err := net.ListenPacket("udp4", ":0")
 	if err != nil {
@@ -193,9 +354,12 @@ func main() {
 		gps := readGPS()
 		if gps == nil {
 			writeCotStatus(cotStatus{
-				Running:   true,
-				LastError: "no GPS fix",
-				Timestamp: time.Now().Unix(),
+				Running:        true,
+				LastError:      "no GPS fix",
+				RelayReceived:  relayReceived.Load(),
+				RelayForwarded: relayForwarded.Load(),
+				RelayError:     getRelayErr(),
+				Timestamp:      time.Now().Unix(),
 			})
 			time.Sleep(pollInterval)
 			continue
@@ -229,13 +393,16 @@ func main() {
 		}
 
 		writeCotStatus(cotStatus{
-			Running:      true,
-			LastSentUTC:  time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-			UnicastCount: len(eudIPs),
-			McastEnabled: true,
-			TotalSent:    totalSent,
-			LastError:    lastErr,
-			Timestamp:    time.Now().Unix(),
+			Running:        true,
+			LastSentUTC:    time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+			UnicastCount:   len(eudIPs),
+			McastEnabled:   true,
+			TotalSent:      totalSent,
+			RelayReceived:  relayReceived.Load(),
+			RelayForwarded: relayForwarded.Load(),
+			RelayError:     getRelayErr(),
+			LastError:      lastErr,
+			Timestamp:      time.Now().Unix(),
 		})
 
 		time.Sleep(pollInterval)

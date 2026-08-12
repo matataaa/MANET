@@ -89,6 +89,31 @@ type FileProgress struct {
 	Error    string `json:"error,omitempty"`
 }
 
+type FileSyncEntry struct {
+	TS      int64  `json:"ts"`
+	Source  string `json:"source,omitempty"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+var (
+	syncLogMu    sync.Mutex
+	fileSyncLogs = map[string][]FileSyncEntry{}
+)
+
+func addSyncLog(fileID string, entry FileSyncEntry) {
+	syncLogMu.Lock()
+	fileSyncLogs[fileID] = append(fileSyncLogs[fileID], entry)
+	if len(fileSyncLogs[fileID]) > 50 {
+		fileSyncLogs[fileID] = fileSyncLogs[fileID][len(fileSyncLogs[fileID])-50:]
+	}
+	syncLogMu.Unlock()
+	wsEvent("file_log", map[string]interface{}{
+		"file_id": fileID,
+		"entry":   entry,
+	})
+}
+
 type progressWriter struct {
 	fileID string
 	name   string
@@ -466,8 +491,12 @@ func autoFetchFile(msg Message) {
 	if _, err := os.Stat(localPath); err == nil {
 		return
 	}
-	fp := &FileProgress{FileID: msg.File.ID, Name: msg.File.Name, Total: msg.File.Size}
 	fetchMu.Lock()
+	if _, already := fetchProgress[msg.File.ID]; already {
+		fetchMu.Unlock()
+		return
+	}
+	fp := &FileProgress{FileID: msg.File.ID, Name: msg.File.Name, Total: msg.File.Size}
 	fetchProgress[msg.File.ID] = fp
 	fetchMu.Unlock()
 	wsEvent("file_progress", map[string]interface{}{
@@ -477,12 +506,25 @@ func autoFetchFile(msg Message) {
 
 	ok := false
 	sources := fileSources(msg)
+	if len(sources) == 0 {
+		addSyncLog(msg.File.ID, FileSyncEntry{
+			TS: time.Now().Unix(), Success: false,
+			Error: "no peers available on mesh",
+		})
+	}
 	for _, ip := range sources {
 		if fetchFileFrom(ip, msg.File.ID, msg.File.Name, localPath) {
 			log.Printf("fetched file %s from %s", msg.File.ID, ip)
+			addSyncLog(msg.File.ID, FileSyncEntry{
+				TS: time.Now().Unix(), Source: ip, Success: true,
+			})
 			ok = true
 			break
 		}
+		addSyncLog(msg.File.ID, FileSyncEntry{
+			TS: time.Now().Unix(), Source: ip, Success: false,
+			Error: "fetch failed",
+		})
 	}
 
 	fetchMu.Lock()
@@ -492,8 +534,15 @@ func autoFetchFile(msg Message) {
 	if ok {
 		wsEvent("file_ready", map[string]string{"file_id": msg.File.ID, "name": msg.File.Name})
 	} else {
-		log.Printf("failed to fetch file %s from any source", msg.File.ID)
-		wsEvent("file_error", map[string]string{"id": msg.ID, "file_id": msg.File.ID, "name": msg.File.Name})
+		reason := "all sources failed"
+		if len(sources) == 0 {
+			reason = "no peers available on mesh"
+		}
+		log.Printf("failed to fetch file %s: %s", msg.File.ID, reason)
+		wsEvent("file_error", map[string]interface{}{
+			"id": msg.ID, "file_id": msg.File.ID, "name": msg.File.Name,
+			"reason": reason, "sources_tried": len(sources),
+		})
 	}
 }
 
@@ -845,8 +894,26 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleFiles(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/files/")
-	if name == "" || strings.Contains(name, "..") {
+	path := strings.TrimPrefix(r.URL.Path, "/files/")
+	if path == "" || strings.Contains(path, "..") {
+		http.Error(w, "not found", 404)
+		return
+	}
+	parts := strings.SplitN(path, "/", 2)
+	name := parts[0]
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+	if action == "fetch" && r.Method == "POST" {
+		handleFileFetch(w, name)
+		return
+	}
+	if action == "log" {
+		handleFileLog(w, name)
+		return
+	}
+	if action != "" {
 		http.Error(w, "not found", 404)
 		return
 	}
@@ -865,6 +932,52 @@ func handleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Error(w, "not found", 404)
+}
+
+func handleFileFetch(w http.ResponseWriter, fileID string) {
+	fetchMu.Lock()
+	_, fetching := fetchProgress[fileID]
+	fetchMu.Unlock()
+	if fetching {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "status": "already syncing"})
+		return
+	}
+	localPath := filepath.Join(filesDir(), fileID)
+	if _, err := os.Stat(localPath); err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "status": "already local"})
+		return
+	}
+	mu.Lock()
+	var msg *Message
+	for i := range messages {
+		if messages[i].File != nil && messages[i].File.ID == fileID {
+			m := messages[i]
+			msg = &m
+			break
+		}
+	}
+	mu.Unlock()
+	if msg == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "file not found in messages"})
+		return
+	}
+	go autoFetchFile(*msg)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "status": "sync started"})
+}
+
+func handleFileLog(w http.ResponseWriter, fileID string) {
+	syncLogMu.Lock()
+	entries := fileSyncLogs[fileID]
+	syncLogMu.Unlock()
+	if entries == nil {
+		entries = []FileSyncEntry{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(entries)
 }
 
 func handleUnread(w http.ResponseWriter, r *http.Request) {

@@ -161,15 +161,17 @@ type LocalData struct {
 }
 
 type BatOriginator struct {
-	TQ      int
-	Nexthop string
-	Iface   string
+	TQ       int
+	Nexthop  string
+	Iface    string
+	LastSeen float64
 }
 
 type BatNeighbor struct {
-	Iface string `json:"iface"`
-	MAC   string `json:"mac"`
-	TQ    int    `json:"tq"`
+	Iface    string  `json:"iface"`
+	MAC      string  `json:"mac"`
+	TQ       int     `json:"tq"`
+	LastSeen float64 `json:"-"`
 }
 
 type BatGateway struct {

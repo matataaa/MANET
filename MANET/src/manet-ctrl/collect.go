@@ -33,8 +33,8 @@ func runCmdStdout(timeout time.Duration, name string, args ...string) (string, e
 
 // --- batman-adv ---
 
-var origRE = regexp.MustCompile(`[\s*]+([0-9a-f:]{17})\s+[\d.]+(?:ms|s)\s+\(\s*([\d.]+)\)\s+([0-9a-f:]{17})(?:\s+\[\s*(\S+)\s*\])?`)
-var neighRE = regexp.MustCompile(`([0-9a-f:]{17})\s+[\d.]+(?:ms|s)\s+\(\s*([\d.]+)\)\s+\[\s*(\S+)\s*\]`)
+var origRE = regexp.MustCompile(`[\s*]+([0-9a-f:]{17})\s+([\d.]+)(?:ms|s)\s+\(\s*([\d.]+)\)\s+([0-9a-f:]{17})(?:\s+\[\s*(\S+)\s*\])?`)
+var neighRE = regexp.MustCompile(`([0-9a-f:]{17})\s+([\d.]+)(?:ms|s)\s+\(\s*([\d.]+)\)\s+\[\s*(\S+)\s*\]`)
 var macRE = regexp.MustCompile(`([0-9a-f]{2}(?::[0-9a-f]{2}){5})`)
 
 var batmanV bool
@@ -69,15 +69,16 @@ func runBatctlOriginators() (map[string]int, map[string]BatOriginator) {
 	}
 	for _, m := range origRE.FindAllStringSubmatch(out, -1) {
 		orig := normMAC(m[1])
-		raw, _ := strconv.ParseFloat(m[2], 64)
+		lastSeen, _ := strconv.ParseFloat(m[2], 64)
+		raw, _ := strconv.ParseFloat(m[3], 64)
 		tq := normTQ(raw)
-		nexthop := normMAC(m[3])
+		nexthop := normMAC(m[4])
 		iface := ""
-		if len(m) > 4 {
-			iface = m[4]
+		if len(m) > 5 {
+			iface = m[5]
 		}
 		if prev, ok := origMap[orig]; !ok || tq > prev.TQ {
-			origMap[orig] = BatOriginator{TQ: tq, Nexthop: nexthop, Iface: iface}
+			origMap[orig] = BatOriginator{TQ: tq, Nexthop: nexthop, Iface: iface, LastSeen: lastSeen}
 		}
 		if tq > tqMap[orig] {
 			tqMap[orig] = tq
@@ -96,9 +97,10 @@ func runBatctlNeighbors() []BatNeighbor {
 		return neighbors
 	}
 	for _, m := range neighRE.FindAllStringSubmatch(out, -1) {
-		raw, _ := strconv.ParseFloat(m[2], 64)
+		lastSeen, _ := strconv.ParseFloat(m[2], 64)
+		raw, _ := strconv.ParseFloat(m[3], 64)
 		neighbors = append(neighbors, BatNeighbor{
-			Iface: m[3], MAC: normMAC(m[1]), TQ: normTQ(raw),
+			Iface: m[4], MAC: normMAC(m[1]), TQ: normTQ(raw), LastSeen: lastSeen,
 		})
 	}
 	return neighbors

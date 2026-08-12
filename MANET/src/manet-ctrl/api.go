@@ -352,12 +352,15 @@ func apiMesh(w http.ResponseWriter, r *http.Request) {
 		return m
 	}
 
+	now := time.Now().Unix()
+
 	var origList []map[string]interface{}
 	for mac, o := range origMap {
 		entry := enrichMAC(mac)
 		entry["tq"] = o.TQ
 		entry["nexthop"] = o.Nexthop
 		entry["iface"] = o.Iface
+		entry["last_seen"] = fmt.Sprintf("%d", now-int64(o.LastSeen))
 		if nhInfo, ok := macInfo[o.Nexthop]; ok {
 			entry["nexthop_hostname"] = nhInfo["hostname"]
 		}
@@ -369,6 +372,7 @@ func apiMesh(w http.ResponseWriter, r *http.Request) {
 		entry := enrichMAC(n.MAC)
 		entry["tq"] = n.TQ
 		entry["iface"] = n.Iface
+		entry["last_seen"] = fmt.Sprintf("%d", now-int64(n.LastSeen))
 		neighList = append(neighList, entry)
 	}
 
@@ -385,7 +389,6 @@ func apiMesh(w http.ResponseWriter, r *http.Request) {
 	myIP := stateIP(state)
 
 	var dnsRecords []map[string]interface{}
-	now := time.Now().Unix()
 	reg := parseRegistry()
 	for _, node := range reg {
 		h := node["HOSTNAME"]

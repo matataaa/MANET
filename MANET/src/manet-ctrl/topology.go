@@ -123,6 +123,7 @@ func assembleStatusData() StatusData {
 	tqMap, origMap := runBatctlOriginators()
 	neighbors := runBatctlNeighbors()
 	gateways := runBatctlGateways()
+	nowTS := fmt.Sprintf("%d", time.Now().Unix())
 
 	// Build neighbor MAC set for direct detection
 	neighborMACs := make(map[string]bool)
@@ -238,6 +239,11 @@ func assembleStatusData() StatusData {
 			bestLink["tq"] = orig.TQ
 		}
 
+		lastSeen := rn["LAST_SEEN_TIMESTAMP"]
+		if !isMe && (isDirect || tq != nil) {
+			lastSeen = nowTS
+		}
+
 		node := Node{
 			ID:           rn["id"],
 			Hostname:     rn["HOSTNAME"],
@@ -258,7 +264,7 @@ func assembleStatusData() StatusData {
 			Limp:         rn["IS_IN_LIMP_MODE"] == "true",
 			AllMACs:      allMACs,
 			BestLink:     bestLink,
-			LastSeen:     rn["LAST_SEEN_TIMESTAMP"],
+			LastSeen:     lastSeen,
 			Applets:      parseAppletsBrief(rn["APPLETS"]),
 		}
 
@@ -428,10 +434,19 @@ func assembleStatusData() StatusData {
 			continue
 		}
 		peerNeighbors := strings.Split(rn["DIRECT_NEIGHBORS"], ",")
-		for _, nbMAC := range peerNeighbors {
-			nbMAC = strings.TrimSpace(nbMAC)
-			if nbMAC == "" {
+		for _, entry := range peerNeighbors {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
 				continue
+			}
+			nbMAC := entry
+			var peerTQ *int
+			if eqIdx := strings.LastIndex(entry, "="); eqIdx > 0 {
+				nbMAC = entry[:eqIdx]
+				if raw, err := strconv.ParseFloat(entry[eqIdx+1:], 64); err == nil {
+					tq := normTQ(raw)
+					peerTQ = &tq
+				}
 			}
 			nbNodeID, ok := macToNodeID[nbMAC]
 			if !ok || nbNodeID == selfID || nbNodeID == n.ID {
@@ -447,7 +462,7 @@ func assembleStatusData() StatusData {
 				}
 			}
 			if !dup {
-				edges = append(edges, Edge{Source: n.ID, Target: nbNodeID, Type: "direct"})
+				edges = append(edges, Edge{Source: n.ID, Target: nbNodeID, Type: "direct", TQ: peerTQ})
 			}
 		}
 	}

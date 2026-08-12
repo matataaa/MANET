@@ -94,6 +94,24 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .bar-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:4px 12px;font-size:10px;cursor:pointer;font-family:var(--font)}
 .bar-btn:hover{border-color:var(--accent);color:var(--text)}
 .bar-btn.bar-del:hover{border-color:var(--bad);color:var(--bad)}
+
+.f-sync{background:var(--accent);color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:600;cursor:pointer;flex-shrink:0;font-family:var(--font)}
+.f-sync:hover{opacity:.85}
+.f-log-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:3px 6px;font-size:9px;cursor:pointer;flex-shrink:0;font-family:var(--font)}
+.f-log-btn:hover{border-color:var(--accent);color:var(--text)}
+.f-warn{font-size:10px;color:var(--bad);margin-top:3px}
+
+.sync-log-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;display:flex;align-items:center;justify-content:center}
+.sync-log-box{background:var(--surface);border:1px solid var(--border);border-radius:10px;max-width:460px;width:90%;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.sync-log-hdr{padding:14px 16px;border-bottom:1px solid var(--border);font-size:13px;font-weight:700;display:flex;justify-content:space-between;align-items:center}
+.sync-log-close{background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:0}
+.sync-log-close:hover{color:var(--text)}
+.sync-log-body{padding:8px 0;overflow-y:auto;flex:1}
+.sync-log-empty{text-align:center;padding:20px;color:var(--muted);font-size:12px}
+.slog-entry{padding:4px 16px;font-size:11px;display:flex;gap:8px;align-items:baseline}
+.slog-ts{color:var(--muted);flex-shrink:0;font-family:monospace;font-size:10px}
+.slog-ok{color:var(--good)}
+.slog-fail{color:var(--bad)}
 </style>
 </head>
 <body>
@@ -152,6 +170,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
   var peerList = [];
   var allMessages = [];
   var fetchingFiles = {};
+  var fileErrors = {};
 
   var PROXY = '/api/applets/mesh-chat/proxy';
 
@@ -247,12 +266,16 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
         } else if (isLocal) {
           html += '<a class="f-dl" href="' + fileUrl(m) + '" download="' + esc(m.file.name) + '">Download</a>';
         } else {
-          html += '<span class="f-dl f-unavail">Not synced</span>';
+          html += '<button class="f-sync" data-fid="' + esc(m.file.id) + '">Sync</button>';
         }
+        html += '<button class="f-log-btn" data-fid="' + esc(m.file.id) + '" data-fname="' + esc(m.file.name) + '">Log</button>';
         if (isFetching) {
           var pct = fp.total > 0 ? Math.round(fp.received / fp.total * 100) : 0;
           html += '<div class="f-progress"><div class="f-progress-bar" style="width:' + pct + '%"></div></div>';
           html += '<div class="f-status">' + fmtSize(fp.received) + ' / ' + fmtSize(fp.total) + ' (' + pct + '%)</div>';
+        }
+        if (!isLocal && !isFetching && fileErrors[m.file.id]) {
+          html += '<div class="f-warn">' + esc(fileErrors[m.file.id]) + '</div>';
         }
         html += '</div>';
       }
@@ -283,6 +306,18 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
         if (card.classList.contains('unread')) {
           markRead(card.dataset.id);
         }
+      });
+    });
+    inboxEl.querySelectorAll('.f-sync').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        syncFile(btn.dataset.fid);
+      });
+    });
+    inboxEl.querySelectorAll('.f-log-btn').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        showSyncLog(btn.dataset.fid, btn.dataset.fname);
       });
     });
   }
@@ -478,6 +513,73 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
     }).catch(function() {});
   }
 
+  function syncFile(fileId) {
+    delete fileErrors[fileId];
+    fetchingFiles[fileId] = {received: 0, total: 0};
+    renderInbox();
+    fetch(PROXY + '/files/' + fileId + '/fetch', {method: 'POST'})
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.status === 'already local') {
+          delete fetchingFiles[fileId];
+          for (var i = 0; i < allMessages.length; i++) {
+            if (allMessages[i].file && allMessages[i].file.id === fileId) {
+              allMessages[i].file.local = true;
+            }
+          }
+          renderInbox();
+        } else if (!d.ok) {
+          delete fetchingFiles[fileId];
+          fileErrors[fileId] = d.error || 'Sync failed';
+          renderInbox();
+        }
+      })
+      .catch(function() {
+        delete fetchingFiles[fileId];
+        fileErrors[fileId] = 'Network error';
+        renderInbox();
+      });
+  }
+
+  function showSyncLog(fileId, fileName) {
+    fetch(PROXY + '/files/' + fileId + '/log')
+      .then(function(r) { return r.json(); })
+      .then(function(entries) { renderSyncLogModal(fileName, entries); })
+      .catch(function() { renderSyncLogModal(fileName, []); });
+  }
+
+  function renderSyncLogModal(fileName, entries) {
+    var overlay = document.createElement('div');
+    overlay.className = 'sync-log-overlay';
+    var html = '<div class="sync-log-box"><div class="sync-log-hdr"><span>Sync Log: ' + esc(fileName) + '</span>';
+    html += '<button class="sync-log-close">&times;</button></div><div class="sync-log-body">';
+    if (!entries.length) {
+      html += '<div class="sync-log-empty">No sync activity recorded</div>';
+    } else {
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        var cls = e.success ? 'slog-ok' : 'slog-fail';
+        var icon = e.success ? '✓' : '✗';
+        var ts = new Date(e.ts * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
+        var text = '';
+        if (e.success) {
+          text = 'Synced from ' + (e.source || 'peer');
+        } else {
+          text = e.error || 'Failed';
+          if (e.source) text += ' (from ' + e.source + ')';
+        }
+        html += '<div class="slog-entry"><span class="slog-ts">' + ts + '</span>';
+        html += '<span class="' + cls + '">' + icon + '</span>';
+        html += '<span>' + esc(text) + '</span></div>';
+      }
+    }
+    html += '</div></div>';
+    overlay.innerHTML = html;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.sync-log-close').onclick = function() { overlay.remove(); };
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+  }
+
   // --- WebSocket ---
 
   function connect() {
@@ -497,7 +599,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
         if (evt.event === 'init') {
           myHostname = evt.data.hostname;
           updatePeers(evt.data.peers);
-          updatePlaceholder();
+          updateToDisplay();
           return;
         }
         if (evt.event === 'message') {
@@ -545,65 +647,43 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
           return;
         }
         if (evt.event === 'file_progress') {
+          var isNew = !fetchingFiles[evt.data.file_id];
           fetchingFiles[evt.data.file_id] = {received: evt.data.received, total: evt.data.total};
-          var el = document.querySelector('[data-file-id="' + evt.data.file_id + '"]');
-          if (el) {
-            var pct = evt.data.total > 0 ? Math.round(evt.data.received / evt.data.total * 100) : 0;
-            var bar = el.querySelector('.f-progress-bar');
-            var stat = el.querySelector('.f-status');
-            var dl = el.querySelector('.f-dl');
-            if (bar) { bar.style.width = pct + '%'; }
-            else {
-              var pb = document.createElement('div'); pb.className = 'f-progress';
-              pb.innerHTML = '<div class="f-progress-bar" style="width:' + pct + '%"></div>';
-              el.appendChild(pb);
-              var st = document.createElement('div'); st.className = 'f-status'; el.appendChild(st);
+          delete fileErrors[evt.data.file_id];
+          if (isNew) {
+            renderInbox();
+          } else {
+            var el = document.querySelector('[data-file-id="' + evt.data.file_id + '"]');
+            if (el) {
+              var pct = evt.data.total > 0 ? Math.round(evt.data.received / evt.data.total * 100) : 0;
+              var bar = el.querySelector('.f-progress-bar');
+              var stat = el.querySelector('.f-status');
+              if (bar) bar.style.width = pct + '%';
+              if (stat) stat.textContent = fmtSize(evt.data.received) + ' / ' + fmtSize(evt.data.total) + ' (' + pct + '%)';
             }
-            if (stat) stat.textContent = fmtSize(evt.data.received) + ' / ' + fmtSize(evt.data.total) + ' (' + pct + '%)';
-            if (dl) { dl.classList.add('disabled'); dl.textContent = 'Syncing...'; }
           }
           return;
         }
         if (evt.event === 'file_ready') {
           delete fetchingFiles[evt.data.file_id];
+          delete fileErrors[evt.data.file_id];
           for (var i = 0; i < allMessages.length; i++) {
             if (allMessages[i].file && allMessages[i].file.id === evt.data.file_id) {
               allMessages[i].file.local = true;
             }
           }
-          var el = document.querySelector('[data-file-id="' + evt.data.file_id + '"]');
-          if (el) {
-            var bar = el.querySelector('.f-progress');
-            var stat = el.querySelector('.f-status');
-            var dl = el.querySelector('.f-dl');
-            if (bar) bar.remove();
-            if (stat) stat.remove();
-            if (dl) {
-              var a = document.createElement('a');
-              a.className = 'f-dl';
-              a.href = PROXY + '/files/' + evt.data.file_id;
-              a.download = evt.data.name || '';
-              a.textContent = 'Download';
-              dl.replaceWith(a);
-            }
-          }
+          renderInbox();
           return;
         }
         if (evt.event === 'file_error') {
           delete fetchingFiles[evt.data.file_id];
+          var reason = evt.data.reason || 'No peers could provide this file';
+          fileErrors[evt.data.file_id] = reason;
           var fname = evt.data.name || evt.data.file_id;
           if (window.parent && window.parent.notify) {
-            window.parent.notify('File Sync Failed', 'Could not sync: ' + fname, {type: 'error'});
+            window.parent.notify('File Sync Failed', reason + ': ' + fname, {type: 'error'});
           }
-          var el = document.querySelector('[data-file-id="' + (evt.data.file_id || '') + '"]');
-          if (el) {
-            var bar = el.querySelector('.f-progress');
-            var stat = el.querySelector('.f-status');
-            var dl = el.querySelector('.f-dl');
-            if (bar) bar.remove();
-            if (stat) stat.remove();
-            if (dl) { dl.className = 'f-dl f-unavail'; dl.textContent = 'Not synced'; }
-          }
+          renderInbox();
           return;
         }
       } catch(err) {}
