@@ -22,5 +22,5 @@ log "Carrier state changed on $IFACE - running hotplug detection"
 
 # Automatic tool updates if enabled and internet is now available.
 if grep -qi '^auto_update=1' /etc/mesh.conf 2>/dev/null && ping -c 1 -W 2 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
-    /usr/local/bin/node-update.sh --routine
+    systemctl reload node-update 2>/dev/null || true
 fi

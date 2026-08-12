@@ -18,12 +18,10 @@ if [ -z "${SBC_OVERLAY_DIR:-}" ]; then
         SBC_OVERLAY_DIR="$DEFAULT_OVERLAY"
         echo "Using default SBC overlay: $SBC_OVERLAY_DIR"
     else
-        echo "ERROR: SBC overlay not found." >&2
-        echo "       Run kernel-work/real_work/build-cm4-sbc-overlay.sh first," >&2
-        echo "       or set SBC_OVERLAY_DIR to an existing overlay directory." >&2
-        exit 1
+        echo "WARNING: SBC overlay not found — building tools-only tarball." >&2
+        echo "         Base image must already have kernel/modules/firmware." >&2
     fi
 fi
 
-export SBC_OVERLAY_DIR
+export SBC_OVERLAY_DIR="${SBC_OVERLAY_DIR:-}"
 exec "$SCRIPT_DIR/build-rpi5-tarball.sh" "$OUT"

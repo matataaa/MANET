@@ -64,6 +64,7 @@ GO_SERVICES=(
     mesh-radio-state
     mesh-registry
     node-manager
+    node-update
 )
 
 for svc in "${GO_SERVICES[@]}"; do
@@ -100,7 +101,7 @@ set -euo pipefail
 /usr/local/bin/manet-uplink-dispatch.sh carrier "${IFACE:-}"
 
 if grep -qi '^auto_update=1' /etc/mesh.conf 2>/dev/null && ping -c 1 -W 2 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
-    /usr/local/bin/node-update.sh --routine
+    systemctl reload node-update 2>/dev/null || true
 fi
 EOF
 
@@ -138,6 +139,7 @@ for unit in \
     mesh-voice.service \
     morse-spi-watchdog.service \
     node-manager.service \
+    node-update.service \
     sae-watchdog.service
 do
     if [ -f "$STAGE/etc/systemd/system/$unit" ]; then

@@ -5,9 +5,10 @@ Wants=alfred.service
 
 [Service]
 Type=simple
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do [ -S /var/run/alfred.sock ] && alfred -r 65 >/dev/null 2>&1 && exit 0; sleep 2; done; echo "alfred not ready" >&2; exit 1'
 ExecStart=/usr/local/bin/mesh-registry
-Restart=on-failure
-RestartSec=5
+Restart=always
+RestartSec=10
 TimeoutStopSec=5
 
 [Install]
