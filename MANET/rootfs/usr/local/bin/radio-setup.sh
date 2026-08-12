@@ -48,17 +48,21 @@ set_mesh_hostname() {
     local new_hostname="$1"
     [ -n "$new_hostname" ] || return 0
 
-    if hostnamectl set-hostname "$new_hostname" 2>/dev/null; then
-        return 0
+    # hostnamectl does not touch /etc/hosts, so the 127.0.1.1 entry must be
+    # rewritten either way. Doing it only in the fallback branch left the
+    # stock "raspberrypi" entry in place on every node where hostnamectl
+    # succeeded — i.e. the normal path.
+    if ! hostnamectl set-hostname "$new_hostname" 2>/dev/null; then
+        echo "$new_hostname" > /etc/hostname 2>/dev/null || true
+        hostname "$new_hostname" 2>/dev/null || \
+            hostnamectl --transient set-hostname "$new_hostname" 2>/dev/null || true
     fi
 
-    echo "$new_hostname" > /etc/hostname 2>/dev/null || true
     if grep -q '^127\.0\.1\.1' /etc/hosts 2>/dev/null; then
         sed -i "s/^127\\.0\\.1\\.1.*/127.0.1.1\t${new_hostname}/" /etc/hosts
     else
         echo "127.0.1.1	${new_hostname}" >> /etc/hosts
     fi
-    hostname "$new_hostname" 2>/dev/null || hostnamectl --transient set-hostname "$new_hostname" 2>/dev/null || true
 }
 
 has_usb_morse_device() {

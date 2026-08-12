@@ -77,6 +77,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .msg-act.del{color:var(--bad);border-color:rgba(239,68,68,.3)}
 .msg-act.del:hover{background:rgba(239,68,68,.12);border-color:var(--bad)}
 
+.msg-delivery{font-size:10px;color:var(--muted);margin:3px 0 0 16px;display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.msg-delivery .d-check{color:var(--good);font-weight:700}
+.msg-delivery .d-peer{background:rgba(255,255,255,.04);border-radius:3px;padding:1px 5px}
+
 .upload-bar{position:fixed;top:0;left:0;height:3px;background:var(--accent);transition:width .2s;z-index:100}
 
 .dialog-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;display:flex;align-items:center;justify-content:center}
@@ -278,6 +282,17 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
           html += '<div class="f-warn">' + esc(fileErrors[m.file.id]) + '</div>';
         }
         html += '</div>';
+      }
+
+      if (isSelf && m.receipts && m.receipts.length > 0) {
+        html += '<div class="msg-delivery"><span class="d-check">&#10003;</span>';
+        for (var ri = 0; ri < m.receipts.length; ri++) {
+          var rc = m.receipts[ri];
+          html += '<span class="d-peer">' + esc(rc.peer) + ' ' + fmtTime(rc.ts) + '</span>';
+        }
+        html += '</div>';
+      } else if (isSelf) {
+        html += '<div class="msg-delivery">Pending delivery...</div>';
       }
 
       html += '<div class="msg-actions">';
@@ -683,6 +698,21 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
           for (var i = 0; i < allMessages.length; i++) {
             if (allMessages[i].file && allMessages[i].file.id === evt.data.file_id) {
               allMessages[i].file.local = true;
+            }
+          }
+          renderInbox();
+          return;
+        }
+        if (evt.event === 'receipt') {
+          for (var i = 0; i < allMessages.length; i++) {
+            if (allMessages[i].id === evt.data.msg_id) {
+              if (!allMessages[i].receipts) allMessages[i].receipts = [];
+              var dup = false;
+              for (var j = 0; j < allMessages[i].receipts.length; j++) {
+                if (allMessages[i].receipts[j].peer === evt.data.peer) { dup = true; break; }
+              }
+              if (!dup) allMessages[i].receipts.push({peer: evt.data.peer, ts: evt.data.ts});
+              break;
             }
           }
           renderInbox();

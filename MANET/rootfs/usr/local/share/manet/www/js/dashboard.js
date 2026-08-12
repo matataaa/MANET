@@ -64,7 +64,11 @@ function renderDashDaemons() {
 
     var c = d.cot_emitter;
     if (c && c.available && c.running) {
-      var cotVal = c.last_error === 'no GPS fix' ? 'Waiting for GPS' : c.unicast_targets + ' EUDs &middot; ' + c.total_sent + ' sent';
+      var gpsPart = c.gps_fix ? 'GPS OK' : 'No GPS';
+      var eudPart = c.unicast_targets + ' EUD' + (c.unicast_targets !== 1 ? 's' : '');
+      var relayPart = c.relay_received > 0 ? ' &middot; ' + c.relay_forwarded + ' relayed' : '';
+      var sentPart = c.total_sent > 0 ? ' &middot; ' + c.total_sent + ' sent' : '';
+      var cotVal = gpsPart + ' &middot; ' + eudPart + relayPart + sentPart;
       var cDot = c.last_error && c.last_error !== 'no GPS fix' ? 'off' : 'on';
       items.push('<div class="dash-daemon-row"><span class="voice-dot ' + cDot + '"></span>' +
         '<span class="dash-daemon-name">CoT</span>' +

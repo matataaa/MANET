@@ -35,16 +35,19 @@ const (
 )
 
 type cotStatus struct {
-	Running        bool   `json:"running"`
-	LastSentUTC    string `json:"last_sent_utc,omitempty"`
-	UnicastCount   int    `json:"unicast_targets"`
-	McastEnabled   bool   `json:"mcast_enabled"`
-	TotalSent      int64  `json:"total_sent"`
-	RelayReceived  int64  `json:"relay_received"`
-	RelayForwarded int64  `json:"relay_forwarded"`
-	RelayError     string `json:"relay_error,omitempty"`
-	LastError      string `json:"last_error,omitempty"`
-	Timestamp      int64  `json:"timestamp"`
+	Running        bool     `json:"running"`
+	GPSFix         bool     `json:"gps_fix"`
+	LastSentUTC    string   `json:"last_sent_utc,omitempty"`
+	UnicastCount   int      `json:"unicast_targets"`
+	EUDIPs         []string `json:"eud_ips"`
+	EUDInterfaces  []string `json:"eud_interfaces"`
+	McastEnabled   bool     `json:"mcast_enabled"`
+	TotalSent      int64    `json:"total_sent"`
+	RelayReceived  int64    `json:"relay_received"`
+	RelayForwarded int64    `json:"relay_forwarded"`
+	RelayError     string   `json:"relay_error,omitempty"`
+	LastError      string   `json:"last_error,omitempty"`
+	Timestamp      int64    `json:"timestamp"`
 }
 
 // Relay counters — written by the relay goroutine, read by the emit loop when
@@ -407,10 +410,16 @@ func main() {
 	log.Printf("EUD unicast port: %d", port)
 
 	for {
+		eudIPs := getEUDIPs()
+		eudIfs := eudInterfaces()
 		gps := readGPS()
 		if gps == nil {
 			writeCotStatus(cotStatus{
 				Running:        true,
+				GPSFix:         false,
+				UnicastCount:   len(eudIPs),
+				EUDIPs:         eudIPs,
+				EUDInterfaces:  eudIfs,
 				LastError:      "no GPS fix",
 				RelayReceived:  relayReceived.Load(),
 				RelayForwarded: relayForwarded.Load(),
@@ -422,7 +431,6 @@ func main() {
 		}
 
 		event := buildCoTEvent(gps, uid, callsign)
-		eudIPs := getEUDIPs()
 		var lastErr string
 
 		for _, ip := range eudIPs {
@@ -450,8 +458,11 @@ func main() {
 
 		writeCotStatus(cotStatus{
 			Running:        true,
+			GPSFix:         true,
 			LastSentUTC:    time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 			UnicastCount:   len(eudIPs),
+			EUDIPs:         eudIPs,
+			EUDInterfaces:  eudIfs,
 			McastEnabled:   true,
 			TotalSent:      totalSent,
 			RelayReceived:  relayReceived.Load(),

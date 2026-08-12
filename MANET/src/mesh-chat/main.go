@@ -32,15 +32,21 @@ const (
 )
 
 type Message struct {
-	ID     string   `json:"id"`
-	From   string   `json:"from"`
-	FromIP string   `json:"from_ip"`
-	To     []string `json:"to"`
-	Type   string   `json:"type"`
-	Body   string   `json:"body,omitempty"`
-	File   *FileMeta `json:"file,omitempty"`
-	TS     int64    `json:"ts"`
-	Read   bool     `json:"read"`
+	ID       string             `json:"id"`
+	From     string             `json:"from"`
+	FromIP   string             `json:"from_ip"`
+	To       []string           `json:"to"`
+	Type     string             `json:"type"`
+	Body     string             `json:"body,omitempty"`
+	File     *FileMeta          `json:"file,omitempty"`
+	TS       int64              `json:"ts"`
+	Read     bool               `json:"read"`
+	Receipts []DeliveryReceipt  `json:"receipts,omitempty"`
+}
+
+type DeliveryReceipt struct {
+	Peer string `json:"peer"`
+	TS   int64  `json:"ts"`
 }
 
 type FileMeta struct {
@@ -75,6 +81,7 @@ var (
 	seenIDs    = map[string]bool{}
 	peers      = map[string]*Peer{}
 	clients    = map[*websocket.Conn]bool{}
+	receiptMap = map[string][]DeliveryReceipt{}
 
 	fetchMu       sync.Mutex
 	fetchProgress = map[string]*FileProgress{}
@@ -266,8 +273,9 @@ func saveMessage(msg Message) {
 }
 
 type persistedState struct {
-	Read    []string `json:"read"`
-	Deleted []string `json:"deleted"`
+	Read     []string                     `json:"read"`
+	Deleted  []string                     `json:"deleted"`
+	Receipts map[string][]DeliveryReceipt `json:"receipts,omitempty"`
 }
 
 func loadState() {
@@ -285,6 +293,9 @@ func loadState() {
 	for _, id := range s.Deleted {
 		deletedSet[id] = true
 	}
+	if s.Receipts != nil {
+		receiptMap = s.Receipts
+	}
 	for i := range messages {
 		if readSet[messages[i].ID] {
 			messages[i].Read = true
@@ -293,7 +304,7 @@ func loadState() {
 }
 
 func saveState() {
-	s := persistedState{}
+	s := persistedState{Receipts: receiptMap}
 	for id := range readSet {
 		s.Read = append(s.Read, id)
 	}
@@ -302,6 +313,36 @@ func saveState() {
 	}
 	data, _ := json.Marshal(s)
 	os.WriteFile(statePath(), data, 0644)
+}
+
+func addReceipt(msgID, peer string) {
+	for _, r := range receiptMap[msgID] {
+		if r.Peer == peer {
+			return
+		}
+	}
+	rcpt := DeliveryReceipt{Peer: peer, TS: time.Now().Unix()}
+	receiptMap[msgID] = append(receiptMap[msgID], rcpt)
+	saveState()
+	wsEvent("receipt", map[string]interface{}{
+		"msg_id": msgID, "peer": peer, "ts": rcpt.TS,
+	})
+}
+
+func sendReceipt(msgID, senderIP string) {
+	if senderIP == "" || senderIP == meshIP {
+		return
+	}
+	data, _ := json.Marshal(map[string]string{
+		"msg_id": msgID, "from": hostname,
+	})
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Post(
+		fmt.Sprintf("http://%s:%d/receipt", senderIP, cfg.Port),
+		"application/json", strings.NewReader(string(data)))
+	if err == nil {
+		resp.Body.Close()
+	}
 }
 
 // --- WebSocket broadcast ---
@@ -477,6 +518,7 @@ func handleIncomingMessage(data []byte) {
 	wsEvent("message", msg)
 	wsEvent("unread", map[string]int{"count": unreadCount()})
 	log.Printf("rx %s from %s", msg.Type, msg.From)
+	go sendReceipt(msg.ID, msg.FromIP)
 	if msg.File != nil {
 		go autoFetchFile(msg)
 	}
@@ -602,19 +644,10 @@ func fetchFileFrom(peerIP, fileID, fileName, localPath string) bool {
 // --- Peer delivery ---
 
 func deliverMessages(peerIP string, msgs []Message) {
-	client := &http.Client{Timeout: deliveryTimeout}
 	for _, m := range msgs {
-		data, _ := json.Marshal(m)
-		resp, err := client.Post(
-			fmt.Sprintf("http://%s:%d/deliver", peerIP, cfg.Port),
-			"application/json",
-			strings.NewReader(string(data)),
-		)
-		if err != nil {
-			log.Printf("deliver to %s failed: %v", peerIP, err)
-			continue
+		if !deliverOne(peerIP, m) {
+			log.Printf("deliver to %s failed", peerIP)
 		}
-		resp.Body.Close()
 		time.Sleep(10 * time.Millisecond)
 	}
 }
@@ -767,6 +800,9 @@ func handleGetMessages(w http.ResponseWriter, r *http.Request) {
 		if m.File != nil && m.File.ID != "" {
 			_, err := os.Stat(filepath.Join(filesDir(), m.File.ID))
 			m.File.Local = err == nil
+		}
+		if m.From == hostname {
+			m.Receipts = receiptMap[m.ID]
 		}
 		if len(m.To) == 0 || contains(m.To, hostname) || m.From == hostname {
 			out = append(out, m)
@@ -1112,10 +1148,11 @@ func handleDeliver(w http.ResponseWriter, r *http.Request) {
 	wsEvent("message", msg)
 	wsEvent("unread", map[string]int{"count": unreadCount()})
 	log.Printf("delivered %s from %s", msg.Type, msg.From)
+	go sendReceipt(msg.ID, msg.FromIP)
 	go autoFetchFile(msg)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "peer": hostname})
 }
 
 func handleDeleteAll(w http.ResponseWriter, r *http.Request) {
@@ -1177,9 +1214,53 @@ func tryDeliver(msg Message) {
 	}
 	mu.Unlock()
 
-	for _, ip := range targets {
-		deliverMessages(ip, []Message{msg})
+	for peer, ip := range targets {
+		if deliverOne(ip, msg) {
+			mu.Lock()
+			addReceipt(msg.ID, peer)
+			mu.Unlock()
+		}
 	}
+}
+
+func deliverOne(peerIP string, msg Message) bool {
+	client := &http.Client{Timeout: deliveryTimeout}
+	data, _ := json.Marshal(msg)
+	resp, err := client.Post(
+		fmt.Sprintf("http://%s:%d/deliver", peerIP, cfg.Port),
+		"application/json",
+		strings.NewReader(string(data)),
+	)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == 200
+}
+
+func handleReceipt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+	if err != nil {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	var rcpt struct {
+		MsgID string `json:"msg_id"`
+		From  string `json:"from"`
+	}
+	if json.Unmarshal(body, &rcpt) != nil || rcpt.MsgID == "" || rcpt.From == "" {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	mu.Lock()
+	addReceipt(rcpt.MsgID, rcpt.From)
+	mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 // --- Config ---
@@ -1256,6 +1337,7 @@ func main() {
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/config", handleConfig)
 	mux.HandleFunc("/deliver", handleDeliver)
+	mux.HandleFunc("/receipt", handleReceipt)
 	mux.HandleFunc("/clear", handleDeleteAll)
 	mux.HandleFunc("/read-all", handleReadAll)
 
