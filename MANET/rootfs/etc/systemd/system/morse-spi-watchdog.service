@@ -1,0 +1,12 @@
+[Unit]
+Description=Morse SPI radio chip watchdog (reboot on TX failure)
+After=wpa_supplicant-s1g-wlan2.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/morse-spi-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

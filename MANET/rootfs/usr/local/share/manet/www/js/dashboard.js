@@ -16,6 +16,16 @@ function dashboardActivate() {
         </div>
         <div id="dash-daemons-wrap"></div>
         <div id="dash-applets-wrap"></div>
+        <div class="card" style="margin-top:8px">
+          <div class="card-header">ANDROID APP</div>
+          <div style="padding:10px 14px">
+            <a href="/assets/mesh-ctrl.apk" download="mesh-ctrl.apk" style="display:inline-flex;align-items:center;gap:8px;color:var(--accent);text-decoration:none;font-size:13px;font-weight:600">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Download APK
+            </a>
+            <div style="color:var(--muted);font-size:11px;margin-top:4px">MANET//CTRL with EUD mode</div>
+          </div>
+        </div>
       </div>
 `;
     topoInit(document.getElementById('topo-container'));
@@ -34,6 +44,7 @@ function dashboardUpdate() {
   renderDashNetwork();
   renderDashDaemons();
   renderDashApplets();
+  renderFleetBubble();
 }
 
 function renderDashNetwork() {
@@ -178,6 +189,70 @@ function renderThrottleWarning() {
   banner.className = cls;
   banner.innerHTML = warnings.map(function(w) { return '<div>' + escHtml(w) + '</div>'; }).join('');
   panel.insertBefore(banner, panel.firstChild);
+}
+
+function renderFleetBubble() {
+  var container = document.getElementById('topo-container');
+  if (!container) return;
+  var existing = container.querySelector('.topo-fleet-bubble');
+
+  fetch('/api/admin/status').then(function(r) { return r.json(); }).then(function(d) {
+    var pending = d.pending ? (typeof d.pending === 'string' ? JSON.parse(d.pending) : d.pending) : null;
+    if (!pending) {
+      if (existing) existing.remove();
+      return;
+    }
+
+    var config = pending.config || {};
+    var current = d.current_config || {};
+    var diffs = [];
+    var sensitive = ['admin_password', 'mesh_key', 'lan_ap_key'];
+    for (var k in config) {
+      if (config[k] !== current[k]) {
+        diffs.push({ key: k, val: sensitive.indexOf(k) !== -1 ? '******' : config[k] });
+      }
+    }
+    if (!diffs.length) {
+      if (existing) existing.remove();
+      return;
+    }
+
+    var nodes = d.nodes || [];
+    var version = pending.version || '';
+    var acked = nodes.filter(function(n) { return n.ack === version; }).length;
+    var total = nodes.length;
+    var pct = total > 0 ? Math.round(acked / total * 100) : 0;
+    var activating = !!pending.activate_at;
+
+    var html = '<div class="topo-fleet-title">';
+    html += '<span class="voice-dot ' + (activating ? 'on' : 'off') + '"></span>';
+    html += activating ? 'ACTIVATING' : 'FLEET CONFIG STAGED';
+    html += '</div>';
+    html += '<div class="topo-fleet-diff">';
+    diffs.slice(0, 4).forEach(function(d) {
+      html += '<div class="topo-fleet-diff-row">';
+      html += '<span class="topo-fleet-diff-key">' + escHtml(d.key) + '</span>';
+      html += '<span class="topo-fleet-diff-val">' + escHtml(d.val) + '</span>';
+      html += '</div>';
+    });
+    if (diffs.length > 4) html += '<div style="color:var(--muted)">+' + (diffs.length - 4) + ' more</div>';
+    html += '</div>';
+    html += '<div class="topo-fleet-ack">' + acked + '/' + total;
+    html += '<div class="topo-fleet-ack-bar"><div class="topo-fleet-ack-fill" style="width:' + pct + '%"></div></div>';
+    html += '</div>';
+
+    if (existing) {
+      existing.innerHTML = html;
+    } else {
+      var bubble = document.createElement('div');
+      bubble.className = 'topo-fleet-bubble';
+      bubble.innerHTML = html;
+      bubble.addEventListener('click', function() { window.location.hash = 'fleet'; });
+      container.appendChild(bubble);
+    }
+  }).catch(function() {
+    if (existing) existing.remove();
+  });
 }
 
 function renderDashNodeList(nodes) {
