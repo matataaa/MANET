@@ -148,6 +148,54 @@ func bestOrigForNode(allMACs []string, origMap map[string]BatOriginator) *BatOri
 	return best
 }
 
+// --- System stats ---
+
+func getSystemStats() *SystemStats {
+	s := &SystemStats{}
+
+	// CPU temperature
+	data, err := os.ReadFile("/sys/class/thermal/thermal_zone0/temp")
+	if err == nil {
+		if millideg, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err == nil {
+			t := float64(millideg) / 1000.0
+			s.CPUTemp = &t
+		}
+	}
+
+	// Load averages
+	data, err = os.ReadFile("/proc/loadavg")
+	if err == nil {
+		fields := strings.Fields(string(data))
+		if len(fields) >= 3 {
+			s.LoadAvg[0], _ = strconv.ParseFloat(fields[0], 64)
+			s.LoadAvg[1], _ = strconv.ParseFloat(fields[1], 64)
+			s.LoadAvg[2], _ = strconv.ParseFloat(fields[2], 64)
+		}
+	}
+
+	// Memory
+	data, err = os.ReadFile("/proc/meminfo")
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+			val, _ := strconv.ParseInt(fields[1], 10, 64)
+			switch fields[0] {
+			case "MemTotal:":
+				s.MemTotal = val
+			case "MemFree:":
+				s.MemFree = val
+			case "MemAvailable:":
+				s.MemAvail = val
+			}
+		}
+	}
+
+	return s
+}
+
 // --- System info ---
 
 func getMyMAC() string {

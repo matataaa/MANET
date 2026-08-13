@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -24,6 +26,79 @@ const (
 	bitrate    = 32000
 	encBufSize = 1450
 )
+
+const meshConfFile = "/etc/mesh.conf"
+
+type BeepConfig struct {
+	TXStart bool
+	RXEnd   bool
+}
+
+func loadBeepConfig() BeepConfig {
+	bc := BeepConfig{TXStart: true, RXEnd: true}
+	data, err := os.ReadFile(meshConfFile)
+	if err != nil {
+		return bc
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if k, v, ok := strings.Cut(line, "="); ok {
+			switch strings.TrimSpace(k) {
+			case "voice_beep_tx_start":
+				bc.TXStart = strings.TrimSpace(v) != "n"
+			case "voice_beep_rx_end":
+				bc.RXEnd = strings.TrimSpace(v) != "n"
+			}
+		}
+	}
+	return bc
+}
+
+func generateBeep(beepType string) []int16 {
+	switch beepType {
+	case "tx-start":
+		dur := sampleRate * 80 / 1000
+		samples := make([]int16, dur)
+		ramp := sampleRate / 100
+		for i := range samples {
+			t := float64(i) / float64(sampleRate)
+			gain := 0.15
+			if i < ramp {
+				gain *= float64(i) / float64(ramp)
+			} else if i > dur-ramp*2 {
+				gain *= float64(dur-i) / float64(ramp*2)
+			}
+			samples[i] = int16(math.Sin(2*math.Pi*1200*t) * gain * 32767)
+		}
+		return samples
+	case "rx-end":
+		n := sampleRate * 60 / 1000
+		gap := sampleRate * 10 / 1000
+		samples := make([]int16, n*2+gap)
+		ramp := sampleRate / 100
+		for i := 0; i < n; i++ {
+			t := float64(i) / float64(sampleRate)
+			gain := 0.12
+			if i > n-ramp {
+				gain *= float64(n-i) / float64(ramp)
+			}
+			samples[i] = int16(math.Sin(2*math.Pi*800*t) * gain * 32767)
+		}
+		for i := 0; i < n; i++ {
+			t := float64(i) / float64(sampleRate)
+			gain := 0.12
+			if i > n-ramp {
+				gain *= float64(n-i) / float64(ramp)
+			}
+			samples[n+gap+i] = int16(math.Sin(2*math.Pi*600*t) * gain * 32767)
+		}
+		return samples
+	}
+	return nil
+}
 
 type Config struct {
 	Iface     string
@@ -194,34 +269,6 @@ func run(ctx context.Context, cfg Config) error {
 		playbackRunning.Store(false)
 	}
 
-	// PTT event handler
-	go func() {
-		for {
-			select {
-			case down := <-pttCh:
-				if down {
-					if remoteActive.Load() {
-						log.Println("TX: blocked (half-duplex, remote active)")
-					} else {
-						ensureCapture()
-						broadcasting.Store(true)
-						pttState.setActive(true)
-						pttState.setTX(true)
-						log.Println("TX: start")
-					}
-				} else {
-					broadcasting.Store(false)
-					pttState.setActive(false)
-					pttState.setTX(false)
-					pauseCapture()
-					log.Println("TX: stop")
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
 	// RTP sequence number
 	var seqNum uint16
 	ssrc := uint32(os.Getpid() & 0xFFFFFFFF)
@@ -267,6 +314,61 @@ func run(ctx context.Context, cfg Config) error {
 	var jbMu sync.Mutex
 	jitterBuf := make([][]int16, 0, 32)
 	var jbPlaying atomic.Bool
+
+	// Beep tones for hardware PTT
+	beepCfg := loadBeepConfig()
+	log.Printf("beep config: tx_start=%v rx_end=%v", beepCfg.TXStart, beepCfg.RXEnd)
+
+	playBeep := func(beepType string) {
+		samples := generateBeep(beepType)
+		if len(samples) == 0 {
+			return
+		}
+		ensurePlayback()
+		jbMu.Lock()
+		for i := 0; i < len(samples); i += frameSize {
+			end := i + frameSize
+			if end > len(samples) {
+				end = len(samples)
+			}
+			frame := make([]int16, end-i)
+			copy(frame, samples[i:end])
+			jitterBuf = append(jitterBuf, frame)
+		}
+		jbMu.Unlock()
+	}
+
+	// PTT event handler
+	go func() {
+		for {
+			select {
+			case down := <-pttCh:
+				if down {
+					if remoteActive.Load() {
+						log.Println("TX: blocked (half-duplex, remote active)")
+					} else {
+						pttState.setActive(true)
+						pttState.setTX(true)
+						if beepCfg.TXStart {
+							playBeep("tx-start")
+							time.Sleep(100 * time.Millisecond)
+						}
+						ensureCapture()
+						broadcasting.Store(true)
+						log.Println("TX: start")
+					}
+				} else {
+					broadcasting.Store(false)
+					pttState.setActive(false)
+					pttState.setTX(false)
+					pauseCapture()
+					log.Println("TX: stop")
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	// Callbacks reference captureCh and jitterBuf — safe across device reinit
 	captureCallbacks := malgo.DeviceCallbacks{
@@ -550,7 +652,9 @@ func run(ctx context.Context, cfg Config) error {
 			case <-ticker.C:
 				silenceMs := time.Now().UnixMilli() - lastRxTime.Load()
 				if silenceMs > 500 {
-					remoteActive.Store(false)
+					if remoteActive.Swap(false) && beepCfg.RXEnd {
+						playBeep("rx-end")
+					}
 					pttState.setRX(false)
 				}
 				if silenceMs > 2000 && playbackRunning.Load() {

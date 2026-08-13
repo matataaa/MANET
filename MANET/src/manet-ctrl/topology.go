@@ -111,6 +111,7 @@ func assembleLocalData() LocalData {
 		MeshSSID:   conf["mesh_ssid"],
 		Throttle:   throttle,
 		Network:    network,
+		System:     getSystemStats(),
 	}
 }
 

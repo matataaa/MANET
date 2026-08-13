@@ -162,6 +162,14 @@ type NetworkState struct {
 	NTP           bool   `json:"ntp"`
 }
 
+type SystemStats struct {
+	CPUTemp  *float64   `json:"cpu_temp,omitempty"`
+	LoadAvg  [3]float64 `json:"load_avg"`
+	MemTotal int64      `json:"mem_total_kb"`
+	MemFree  int64      `json:"mem_free_kb"`
+	MemAvail int64      `json:"mem_avail_kb"`
+}
+
 type LocalData struct {
 	Hostname   string            `json:"hostname"`
 	IP         string            `json:"ip"`
@@ -177,6 +185,7 @@ type LocalData struct {
 	MeshSSID   string            `json:"mesh_ssid"`
 	Throttle   *ThrottleInfo     `json:"throttle,omitempty"`
 	Network    *NetworkState     `json:"network,omitempty"`
+	System     *SystemStats      `json:"system,omitempty"`
 }
 
 type BatOriginator struct {

@@ -181,6 +181,26 @@ function hwRenderSystem() {
     rows += hwRow('Throttle Raw', '<span style="font-family:monospace">' + escHtml(t.raw) + '</span>');
   }
 
+  var sys = LOCAL_DATA.system;
+  if (sys) {
+    if (sys.cpu_temp != null) {
+      var tc = sys.cpu_temp;
+      var tColor = tc > 80 ? 'var(--bad)' : tc > 65 ? 'var(--warn)' : 'var(--good)';
+      rows += hwRow('CPU Temp', '<span style="color:' + tColor + '">' + tc.toFixed(1) + ' &deg;C</span>');
+    }
+    if (sys.load_avg) {
+      rows += hwRow('Load Avg', sys.load_avg[0].toFixed(2) + ' / ' + sys.load_avg[1].toFixed(2) + ' / ' + sys.load_avg[2].toFixed(2) + ' <span style="color:var(--muted)">(1/5/15 min)</span>');
+    }
+    if (sys.mem_total_kb) {
+      var usedKb = sys.mem_total_kb - (sys.mem_avail_kb || sys.mem_free_kb || 0);
+      var totalMb = (sys.mem_total_kb / 1024).toFixed(0);
+      var usedMb = (usedKb / 1024).toFixed(0);
+      var pct = ((usedKb / sys.mem_total_kb) * 100).toFixed(0);
+      var mColor = pct > 90 ? 'var(--bad)' : pct > 75 ? 'var(--warn)' : 'var(--good)';
+      rows += hwRow('Memory', '<span style="color:' + mColor + '">' + usedMb + ' / ' + totalMb + ' MB (' + pct + '%)</span>');
+    }
+  }
+
   var sysDot = (t && (t.undervoltage || t.throttled)) ? 'dot-bad' : (t && (t.was_undervoltage || t.was_throttled)) ? 'dot-warn' : 'dot-ok';
   el.innerHTML = '<div class="svc-card">' +
     '<div class="svc-header"><span class="' + sysDot + '"></span><span class="svc-name">Node Info</span></div>' +
