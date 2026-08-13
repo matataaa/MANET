@@ -22,6 +22,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var Version = "dev"
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  16384,
 	WriteBufferSize: 16384,
@@ -432,6 +434,11 @@ func main() {
 	mux.HandleFunc("/api/terminal/exec", requireAuth(apiTerminalExec))
 	mux.HandleFunc("/api/terminal/complete", requireAuth(apiTerminalComplete))
 	mux.HandleFunc("/api/terminal/reboot", requireAuth(apiTerminalReboot))
+
+	// Version
+	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]interface{}{"version": Version})
+	})
 
 	// Auth
 	mux.HandleFunc("/api/auth/status", apiAuthStatus)

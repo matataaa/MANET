@@ -67,10 +67,16 @@ GO_SERVICES=(
     node-update
 )
 
+BUILD_VERSION="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo 'unknown')"
+
 for svc in "${GO_SERVICES[@]}"; do
     echo "Building $svc for linux/arm64..."
+    LDFLAGS="-s -w"
+    if [ "$svc" = "manet-ctrl" ]; then
+        LDFLAGS="-s -w -X main.Version=${BUILD_VERSION}"
+    fi
     (cd "$SRC/$svc" && \
-        GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "$svc" .)
+        GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o "$svc" .)
     install -m 0755 "$SRC/$svc/$svc" "$STAGE/usr/local/bin/$svc"
 done
 

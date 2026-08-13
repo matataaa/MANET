@@ -314,6 +314,10 @@ function openNodeConfig(ip, hostname) {
   booted = true;
   const loader = document.getElementById('boot-loader');
   if (loader) loader.remove();
+  fetch('/api/version').then(r => r.json()).then(d => {
+    var el = document.getElementById('footer-version');
+    if (el && d.version) el.textContent = 'MANET//CTRL ' + d.version;
+  }).catch(function(){});
   routeFromHash();
   pollTimer = setInterval(fetchData, POLL_INTERVAL_MS);
 })();
