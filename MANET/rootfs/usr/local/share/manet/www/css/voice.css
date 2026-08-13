@@ -115,7 +115,7 @@
   color: var(--muted); text-transform: uppercase; letter-spacing: .5px;
 }
 .voice-device-select {
-  flex: 1; padding: 6px 8px; margin-right: 8px; border-radius: 6px;
+  flex: 1; padding: 6px 8px; margin-right: 10px; border-radius: 6px;
   border: 1px solid var(--border2); background: var(--bg);
   color: var(--text); font-family: var(--font); font-size: 12px;
   cursor: pointer;
