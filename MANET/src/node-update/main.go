@@ -77,6 +77,12 @@ func checkAndUpdate(board string) {
 	lastCheck = time.Now()
 	mu.Unlock()
 
+	autoUpdate := strings.ToLower(confValue("auto_update"))
+	if autoUpdate == "n" || autoUpdate == "no" || autoUpdate == "0" {
+		log.Println("OTA disabled (auto_update=n)")
+		return
+	}
+
 	baseURL := confValue("update_url")
 	if baseURL == "" {
 		log.Println("OTA disabled (update_url not set in mesh.conf)")

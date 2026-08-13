@@ -41,6 +41,9 @@ function docsSwitchTab(id) {
   var body = document.getElementById('docs-body');
   var content = DOCS_TABS[id] || '';
   body.innerHTML = content;
+  if (window.location.hash !== '#docs/' + id) {
+    history.replaceState(null, '', '#docs/' + id);
+  }
 }
 
 var DOCS_TABS = {};
@@ -137,6 +140,12 @@ DOCS_TABS.config = [
 '<h4>Services</h4>',
 '<table class="docs-table"><thead><tr><th>Key</th><th>Values</th><th>UI</th><th>Description</th></tr></thead><tbody>',
 '<tr><td><code>battery_monitor</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Enable battery monitoring via Waveshare UPS HAT (E) I2C interface.</td></tr>',
+'</tbody></table>',
+
+'<h4>Updates</h4>',
+'<table class="docs-table"><thead><tr><th>Key</th><th>Values</th><th>UI</th><th>Description</th></tr></thead><tbody>',
+'<tr><td><code>auto_update</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Trigger OTA update check when ethernet carrier is detected and internet is reachable. Default: <code>n</code>.</td></tr>',
+'<tr><td><code>update_url</code></td><td>URL string</td><td>Yes</td><td>Base URL for the OTA update server. The node fetches <code>{url}/manet_version.txt</code> and <code>{url}/{board}-tools.tar.gz</code>. Leave empty to disable OTA entirely.</td></tr>',
 '</tbody></table>',
 
 '<h4>Security</h4>',

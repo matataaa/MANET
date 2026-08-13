@@ -899,6 +899,7 @@ regulatory_domain=${REGULATORY_DOMAIN}
 halow_regulatory_domain=${HALOW_REGULATORY_DOMAIN}
 admin_password=${ADMIN_PW}
 auto_update=${AUTO_UPDATE}
+update_url=
 EOF
 
         # ============================================================

@@ -116,6 +116,10 @@ func assembleAdminStatus() AdminStatus {
 		"voice_rx_channels":    confGet(conf, "voice_rx_channels", "1"),
 		"voice_ptt_mode":       confGet(conf, "voice_ptt_mode", "openvlm"),
 		"dns_servers":          confGet(conf, "dns_servers", "8.8.8.8,8.8.4.4"),
+		"qos_enabled":          confGet(conf, "qos_enabled", "y"),
+		"qos_voice_band":       confGet(conf, "qos_voice_band", "0"),
+		"qos_cot_band":         confGet(conf, "qos_cot_band", "1"),
+		"qos_chat_band":        confGet(conf, "qos_chat_band", "2"),
 	}
 
 	if currentConfig["halow_bw"] == "" {

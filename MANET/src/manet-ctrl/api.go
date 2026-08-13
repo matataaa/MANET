@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -739,6 +740,8 @@ var saveableKeys = map[string]bool{
 	"voice_channel": true, "voice_rx_channels": true,
 	"voice_ptt_mode": true,
 	"dns_servers": true,
+	"qos_enabled": true, "qos_voice_band": true, "qos_cot_band": true, "qos_chat_band": true,
+	"auto_update": true, "update_url": true,
 }
 
 func apiAdminSave(w http.ResponseWriter, r *http.Request) {
@@ -804,6 +807,7 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 
 	// Apply AP settings
 	if updates["lan_ap_ssid"] != "" || updates["lan_ap_key"] != "" {
+		applyHostapdConfig(conf)
 		runCmd(10*time.Second, "systemctl", "restart", "hostapd")
 		applied["ap_restarted"] = true
 	}
@@ -840,6 +844,17 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	if updates["dns_servers"] != "" {
 		applyDNSServers(updates["dns_servers"])
 		applied["dns_applied"] = true
+	}
+
+	// Apply QoS
+	if updates["qos_enabled"] != "" || updates["qos_voice_band"] != "" || updates["qos_cot_band"] != "" || updates["qos_chat_band"] != "" {
+		applyQoSFromConf(conf)
+		applied["qos_applied"] = true
+	}
+
+	if updates["auto_update"] != "" || updates["update_url"] != "" {
+		runCmd(5*time.Second, "systemctl", "reload", "node-update")
+		applied["node_update_reloaded"] = true
 	}
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "saved": saved, "applied": applied})
@@ -1414,13 +1429,12 @@ func applyWPAConfig(conf map[string]string) {
 
 	ssidRE := regexp.MustCompile(`ssid="[^"]*"`)
 	pskRE := regexp.MustCompile(`psk="[^"]*"`)
+	saeRE := regexp.MustCompile(`sae_password="[^"]*"`)
 
+	restartS1G := false
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasPrefix(name, "wpa_supplicant-wlan") || !strings.HasSuffix(name, ".conf") {
-			continue
-		}
-		if strings.Contains(name, "s1g") {
 			continue
 		}
 
@@ -1432,13 +1446,45 @@ func applyWPAConfig(conf map[string]string) {
 		text := string(data)
 		text = ssidRE.ReplaceAllString(text, fmt.Sprintf(`ssid="%s"`, ssid))
 		if key != "" {
-			text = pskRE.ReplaceAllString(text, fmt.Sprintf(`psk="%s"`, key))
+			if strings.Contains(name, "s1g") {
+				text = saeRE.ReplaceAllString(text, fmt.Sprintf(`sae_password="%s"`, key))
+				restartS1G = true
+			} else {
+				text = pskRE.ReplaceAllString(text, fmt.Sprintf(`psk="%s"`, key))
+			}
 		}
 		os.WriteFile(path, []byte(text), 0644)
+		log.Printf("wpa config updated: %s", name)
 	}
 
-	// Restart mesh wpa_supplicant instances
 	runCmd(10*time.Second, "bash", "-c", "systemctl restart 'wpa_supplicant@wlan*.service' 2>/dev/null || true")
+	if restartS1G {
+		runCmd(10*time.Second, "bash", "-c", "systemctl restart 'wpa_supplicant-s1g-wlan*.service' 2>/dev/null || true")
+	}
+}
+
+func applyHostapdConfig(conf map[string]string) {
+	apf := "/etc/hostapd/hostapd.conf"
+	data, err := os.ReadFile(apf)
+	if err != nil {
+		return
+	}
+	text := string(data)
+
+	if apSSID := conf["lan_ap_ssid"]; apSSID != "" {
+		macSuffix := getMACsuffix()
+		fullSSID := apSSID
+		if macSuffix != "" {
+			fullSSID += "-" + macSuffix
+		}
+		text = regexp.MustCompile(`(?m)^ssid=.*`).ReplaceAllString(text, "ssid="+fullSSID)
+	}
+	if apKey := conf["lan_ap_key"]; apKey != "" {
+		text = regexp.MustCompile(`(?m)^wpa_passphrase=.*`).ReplaceAllString(text, "wpa_passphrase="+apKey)
+	}
+
+	os.WriteFile(apf, []byte(text), 0644)
+	log.Printf("hostapd config updated")
 }
 
 func applyMulticastMode(mode string) {

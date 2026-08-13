@@ -54,6 +54,10 @@ function routeFromHash() {
       else openApplet(appletName);
     }, 100);
   }
+  if (tab === 'docs' && sub) {
+    docsActiveTab = sub;
+    if (docsInitialized) docsSwitchTab(sub);
+  }
 }
 
 window.addEventListener('hashchange', routeFromHash);

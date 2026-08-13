@@ -42,7 +42,8 @@ Config keys:
   max_euds_per_node   Max EUD clients per node
   acs                 Auto channel selection (y/n)
   battery_monitor     Battery monitoring (y/n)
-  auto_update         Auto update (y/n)
+  auto_update         Auto update on carrier (y/n)
+  update_url          OTA update server base URL (blank = disabled)
   admin_password      Admin/perf auth key
   gateway             Gateway mode (y/n)
   gateway_nat         NAT masquerade (y/n)
@@ -177,7 +178,8 @@ lan_ap_bw             AP bandwidth (20, 40, 80)
 max_euds_per_node     Max EUD clients per node
 acs                   Auto channel selection (y/n)
 battery_monitor       Battery monitoring (y/n)
-auto_update           Auto update (y/n)
+auto_update           Auto update on carrier (y/n)
+update_url            OTA update server base URL (blank = disabled)
 admin_password        Admin/perf auth key
 gateway               Gateway mode (y/n)
 gateway_nat           NAT masquerade (y/n)

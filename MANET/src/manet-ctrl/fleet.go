@@ -84,6 +84,7 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 		runCmd(5*time.Second, "systemctl", "reload", "gateway-manager")
 	}
 	if updates["lan_ap_ssid"] != "" || updates["lan_ap_key"] != "" {
+		applyHostapdConfig(conf)
 		runCmd(10*time.Second, "systemctl", "restart", "hostapd")
 	}
 	if updates["mesh_ssid"] != "" || updates["mesh_key"] != "" {
@@ -107,6 +108,9 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	}
 	if updates["lan_ap_channel"] != "" || updates["lan_ap_bw"] != "" {
 		runCmd(10*time.Second, "systemctl", "restart", "hostapd")
+	}
+	if updates["qos_enabled"] != "" || updates["qos_voice_band"] != "" || updates["qos_cot_band"] != "" || updates["qos_chat_band"] != "" {
+		applyQoSFromConf(conf)
 	}
 }
 

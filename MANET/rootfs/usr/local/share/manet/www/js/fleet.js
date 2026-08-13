@@ -3,6 +3,10 @@ let fleetData = null;
 let fleetPollTimer = null;
 let fleetEditing = false;
 
+const QOS_BAND_OPTS = [
+  {v:'0',l:'High (Voice)'},{v:'1',l:'Normal'},{v:'2',l:'Low (Bulk)'}
+];
+
 const MESH_FIELDS = [
   { key: 'mesh_ssid', label: 'Mesh SSID', dangerous: true },
   { key: 'mesh_key', label: 'Mesh Key', dangerous: true, type: 'password' },
@@ -14,6 +18,14 @@ const MESH_FIELDS = [
   { key: 'regulatory_domain', label: 'Reg Domain' },
   { key: 'dns_servers', label: 'DNS Servers', hint: 'Comma-separated (e.g. 8.8.8.8,8.8.4.4)' },
   { key: 'admin_password', label: 'Admin Password', type: 'password' },
+  { section: 'QoS' },
+  { key: 'qos_enabled', label: 'QoS Enabled', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
+  { key: 'qos_voice_band', label: 'Voice Priority', type: 'select', options: QOS_BAND_OPTS },
+  { key: 'qos_cot_band', label: 'CoT Priority', type: 'select', options: QOS_BAND_OPTS },
+  { key: 'qos_chat_band', label: 'Chat Priority', type: 'select', options: QOS_BAND_OPTS },
+  { section: 'Updates' },
+  { key: 'auto_update', label: 'Auto Update', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}] },
+  { key: 'update_url', label: 'Update URL', hint: 'Base URL for OTA tarball server (blank = disabled)' },
 ];
 
 const PROFILE_SECTIONS = [
@@ -45,7 +57,7 @@ const PROFILE_SECTIONS = [
   ]},
   { id: 'voice', cat: 'Voice', fields: [
     { key: 'voice_ptt_mode', label: 'PTT Mode', type: 'select', options: [
-      {v:'always',l:'Always On'},{v:'gpio',l:'GPIO Button'},{v:'openvlm',l:'OpenVLM HID'},{v:'vox',l:'VOX (auto)'}
+      {v:'openvlm',l:'OpenVLM HID'},{v:'gpio',l:'GPIO Button'},{v:'always',l:'Always On'},{v:'vox',l:'VOX (auto)'}
     ] },
   ]},
 ];
@@ -142,6 +154,10 @@ function fleetRender() {
   html += '<div class="fleet-section-header">Network Config <span class="fleet-section-sub">shared across all nodes in the mesh</span></div>';
   html += '<div class="fleet-card fleet-card-network">';
   MESH_FIELDS.forEach(function(f) {
+    if (f.section) {
+      html += '<div style="font-size:10px;font-weight:700;color:var(--accent2);margin:10px 0 4px;text-transform:uppercase;letter-spacing:.3px">' + escHtml(f.section) + '</div>';
+      return;
+    }
     var val = meshCfg[f.key] || curCfg[f.key] || '';
     var display = f.type === 'password' && val ? '••••••' : fleetOptLabel(f, val);
     html += '<div class="fleet-field-inline"><span class="fleet-field-label">' + escHtml(f.label) + '</span>';
@@ -297,6 +313,10 @@ function fleetStartEdit() {
   html += '<div class="fleet-card fleet-card-network">';
   html += '<div class="fleet-card-title">Network Config <span style="font-size:10px;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0">(applied to all nodes — no exceptions)</span></div>';
   MESH_FIELDS.forEach(function(f) {
+    if (f.section) {
+      html += '<div style="font-size:10px;font-weight:700;color:var(--accent2);margin:10px 0 4px;text-transform:uppercase;letter-spacing:.3px">' + escHtml(f.section) + '</div>';
+      return;
+    }
     var val = meshCfg[f.key] || curCfg[f.key] || '';
     html += fleetRenderField(f, val, 'mesh-');
   });

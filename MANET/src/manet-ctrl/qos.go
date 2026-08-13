@@ -46,6 +46,27 @@ var defaultQoSRules = []qosRule{
 	{Name: "Mesh Chat", Port: 9800, Band: 2},
 }
 
+func applyQoSFromConf(conf map[string]string) {
+	cfg := loadQoSConfig()
+	if v := conf["qos_enabled"]; v != "" {
+		cfg.Enabled = v == "y" || v == "yes" || v == "true" || v == "1"
+	}
+	bandMap := map[string]string{
+		"Voice":     "qos_voice_band",
+		"CoT":       "qos_cot_band",
+		"Mesh Chat": "qos_chat_band",
+	}
+	for i, rule := range cfg.Rules {
+		if key, ok := bandMap[rule.Name]; ok {
+			if v, err := strconv.Atoi(conf[key]); err == nil && v >= 0 && v <= 2 {
+				cfg.Rules[i].Band = v
+			}
+		}
+	}
+	saveQoSConfig(cfg)
+	applyQoSRules(cfg)
+}
+
 func loadQoSConfig() qosConfig {
 	data, err := os.ReadFile(qosConfPath)
 	if err != nil {

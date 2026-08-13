@@ -102,6 +102,8 @@ function configRenderView(panel, cfg) {
     ]},
     { title: 'Services', fields: [
       { label: 'Battery Monitor', key: 'battery_monitor', yesno: true },
+      { label: 'Auto Update', key: 'auto_update', yesno: true },
+      { label: 'Update URL', key: 'update_url' },
     ]},
     { title: 'Access Point', fields: [
       { label: 'EUD Mode', key: 'eud' },
@@ -192,6 +194,8 @@ function configRenderEdit(panel, cfg) {
       {v:'optimized',l:'Optimized IGMP (10+ nodes)'}
     ], hint: 'Flood sends all multicast to all peers; IGMP uses snooping for selective delivery' },
     { label: 'Battery Monitor', key: 'battery_monitor', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
+    { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Trigger update check when internet is detected' },
+    { label: 'Update URL', key: 'update_url', type: 'text', hint: 'Base URL for OTA tarball server (blank = disabled)' },
     { label: 'Admin Key', key: 'admin_password', type: 'password' },
     { section: 'Gateway' },
     { label: 'Gateway Enabled', key: 'gateway', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}], hint: 'Allow this node to act as a mesh gateway' },
@@ -285,6 +289,7 @@ async function configSave() {
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','mesh_ssid','mesh_key',
     'ipv4_network','regulatory_domain','halow_bw','multicast_mode','battery_monitor','admin_password',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
+    'auto_update','update_url',
     'voice_mic_volume','voice_speaker_volume','voice_channel'];
   const config = {};
   meshFields.forEach(f => {
