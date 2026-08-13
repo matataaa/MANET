@@ -122,6 +122,7 @@ function configRenderView(panel, cfg) {
     ]},
     { title: 'Access', fields: [
       { label: 'Admin Key', key: 'admin_password', masked: true },
+      { label: 'Require Auth', key: 'require_auth', fmt: function(v) { return (v||'').toLowerCase() === 'y' ? 'Yes' : 'No'; } },
     ]},
     { title: 'Voice', voice: true, fields: [
       { label: 'PTT Mode', voiceKey: 'ptt_mode' },
@@ -197,6 +198,7 @@ function configRenderEdit(panel, cfg) {
     { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Trigger update check when internet is detected' },
     { label: 'Update URL', key: 'update_url', type: 'text', hint: 'Base URL for OTA tarball server (blank = disabled)' },
     { label: 'Admin Key', key: 'admin_password', type: 'password' },
+    { label: 'Require Auth', key: 'require_auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },
     { section: 'Gateway' },
     { label: 'Gateway Enabled', key: 'gateway', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}], hint: 'Allow this node to act as a mesh gateway' },
     { label: 'NAT Masquerade', key: 'gateway_nat', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
@@ -287,7 +289,7 @@ function configRenderEdit(panel, cfg) {
 
 async function configSave() {
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','mesh_ssid','mesh_key',
-    'ipv4_network','regulatory_domain','halow_bw','multicast_mode','battery_monitor','admin_password',
+    'ipv4_network','regulatory_domain','halow_bw','multicast_mode','battery_monitor','admin_password','require_auth',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
     'auto_update','update_url',
     'voice_mic_volume','voice_speaker_volume','voice_channel'];

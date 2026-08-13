@@ -245,8 +245,6 @@ function hwRenderPtt() {
   if (active) {
     var details = '<div class="hw-details">';
     details += hwRow('PTT Mode', d.ptt_mode || '--');
-    details += hwRow('PTT Device', d.ptt_device || '--');
-    details += hwRow('Multicast', (d.mcast_addr || '239.69.0.1') + ':' + (d.port || '4370'));
     details += hwRow('Interface', d.interface || 'br0');
     details += hwRow('Uptime', d.uptime || '--');
     details += '</div>';

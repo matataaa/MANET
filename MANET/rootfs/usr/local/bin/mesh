@@ -45,6 +45,7 @@ Config keys:
   auto_update         Auto update on carrier (y/n)
   update_url          OTA update server base URL (blank = disabled)
   admin_password      Admin/perf auth key
+  require_auth        Require auth for write ops (y/n, default: n)
   gateway             Gateway mode (y/n)
   gateway_nat         NAT masquerade (y/n)
   gateway_mss_clamp   MSS clamping (y/n)
@@ -181,6 +182,7 @@ battery_monitor       Battery monitoring (y/n)
 auto_update           Auto update on carrier (y/n)
 update_url            OTA update server base URL (blank = disabled)
 admin_password        Admin/perf auth key
+require_auth          Require auth for write ops (y/n, default: n)
 gateway               Gateway mode (y/n)
 gateway_nat           NAT masquerade (y/n)
 gateway_mss_clamp     MSS clamping (y/n)

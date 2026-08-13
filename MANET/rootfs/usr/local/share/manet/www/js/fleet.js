@@ -18,6 +18,7 @@ const MESH_FIELDS = [
   { key: 'regulatory_domain', label: 'Reg Domain' },
   { key: 'dns_servers', label: 'DNS Servers', hint: 'Comma-separated (e.g. 8.8.8.8,8.8.4.4)' },
   { key: 'admin_password', label: 'Admin Password', type: 'password' },
+  { key: 'require_auth', label: 'Require Auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },
   { section: 'QoS' },
   { key: 'qos_enabled', label: 'QoS Enabled', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
   { key: 'qos_voice_band', label: 'Voice Priority', type: 'select', options: QOS_BAND_OPTS },

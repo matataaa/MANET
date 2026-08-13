@@ -181,17 +181,22 @@ func peerProxyRequest(w http.ResponseWriter, r *http.Request, peerIP, path strin
 
 func apiVoice(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
+		body := readBody(r)
+		action := jsonStr(body, "action", "")
+		if action == "volume" {
+			apiVoiceConfig(w, r, body)
+			return
+		}
 		if !checkAuth(w, r) {
 			return
 		}
-		apiVoiceConfig(w, r)
+		apiVoiceConfig(w, r, body)
 		return
 	}
 	writeJSON(w, 200, getVoiceStatus())
 }
 
-func apiVoiceConfig(w http.ResponseWriter, r *http.Request) {
-	body := readBody(r)
+func apiVoiceConfig(w http.ResponseWriter, r *http.Request, body map[string]interface{}) {
 	action := jsonStr(body, "action", "")
 
 	if action == "start" || action == "stop" || action == "restart" {
@@ -736,7 +741,7 @@ var saveableKeys = map[string]bool{
 	"lan_ap_channel": true, "lan_ap_bw": true,
 	"max_euds_per_node": true, "mesh_ssid": true, "mesh_key": true,
 	"ipv4_network": true, "regulatory_domain": true, "halow_bw": true,
-	"battery_monitor": true, "admin_password": true,
+	"battery_monitor": true, "admin_password": true, "require_auth": true,
 	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
 	"multicast_mode": true,
 	"voice_mic_volume": true, "voice_speaker_volume": true,
@@ -1375,6 +1380,10 @@ func apiTerminalReboot(w http.ResponseWriter, r *http.Request) {
 
 func checkAuth(w http.ResponseWriter, r *http.Request) bool {
 	conf := loadKVFile(MeshConfFile)
+	ra := strings.ToLower(conf["require_auth"])
+	if ra != "y" && ra != "yes" && ra != "1" {
+		return true
+	}
 	pw := getProvisionedPassword(conf)
 	if pw == "" {
 		return true
@@ -1398,8 +1407,9 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 func apiAuthStatus(w http.ResponseWriter, r *http.Request) {
 	conf := loadKVFile(MeshConfFile)
+	ra := strings.ToLower(conf["require_auth"])
 	pw := getProvisionedPassword(conf)
-	required := pw != ""
+	required := pw != "" && (ra == "y" || ra == "yes" || ra == "1")
 	authenticated := !required
 	if required {
 		cookie, err := r.Cookie(PerfAuthCookie)

@@ -314,6 +314,8 @@ func voiceGetChannels(w http.ResponseWriter) {
 			"rx":      rxMap[ch],
 			"tx":      ch == txCh,
 			"active":  active,
+			"addr":    voiceChannelAddr(ch),
+			"port":    voiceChannelPort(ch),
 		}
 	}
 	writeJSON(w, 200, map[string]interface{}{

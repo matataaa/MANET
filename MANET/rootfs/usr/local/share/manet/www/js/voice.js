@@ -133,6 +133,7 @@ function voiceRender() {
     html += '<div class="voice-ch-row" id="voice-ch-row-' + i + '">';
     html += '<span class="voice-ch-num">' + i + '</span>';
     html += '<span class="voice-ch-dot" id="voice-ch-dot-' + i + '"></span>';
+    html += '<span class="voice-ch-mcast" id="voice-ch-mcast-' + i + '">239.69.0.' + i + ':' + (4370 + i - 1) + '</span>';
     html += '<button class="voice-ch-listen" id="voice-ch-rx-' + i + '" onclick="voiceToggleRxChannel(' + i + ')">Listen</button>';
     html += '<button class="voice-ch-tx" id="voice-ch-tx-' + i + '" onclick="voiceSetTxChannel(' + i + ')">TX</button>';
     html += '</div>';
@@ -187,7 +188,6 @@ function voiceRender() {
     var fields = [
       { label: 'Uptime', value: d.uptime || '--' },
       { label: 'PTT Mode', value: d.ptt_mode || '--' },
-      { label: 'Multicast', value: (d.mcast_addr || '239.69.0.1') + ':' + (d.port || '4370') },
       { label: 'Interface', value: d.interface || 'br0' },
     ];
     fields.forEach(function(f) {

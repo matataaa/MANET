@@ -424,12 +424,7 @@ func machineTokenSalt() string {
 }
 
 func getProvisionedPassword(conf map[string]string) string {
-	for _, k := range []string{"admin_password", "radio_password", "lan_ap_key"} {
-		if v := conf[k]; v != "" {
-			return v
-		}
-	}
-	return ""
+	return conf["admin_password"]
 }
 
 func getPerfAuthToken() string {

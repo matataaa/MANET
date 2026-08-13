@@ -150,7 +150,8 @@ DOCS_TABS.config = [
 
 '<h4>Security</h4>',
 '<table class="docs-table"><thead><tr><th>Key</th><th>Values</th><th>UI</th><th>Description</th></tr></thead><tbody>',
-'<tr><td><code>admin_password</code></td><td>string</td><td>Yes</td><td>Password for admin operations (config staging/activation). Leave empty to disable.</td></tr>',
+'<tr><td><code>admin_password</code></td><td>string</td><td>Yes</td><td>Password for admin operations (config staging/activation).</td></tr>',
+'<tr><td><code>require_auth</code></td><td>y / n</td><td>Yes</td><td>Require admin password for write operations. Default: n (disabled).</td></tr>',
 '</tbody></table>',
 ].join('\n');
 

@@ -544,6 +544,7 @@ echo "node_hostname=__NODE_HOSTNAME__" >> /etc/mesh.conf
 echo "auto_update=__AUTO_UPDATE__" >> /etc/mesh.conf
 echo "update_url=" >> /etc/mesh.conf
 echo "admin_password=__ADMIN_PW__" >> /etc/mesh.conf
+echo "require_auth=n" >> /etc/mesh.conf
 
 # Disable the current script so it won't run again at next boot
 systemctl disable mesh-provision

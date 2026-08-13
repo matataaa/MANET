@@ -193,6 +193,10 @@
   border: 1px solid var(--border2); background: var(--bg);
   color: var(--muted); cursor: pointer; transition: all .12s;
 }
+.voice-ch-mcast {
+  font-size: 10px; color: var(--muted); font-family: monospace;
+  white-space: nowrap;
+}
 .voice-ch-listen { margin-left: auto; }
 .voice-ch-listen:hover { border-color: var(--good); color: var(--good); }
 .voice-ch-listen.active {
