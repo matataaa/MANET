@@ -105,6 +105,7 @@ run_no_carrier_cleanup() {
         ip addr flush dev "$ETH_IFACE" 2>/dev/null || true
         ip link set "$ETH_IFACE" nomaster 2>/dev/null || true
         batctl gw_mode client 2>/dev/null || true
+        nft delete table inet filter 2>/dev/null || true
         nft flush chain ip nat postrouting 2>/dev/null || true
         systemctl restart gateway-route-manager.service 2>/dev/null || true
         systemctl restart dnsmasq.service 2>/dev/null || true
@@ -576,7 +577,8 @@ elif [ "$DETECTED_MODE" == "wired-eud" ]; then
     cp /etc/radvd-mesh.conf /etc/radvd.conf
     systemctl restart radvd 2>/dev/null
 
-    # Remove NAT rules
+    # Remove NAT and firewall rules
+    nft delete table inet filter 2>/dev/null || true
     nft flush chain ip nat postrouting 2>/dev/null || true
 
     # Reconfigure ebtables and dnsmasq (handles wlan1 role + end0 addition)

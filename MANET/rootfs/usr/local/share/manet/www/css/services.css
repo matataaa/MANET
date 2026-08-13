@@ -86,6 +86,26 @@
 }
 .svc-reboot-btn:hover { background: var(--bad); color: #fff; border-color: var(--bad); }
 
+.svc-confirm-bar {
+  background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.4);
+  border-radius: 8px; padding: 14px 18px; margin-bottom: 14px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.svc-confirm-msg { color: var(--bad); font-size: 13px; font-weight: 600; }
+.svc-confirm-actions { display: flex; gap: 8px; }
+.svc-confirm-yes {
+  padding: 6px 16px; border-radius: 6px; border: 1px solid var(--bad);
+  background: var(--bad); color: #fff; font-size: 12px; font-weight: 700;
+  cursor: pointer; font-family: var(--font);
+}
+.svc-confirm-yes:hover { filter: brightness(1.15); }
+.svc-confirm-no {
+  padding: 6px 16px; border-radius: 6px; border: 1px solid var(--border);
+  background: transparent; color: var(--muted); font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: var(--font);
+}
+.svc-confirm-no:hover { color: #fff; border-color: var(--muted); }
+
 /* Daemon status cards */
 #daemon-panel { margin-bottom: 16px; }
 .daemon-grid {

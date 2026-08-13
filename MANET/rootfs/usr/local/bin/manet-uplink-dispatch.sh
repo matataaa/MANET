@@ -104,11 +104,13 @@ wait_for_ipv4() {
 }
 
 internet_probe() {
-    local iface="$1"
+    local iface="$1" hits=0
 
-    ping -c 1 -W 2 -I "$iface" 1.1.1.1 >/dev/null 2>&1 && return 0
-    ping -c 1 -W 2 -I "$iface" 8.8.8.8 >/dev/null 2>&1 && return 0
-    return 1
+    ping -c 1 -W 3 -I "$iface" 1.1.1.1 >/dev/null 2>&1 && ((hits++))
+    ping -c 1 -W 3 -I "$iface" 8.8.8.8 >/dev/null 2>&1 && ((hits++))
+    ping -c 1 -W 3 -I "$iface" 9.9.9.9 >/dev/null 2>&1 && ((hits++))
+
+    [ "$hits" -ge 1 ]
 }
 
 candidate_ifaces() {
@@ -213,6 +215,7 @@ configure_firewall() {
 }
 
 clear_firewall() {
+    nft delete table inet filter 2>/dev/null || true
     nft flush chain ip nat postrouting 2>/dev/null || true
     nft flush chain ip mangle forward 2>/dev/null || true
 }
@@ -327,6 +330,19 @@ reconcile() {
 
     if [ -n "$current" ] && [ -f "$STATE_FILE" ] && has_carrier "$current" && internet_probe "$current"; then
         return 0
+    fi
+
+    # Don't demote if promoted recently — transient probe failures are common
+    # during boot or after mesh topology changes
+    if [ -f "$STATE_FILE" ]; then
+        local promoted_at now elapsed
+        promoted_at=$(awk -F= '$1 == "UPDATED_AT" {print $2; exit}' "$STATE_FILE" 2>/dev/null || echo 0)
+        now=$(date +%s)
+        elapsed=$(( now - ${promoted_at:-0} ))
+        if [ "$elapsed" -lt 120 ] && [ -n "$current" ] && has_carrier "$current"; then
+            log "Probe failed but within stabilization window (${elapsed}s < 120s); holding gateway"
+            return 0
+        fi
     fi
 
     working=$(find_working_uplink || true)

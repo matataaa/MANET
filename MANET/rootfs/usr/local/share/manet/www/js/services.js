@@ -116,19 +116,34 @@ function svcRender() {
   });
 }
 
-async function svcReboot() {
-  if (!confirm('Reboot this node? You will lose connection until it comes back up.')) return;
-  try {
-    await authFetch('/api/terminal/reboot', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
-    document.getElementById('tab-services').innerHTML =
-      '<div class="loading-msg" style="padding:40px;text-align:center">' +
-      '<div style="font-size:16px;font-weight:700;margin-bottom:8px">Rebooting...</div>' +
-      '<div style="color:var(--muted)">The node is restarting. This page will reconnect automatically.</div></div>';
-    svcInitialized = false;
-    setTimeout(function poll() {
-      fetch('/api/data').then(function() { location.reload(); }).catch(function() { setTimeout(poll, 3000); });
-    }, 8000);
-  } catch(e) { notify('Reboot Failed', e.message, {type:'error'}); }
+function svcReboot() {
+  var existing = document.querySelector('.svc-confirm-bar');
+  if (existing) existing.remove();
+  var bar = document.createElement('div');
+  bar.className = 'svc-confirm-bar';
+  bar.innerHTML = '<div class="svc-confirm-msg">Reboot this node? You will lose connection until it comes back up.</div>' +
+    '<div class="svc-confirm-actions">' +
+    '<button class="svc-confirm-yes">Reboot</button>' +
+    '<button class="svc-confirm-no">Cancel</button>' +
+    '</div>';
+  var panel = document.getElementById('tab-services');
+  panel.insertBefore(bar, panel.firstChild);
+  bar.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  bar.querySelector('.svc-confirm-no').onclick = function() { bar.remove(); };
+  bar.querySelector('.svc-confirm-yes').onclick = async function() {
+    bar.remove();
+    try {
+      await authFetch('/api/terminal/reboot', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+      panel.innerHTML =
+        '<div class="loading-msg" style="padding:40px;text-align:center">' +
+        '<div style="font-size:16px;font-weight:700;margin-bottom:8px">Rebooting...</div>' +
+        '<div style="color:var(--muted)">The node is restarting. This page will reconnect automatically.</div></div>';
+      svcInitialized = false;
+      setTimeout(function poll() {
+        fetch('/api/data').then(function() { location.reload(); }).catch(function() { setTimeout(poll, 3000); });
+      }, 8000);
+    } catch(e) { notify('Reboot Failed', e.message, {type:'error'}); }
+  };
 }
 
 async function svcDoAction(btn) {

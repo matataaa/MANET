@@ -149,7 +149,7 @@ func pollGateway(cfg Config) {
 }
 
 func pollClient(cfg Config) {
-	if natHasAnyMasquerade() {
+	if natHasAnyMasquerade() || filterTableExists() {
 		clearNAT()
 	}
 
@@ -215,6 +215,11 @@ func natHasAnyMasquerade() bool {
 	return strings.Contains(out, "masquerade")
 }
 
+func filterTableExists() bool {
+	out := runOut("nft", "list", "tables")
+	return strings.Contains(out, "inet filter")
+}
+
 func applyNAT(iface string, mssClamp bool) {
 	run("sysctl", "-q", "net.ipv4.ip_forward=1")
 
@@ -238,9 +243,10 @@ func applyNAT(iface string, mssClamp bool) {
 }
 
 func clearNAT() {
+	run("nft", "delete", "table", "inet", "filter")
 	run("nft", "flush", "chain", "ip", "nat", "postrouting")
 	run("nft", "flush", "chain", "ip", "mangle", "forward")
-	log.Println("NAT rules cleared")
+	log.Println("NAT/firewall rules cleared")
 }
 
 // --- Batman gateway discovery ---
