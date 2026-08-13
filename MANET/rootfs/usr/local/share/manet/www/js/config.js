@@ -204,8 +204,8 @@ function configRenderEdit(panel, cfg) {
     { label: 'DNS Servers', key: 'dns_servers', type: 'text', hint: 'Comma-separated (e.g. 8.8.8.8,8.8.4.4)' },
     { section: 'Voice' },
     { label: 'PTT Mode', key: 'voice_ptt_mode', type: 'select', options: [
-      {v:'always',l:'Always On'},{v:'gpio',l:'GPIO Button'},{v:'openvlm',l:'OpenVLM HID'},{v:'vox',l:'VOX (auto)'}
-    ], voiceKey: 'ptt_mode', fallback: 'always' },
+      {v:'openvlm',l:'OpenVLM HID'},{v:'gpio',l:'GPIO Button'},{v:'always',l:'Always On'},{v:'vox',l:'VOX (auto)'}
+    ], voiceKey: 'ptt_mode', fallback: 'openvlm' },
     { label: 'TX Channel', key: 'voice_channel', type: 'select', options: (function() {
       var opts = []; for (var i = 1; i <= 21; i++) opts.push({v: String(i), l: 'Channel ' + i});
       return opts;
@@ -296,7 +296,7 @@ async function configSave() {
   var chAddr = '239.69.0.' + chVal;
   const voiceCfg = {
     action: 'configure',
-    ptt_mode: (document.getElementById('cfg-f-voice_ptt_mode') || {}).value || 'always',
+    ptt_mode: (document.getElementById('cfg-f-voice_ptt_mode') || {}).value || 'openvlm',
     mcast_addr: chAddr,
     port: (document.getElementById('cfg-f-voice_port') || {}).value || '4370',
     interface: (document.getElementById('cfg-f-voice_iface') || {}).value || 'br0',

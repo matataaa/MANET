@@ -247,16 +247,16 @@ func apiVoiceConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Save and apply volume if provided
+	// Persist PTT mode and volume to mesh.conf
+	confUpdates := map[string]string{"voice_ptt_mode": ptt}
+	if micVol != "" {
+		confUpdates["voice_mic_volume"] = micVol
+	}
+	if spkVol != "" {
+		confUpdates["voice_speaker_volume"] = spkVol
+	}
+	saveKVFile(MeshConfFile, confUpdates)
 	if micVol != "" || spkVol != "" {
-		volUpdates := map[string]string{}
-		if micVol != "" {
-			volUpdates["voice_mic_volume"] = micVol
-		}
-		if spkVol != "" {
-			volUpdates["voice_speaker_volume"] = spkVol
-		}
-		saveKVFile(MeshConfFile, volUpdates)
 		applyVoiceVolume(loadKVFile(MeshConfFile))
 	}
 
