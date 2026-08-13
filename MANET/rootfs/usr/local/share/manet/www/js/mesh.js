@@ -145,8 +145,8 @@ function meshRender() {
       var statusCls = r.stale ? 'mesh-seen-stale' : 'mesh-seen-ok';
       var statusLabel = r.stale ? 'STALE' : 'Active';
       html += '<tr' + (r.stale ? ' style="opacity:.5"' : '') + '>';
-      html += '<td class="mono">' + escHtml(r.name) + '</td>';
-      html += '<td class="mono">' + escHtml(r.ip) + '</td>';
+      html += '<td class="mono">' + (r.ip ? '<a href="https://' + encodeURI(r.ip) + '/" target="_blank" class="node-link">' + escHtml(r.name) + '</a>' : escHtml(r.name)) + '</td>';
+      html += '<td class="mono">' + (r.ip ? '<a href="https://' + encodeURI(r.ip) + '/" target="_blank" class="node-link">' + escHtml(r.ip) + '</a>' : escHtml(r.ip)) + '</td>';
       html += '<td><span class="badge badge-' + (r.type === 'service' ? 'applet-on' : r.type === 'global' ? 'tq-high' : 'tq-mid') + '">' + escHtml(r.type) + '</span></td>';
       html += '<td>' + escHtml(r.source) + '</td>';
       html += '<td><span class="' + statusCls + '">' + statusLabel + '</span></td>';
@@ -155,6 +155,29 @@ function meshRender() {
     html += '</tbody></table>';
   } else {
     html += '<div class="mesh-empty">No DNS records</div>';
+  }
+  html += '</div>';
+
+  html += '</div>';
+
+  // Connected EUDs
+  var euds = d.euds || [];
+  html += '<div class="card mesh-table-card mesh-wide">';
+  html += '<div class="card-header">CONNECTED DEVICES (' + euds.length + ')</div>';
+  if (euds.length) {
+    html += '<table class="mesh-table"><thead><tr><th>Hostname</th><th>IP</th><th>MAC</th><th>Lease</th></tr></thead><tbody>';
+    euds.forEach(function(e) {
+      var lease = e.expires_in != null ? Math.floor(e.expires_in / 60) + 'm' : 'static';
+      html += '<tr>';
+      html += '<td>' + escHtml(e.hostname || '*') + '</td>';
+      html += '<td class="mono">' + escHtml(e.ip) + '</td>';
+      html += '<td class="mono" style="color:var(--muted)">' + escHtml(e.mac) + '</td>';
+      html += '<td>' + lease + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="mesh-empty">No EUD devices connected</div>';
   }
   html += '</div>';
 

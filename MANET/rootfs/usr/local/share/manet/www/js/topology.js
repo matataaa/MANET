@@ -444,6 +444,7 @@ function topoShowNodeMenu(mouseEvent, d) {
   menu.className = 'topo-node-menu';
   menu.innerHTML =
     '<div class="topo-menu-title">' + escHtml(d.hostname || d.id) + '</div>' +
+    (d.ip ? '<button class="topo-menu-btn" data-action="open">Open Portal</button>' : '') +
     '<button class="topo-menu-btn" data-action="config">Config</button>' +
     '<button class="topo-menu-btn" data-action="shell">Shell</button>' +
     '<button class="topo-menu-btn" data-action="logs">Logs</button>' +
@@ -470,7 +471,9 @@ function topoShowNodeMenu(mouseEvent, d) {
     btn.addEventListener('click', function() {
       var action = btn.dataset.action;
       topoDismissMenu();
-      if (action === 'config') {
+      if (action === 'open') {
+        window.open('https://' + d.ip + '/', '_blank');
+      } else if (action === 'config') {
         openNodeConfig(d.ip, d.hostname);
       } else if (action === 'ping') {
         topoStreamPanel(d.ip, d.hostname, 'ping');

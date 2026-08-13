@@ -535,6 +535,7 @@ func apiMesh(w http.ResponseWriter, r *http.Request) {
 		"neighbor_count":    len(neighbors),
 		"gateway_count":     len(gateways),
 		"dns_records":       dnsRecords,
+		"euds":              getEUDs(),
 	})
 }
 

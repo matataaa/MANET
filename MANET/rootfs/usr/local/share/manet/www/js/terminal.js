@@ -133,8 +133,9 @@ function terminalActivate() {
     var p = window._pendingTermTarget;
     window._pendingTermTarget = null;
     var sel = document.getElementById('term-target');
-    sel.value = p.ip;
-    termCurrentTarget = p.ip;
+    var targetVal = (LOCAL_DATA && LOCAL_DATA.ip === p.ip) ? '' : p.ip;
+    sel.value = targetVal;
+    termCurrentTarget = targetVal;
     termSetMode(p.mode === 'logs' ? 'logs' : 'terminal');
   }
 }

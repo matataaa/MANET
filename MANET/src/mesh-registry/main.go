@@ -205,11 +205,18 @@ func saveKnownNodes() {
 }
 
 func writeRegistry(self NodeInfo, peers map[string]NodeInfo) {
-	// Merge current peers into known nodes
+	// Build set of live MACs from current alfred data
+	liveMACs := make(map[string]bool)
+	liveMACs[self.MAC] = true
+	for _, p := range peers {
+		liveMACs[p.MAC] = true
+	}
+
+	// Merge current peers into known nodes, always keyed by NodeInfo.MAC
 	knownNodes[self.MAC] = self
-	for mac, p := range peers {
+	for _, p := range peers {
 		if p.MAC != self.MAC {
-			knownNodes[mac] = p
+			knownNodes[p.MAC] = p
 		}
 	}
 
@@ -219,10 +226,7 @@ func writeRegistry(self NodeInfo, peers map[string]NodeInfo) {
 	fmt.Fprintln(&b)
 
 	for mac, n := range knownNodes {
-		_, isLive := peers[mac]
-		if mac == self.MAC {
-			isLive = true
-		}
+		isLive := liveMACs[mac]
 		if !isLive {
 			n.IsLimp = "false"
 		}

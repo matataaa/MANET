@@ -155,6 +155,7 @@ type NetworkState struct {
 	UpstreamIface string `json:"upstream_iface,omitempty"`
 	EUDMode       string `json:"eud_mode"`
 	EUDActive     bool   `json:"eud_active"`
+	EUDs          []EUD  `json:"euds"`
 	EUDIface      string `json:"eud_iface,omitempty"`
 	APActive      bool   `json:"ap_active"`
 	USBTether     bool   `json:"usb_tether"`

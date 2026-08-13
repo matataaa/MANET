@@ -284,6 +284,7 @@ func getNetworkState() *NetworkState {
 
 	// EUD active: check if any EUDs are connected (br0 has DHCP leases)
 	euds := getEUDs()
+	ns.EUDs = euds
 	ns.EUDActive = len(euds) > 0
 	// Figure out EUD interface
 	if ns.APActive {
