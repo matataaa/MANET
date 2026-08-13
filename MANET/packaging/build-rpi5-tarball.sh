@@ -84,6 +84,18 @@ done
 install_file 0755 "$SRC/mesh-voice/bin/mesh-voice-linux-arm64" "$STAGE/usr/local/bin/mesh-voice"
 
 # ---------------------------------------------------------------------------
+#  Android APK
+# ---------------------------------------------------------------------------
+ANDROID_DIR="$SRC/mesh-ctrl-android"
+if [ -f "$ANDROID_DIR/gradlew" ]; then
+    echo "Building mesh-ctrl APK..."
+    (cd "$ANDROID_DIR" && ./gradlew assembleDebug -q)
+    APK="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
+    install_file 0644 "$APK" "$STAGE/usr/local/share/manet/mesh-ctrl.apk"
+    install_file 0644 "$APK" "$STAGE/usr/local/share/manet/www/assets/mesh-ctrl.apk"
+fi
+
+# ---------------------------------------------------------------------------
 #  Pre-built arm64 binaries (alfred, batctl, wpa_supplicant_s1g, etc.)
 # ---------------------------------------------------------------------------
 install_file 0755 "$BINARIES/alfred"              "$STAGE/usr/sbin/alfred"

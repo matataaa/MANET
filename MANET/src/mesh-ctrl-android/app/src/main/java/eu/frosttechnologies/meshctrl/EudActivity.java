@@ -302,7 +302,7 @@ public class EudActivity extends AppCompatActivity {
             if (txBtn != null) {
                 GradientDrawable txBg = new GradientDrawable();
                 txBg.setCornerRadius(dpToPx(3));
-                txBg.setStroke(dpToPx(1), 0xFF33FF33);
+                txBg.setStroke(dpToPx(2), 0xFF33FF33);
                 if (ch == txChannel) {
                     txBg.setColor(0xFF33FF33);
                     txBtn.setTextColor(0xFF000000);
@@ -318,7 +318,7 @@ public class EudActivity extends AppCompatActivity {
             if (rxBtn != null) {
                 GradientDrawable rxBg = new GradientDrawable();
                 rxBg.setCornerRadius(dpToPx(3));
-                rxBg.setStroke(dpToPx(1), 0xFF33FF33);
+                rxBg.setStroke(dpToPx(2), 0xFF33FF33);
                 if (rxChannels.contains(ch)) {
                     rxBg.setColor(0xFF33FF33);
                     rxBtn.setTextColor(0xFF000000);
