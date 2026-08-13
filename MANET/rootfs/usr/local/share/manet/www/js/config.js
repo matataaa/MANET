@@ -112,6 +112,7 @@ function configRenderView(panel, cfg) {
       { label: 'AP Channel', key: 'lan_ap_channel' },
       { label: 'AP Bandwidth', key: 'lan_ap_bw', fmt: function(v) { return v ? v + ' MHz' : '—'; } },
       { label: 'Max EUDs/Node', key: 'max_euds_per_node' },
+      { label: 'EUD Bandwidth Cap', key: 'eud_bandwidth', fmt: function(v) { return (!v || v === '0') ? 'Unlimited' : v + ' Mbit'; } },
     ]},
     { title: 'Gateway', fields: [
       { label: 'Gateway Enabled', key: 'gateway', yesno: true },
