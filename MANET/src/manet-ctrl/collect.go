@@ -81,6 +81,10 @@ func runBatctlOriginators() (map[string]int, map[string]BatOriginator) {
 		if isBatmanV() {
 			rawTP = raw
 		}
+		// Ignore originators not heard from in over 60 seconds
+		if lastSeen > 60 {
+			continue
+		}
 		if prev, ok := origMap[orig]; !ok || tq > prev.TQ {
 			origMap[orig] = BatOriginator{TQ: tq, RawTP: rawTP, Nexthop: nexthop, Iface: iface, LastSeen: lastSeen}
 		}
@@ -102,6 +106,9 @@ func runBatctlNeighbors() []BatNeighbor {
 	}
 	for _, m := range neighRE.FindAllStringSubmatch(out, -1) {
 		lastSeen, _ := strconv.ParseFloat(m[2], 64)
+		if lastSeen > 60 {
+			continue
+		}
 		raw, _ := strconv.ParseFloat(m[3], 64)
 		neighbors = append(neighbors, BatNeighbor{
 			Iface: m[4], MAC: normMAC(m[1]), TQ: normTQ(raw), LastSeen: lastSeen,

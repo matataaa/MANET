@@ -1,0 +1,7 @@
+[Unit]
+Description=MANET Uplink Reconcile
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/manet-uplink-dispatch.sh reconcile

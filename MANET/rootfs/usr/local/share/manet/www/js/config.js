@@ -110,7 +110,7 @@ function configRenderView(panel, cfg) {
       { label: 'AP SSID', key: 'lan_ap_ssid' },
       { label: 'AP Key', key: 'lan_ap_key', masked: true },
       { label: 'AP Channel', key: 'lan_ap_channel' },
-      { label: 'AP Bandwidth', key: 'lan_ap_bw' },
+      { label: 'AP Bandwidth', key: 'lan_ap_bw', fmt: function(v) { return v ? v + ' MHz' : '—'; } },
       { label: 'Max EUDs/Node', key: 'max_euds_per_node' },
     ]},
     { title: 'Gateway', fields: [
@@ -182,8 +182,15 @@ function configRenderEdit(panel, cfg) {
     { label: 'EUD Mode', key: 'eud', type: 'select', options: ['wired', 'wireless', 'both', 'auto', 'none'] },
     { label: 'AP SSID', key: 'lan_ap_ssid', type: 'text' },
     { label: 'AP Key', key: 'lan_ap_key', type: 'password' },
-    { label: 'AP Channel', key: 'lan_ap_channel', type: 'text', hint: 'e.g. 36 for 5GHz, 6 for 2.4GHz' },
-    { label: 'AP Bandwidth', key: 'lan_ap_bw', type: 'select', options: ['20', '40', '80'] },
+    { label: 'AP Channel', key: 'lan_ap_channel', type: 'select', options: [
+      {v:'',l:'Auto'},
+      {v:'1',l:'1 (2.4 GHz)'},{v:'6',l:'6 (2.4 GHz)'},{v:'11',l:'11 (2.4 GHz)'},
+      {v:'36',l:'36 (5 GHz)'},{v:'40',l:'40 (5 GHz)'},{v:'44',l:'44 (5 GHz)'},{v:'48',l:'48 (5 GHz)'},
+      {v:'149',l:'149 (5 GHz)'},{v:'153',l:'153 (5 GHz)'},{v:'157',l:'157 (5 GHz)'},{v:'161',l:'161 (5 GHz)'}
+    ] },
+    { label: 'AP Bandwidth', key: 'lan_ap_bw', type: 'select', options: [
+      {v:'20',l:'20 MHz'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
+    ] },
     { label: 'Max EUDs/Node', key: 'max_euds_per_node', type: 'text' },
     { label: 'Mesh SSID', key: 'mesh_ssid', type: 'text' },
     { label: 'Mesh Key', key: 'mesh_key', type: 'password' },

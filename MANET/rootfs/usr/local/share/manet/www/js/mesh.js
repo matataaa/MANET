@@ -21,8 +21,9 @@ async function meshFetch() {
 }
 
 function meshNodeLabel(entry) {
-  if (entry.hostname) return escHtml(entry.hostname);
-  return '<span class="mono">' + escHtml(entry.mac) + '</span>';
+  var label = entry.hostname ? escHtml(entry.hostname) : '<span class="mono">' + escHtml(entry.mac) + '</span>';
+  if (entry.ip) return '<a href="https://' + encodeURI(entry.ip) + '/" target="_blank" class="node-link">' + label + '</a>';
+  return label;
 }
 
 function meshNodeSub(entry) {

@@ -163,18 +163,11 @@ func assembleStatusData() StatusData {
 
 	// For batman-visible MACs not in registry, inject cached data so they
 	// keep their hostname/IP instead of appearing as bare MACs.
-	// Skip entries that are too stale (>10 min since last seen).
-	nowUnix := time.Now().Unix()
 	for mac := range origMap {
 		if regMACs[mac] {
 			continue
 		}
 		if cached, ok := getCachedRegistryNode(mac); ok {
-			if ts := cached["LAST_SEEN_TIMESTAMP"]; ts != "" {
-				if seen, err := strconv.ParseInt(ts, 10, 64); err == nil && nowUnix-seen > 600 {
-					continue
-				}
-			}
 			registry[cached["id"]] = cached
 		}
 	}
@@ -183,11 +176,6 @@ func assembleStatusData() StatusData {
 			continue
 		}
 		if cached, ok := getCachedRegistryNode(nb.MAC); ok {
-			if ts := cached["LAST_SEEN_TIMESTAMP"]; ts != "" {
-				if seen, err := strconv.ParseInt(ts, 10, 64); err == nil && nowUnix-seen > 600 {
-					continue
-				}
-			}
 			registry[cached["id"]] = cached
 		}
 	}
@@ -541,30 +529,22 @@ func assembleStatusData() StatusData {
 		}
 	}
 
-	// Remove nodes offline for more than 10 minutes (no batman visibility, old timestamp)
-	activeNodeIDs := make(map[string]bool)
-	var activeNodes []Node
+	// Keep all nodes (UI greys out stale ones), but prune edges for offline nodes
+	onlineIDs := make(map[string]bool)
 	for _, n := range nodes {
-		keep := n.IsMe || n.TQ != nil || n.IsDirect
-		if !keep && n.LastSeen != "" {
-			if seen, err := strconv.ParseInt(n.LastSeen, 10, 64); err == nil {
-				keep = (nowUnix - seen) < 600
-			}
-		}
-		if keep {
-			activeNodes = append(activeNodes, n)
-			activeNodeIDs[n.ID] = true
+		if n.IsMe || n.TQ != nil || n.IsDirect {
+			onlineIDs[n.ID] = true
 		}
 	}
 	var activeEdges []Edge
 	for _, e := range edges {
-		if activeNodeIDs[e.Source] && activeNodeIDs[e.Target] {
+		if onlineIDs[e.Source] && onlineIDs[e.Target] {
 			activeEdges = append(activeEdges, e)
 		}
 	}
 
 	return StatusData{
-		Nodes:        activeNodes,
+		Nodes:        nodes,
 		MyMAC:        myMAC,
 		MyHostname:   myHostname,
 		MyIP:         myIP,

@@ -813,11 +813,31 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		applied["gateway_reloaded"] = true
 	}
 
+	// Apply EUD mode changes
+	if updates["eud"] != "" {
+		eud := conf["eud"]
+		if eud == "wireless" || eud == "both" || eud == "auto" {
+			runCmd(5*time.Second, "systemctl", "enable", "hostapd")
+			runCmd(5*time.Second, "systemctl", "start", "hostapd")
+		} else if eud == "wired" || eud == "none" {
+			runCmd(5*time.Second, "systemctl", "stop", "hostapd")
+		}
+		applied["eud_mode_applied"] = true
+	}
+
 	// Apply AP settings
-	if updates["lan_ap_ssid"] != "" || updates["lan_ap_key"] != "" {
+	apChanged := updates["lan_ap_ssid"] != "" || updates["lan_ap_key"] != "" ||
+		updates["lan_ap_channel"] != "" || updates["lan_ap_bw"] != ""
+	if apChanged {
 		applyHostapdConfig(conf)
 		runCmd(10*time.Second, "systemctl", "restart", "hostapd")
 		applied["ap_restarted"] = true
+	}
+
+	// Apply DHCP pool changes
+	if updates["max_euds_per_node"] != "" || updates["ipv4_network"] != "" {
+		runCmd(10*time.Second, "systemctl", "restart", "mesh-manager")
+		applied["mesh_manager_restarted"] = true
 	}
 
 	// Apply mesh key/SSID changes to wpa_supplicant configs
@@ -1534,6 +1554,22 @@ func applyHostapdConfig(conf map[string]string) {
 	}
 	if apKey := conf["lan_ap_key"]; apKey != "" {
 		text = regexp.MustCompile(`(?m)^wpa_passphrase=.*`).ReplaceAllString(text, "wpa_passphrase="+apKey)
+	}
+	if apCh := conf["lan_ap_channel"]; apCh != "" {
+		text = regexp.MustCompile(`(?m)^channel=.*`).ReplaceAllString(text, "channel="+apCh)
+	}
+	if apBw := conf["lan_ap_bw"]; apBw != "" {
+		bwInt, _ := strconv.Atoi(apBw)
+		if bwInt >= 40 {
+			text = regexp.MustCompile(`(?m)^#?ht_capab=.*`).ReplaceAllString(text, "ht_capab=[HT40+][SHORT-GI-40]")
+		} else {
+			text = regexp.MustCompile(`(?m)^ht_capab=.*`).ReplaceAllString(text, "#ht_capab=")
+		}
+		if bwInt >= 80 {
+			text = regexp.MustCompile(`(?m)^#?vht_oper_chwidth=.*`).ReplaceAllString(text, "vht_oper_chwidth=1")
+		} else if regexp.MustCompile(`(?m)^vht_oper_chwidth=`).MatchString(text) {
+			text = regexp.MustCompile(`(?m)^vht_oper_chwidth=.*`).ReplaceAllString(text, "vht_oper_chwidth=0")
+		}
 	}
 
 	os.WriteFile(apf, []byte(text), 0644)

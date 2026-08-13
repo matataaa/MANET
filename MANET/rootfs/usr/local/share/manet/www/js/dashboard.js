@@ -287,7 +287,7 @@ function renderDashNodeList(nodes) {
     const uptimeLine = n.uptime ? '<span class="node-uptime">' + escHtml(n.uptime) + '</span>' : '';
 
     return '<div class="' + cls + '">' +
-      '<div class="node-name">' + escHtml(n.hostname || n.mac) + ' ' + tqBadge + '</div>' +
+      '<div class="node-name">' + (n.ip ? '<a href="https://' + encodeURI(n.ip) + '/" target="_blank" class="node-link">' + escHtml(n.hostname || n.mac) + '</a>' : escHtml(n.hostname || n.mac)) + ' ' + tqBadge + '</div>' +
       '<div class="node-ip">' + ipLine + (uptimeLine && ipLine ? ' &middot; ' : '') + uptimeLine + '</div>' +
       '<div class="node-meta">' + badges.join('') + offline + '</div>' +
       bar +

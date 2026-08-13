@@ -278,10 +278,11 @@ function fleetRenderNodes(nodes, pending) {
   if (version) html += '<th>ACK</th>';
   html += '</tr>';
   nodes.forEach(function(n) {
-    html += '<tr><td>' + escHtml(n.hostname || '—') + '</td>';
+    html += '<tr><td>' + (n.ip ? '<a href="https://' + encodeURI(n.ip) + '/" target="_blank" class="node-link">' + escHtml(n.hostname || '—') + '</a>' : escHtml(n.hostname || '—')) + '</td>';
     html += '<td>' + escHtml(n.ip || '—') + '</td>';
     html += '<td>' + escHtml(n.profile || 'default') + '</td>';
-    html += '<td>' + escHtml(n.node_state || '—') + '</td>';
+    var stateClass = (n.node_state === 'OFFLINE') ? ' class="fleet-state-offline"' : '';
+    html += '<td' + stateClass + '>' + escHtml(n.node_state || '—') + '</td>';
     if (version) {
       var acked = n.ack === version;
       html += '<td class="' + (acked ? 'fleet-ack-yes' : 'fleet-ack-no') + '">' + (acked ? 'Yes' : 'No') + '</td>';

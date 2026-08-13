@@ -22,6 +22,7 @@ const (
 	alfredType   = "68"
 	registryFile = "/var/run/mesh_node_registry"
 	stateFile    = "/var/lib/manet/state.json"
+	nodesFile    = "/var/lib/manet/known_nodes.json"
 	confFile     = "/etc/mesh.conf"
 	appletsDir   = "/usr/local/share/manet/applets"
 	interval     = 15 * time.Second
@@ -62,6 +63,8 @@ type NodeInfo struct {
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime)
 	log.Println("mesh-registry starting")
+
+	loadKnownNodes()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -173,17 +176,57 @@ func unescapeAlfred(s string) string {
 	return s
 }
 
+var knownNodes = make(map[string]NodeInfo)
+
+func loadKnownNodes() {
+	data, err := os.ReadFile(nodesFile)
+	if err != nil {
+		return
+	}
+	var nodes map[string]NodeInfo
+	if json.Unmarshal(data, &nodes) == nil {
+		knownNodes = nodes
+		log.Printf("loaded %d known nodes from disk", len(nodes))
+	}
+}
+
+func saveKnownNodes() {
+	data, err := json.Marshal(knownNodes)
+	if err != nil {
+		log.Printf("marshal known nodes: %v", err)
+		return
+	}
+	tmp := nodesFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		log.Printf("write known nodes: %v", err)
+		return
+	}
+	os.Rename(tmp, nodesFile)
+}
+
 func writeRegistry(self NodeInfo, peers map[string]NodeInfo) {
+	// Merge current peers into known nodes
+	knownNodes[self.MAC] = self
+	for mac, p := range peers {
+		if p.MAC != self.MAC {
+			knownNodes[mac] = p
+		}
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Mesh Node Registry - Generated %s\n", time.Now().Format(time.RFC1123))
 	fmt.Fprintln(&b, "# Sourced by other scripts to get network state.")
 	fmt.Fprintln(&b)
 
-	writeNode(&b, self)
-	for _, p := range peers {
-		if p.MAC != self.MAC {
-			writeNode(&b, p)
+	for mac, n := range knownNodes {
+		_, isLive := peers[mac]
+		if mac == self.MAC {
+			isLive = true
 		}
+		if !isLive {
+			n.IsLimp = "false"
+		}
+		writeNodeWithState(&b, n, isLive)
 	}
 
 	tmp := registryFile + ".tmp"
@@ -192,9 +235,10 @@ func writeRegistry(self NodeInfo, peers map[string]NodeInfo) {
 		return
 	}
 	os.Rename(tmp, registryFile)
+	saveKnownNodes()
 }
 
-func writeNode(b *strings.Builder, n NodeInfo) {
+func writeNodeWithState(b *strings.Builder, n NodeInfo, isLive bool) {
 	if n.MAC == "" {
 		return
 	}
@@ -220,7 +264,11 @@ func writeNode(b *strings.Builder, n NodeInfo) {
 	w("DATA_CHANNEL_5_0", n.Ch5G)
 	w("IS_IN_LIMP_MODE", n.IsLimp)
 	w("LAST_SEEN_TIMESTAMP", n.Timestamp)
-	w("NODE_STATE", "ACTIVE")
+	state := "ACTIVE"
+	if !isLive {
+		state = "OFFLINE"
+	}
+	w("NODE_STATE", state)
 	w("APPLETS", n.Applets)
 	w("HALOW_TX_MCS", n.HalowTxMCS)
 	w("HALOW_RX_MCS", n.HalowRxMCS)

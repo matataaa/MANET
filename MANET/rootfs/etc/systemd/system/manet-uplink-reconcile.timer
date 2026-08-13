@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically reconcile MANET uplink/gateway state
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=300
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

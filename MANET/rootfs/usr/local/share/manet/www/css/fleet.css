@@ -133,3 +133,4 @@
 .fleet-nodes-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .fleet-ack-yes { color: var(--good, #22c55e); font-weight: 600; }
 .fleet-ack-no { color: var(--bad, #ef4444); font-weight: 600; }
+.fleet-state-offline { color: var(--dim, #666); font-style: italic; }

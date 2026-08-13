@@ -121,7 +121,7 @@ function nodesRender() {
       (n.last_seen ? '<span style="color:var(--good)">' + fmtAge(n.last_seen, DATA.timestamp) + '</span>' : '--');
 
     return '<tr>' +
-      '<td class="col-host">' + escHtml(n.hostname || n.id) + '</td>' +
+      '<td class="col-host">' + (n.ip ? '<a href="https://' + encodeURI(n.ip) + '/" target="_blank" class="node-link">' + escHtml(n.hostname || n.id) + '</a>' : escHtml(n.hostname || n.id)) + '</td>' +
       '<td>' + escHtml(n.ip || '--') + '</td>' +
       '<td style="color:var(--muted)">' + escHtml((n.hostname || '') + '.mesh') + '</td>' +
       '<td class="col-tq">' + tqCell + '</td>' +

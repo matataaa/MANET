@@ -241,7 +241,8 @@ function topoUpdate(data) {
     .attr('text-anchor', 'middle')
     .style('font-size', '11px').style('font-weight', '800')
     .style('font-family', 'Lato, Arial, sans-serif')
-    .style('pointer-events', 'none');
+    .style('cursor', 'pointer').style('pointer-events', 'auto')
+    .on('click', function(ev, d) { if (d.ip) window.open('https://' + d.ip + '/', '_blank'); });
 
   nodeEnter.append('text')
     .attr('class', 'topo-ip')
@@ -286,7 +287,7 @@ function topoUpdate(data) {
   nodeAll.select('.topo-label')
     .text(function(d) { return d.hostname || d.id; })
     .attr('dy', function(d) { return d.r + 36; })
-    .attr('fill', '#fff').style('font-size', '11px');
+    .attr('fill', function(d) { return d.ip ? '#00928f' : '#fff'; }).style('font-size', '11px');
 
   nodeAll.select('.topo-ip')
     .text(function(d) { return d.ip || ''; })
