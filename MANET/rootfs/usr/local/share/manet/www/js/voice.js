@@ -1,5 +1,59 @@
+// --- Radio beep tones ---
+var voiceBeepPrefs = {
+  txStart: localStorage.getItem('voice_beep_tx_start') !== 'false',
+  rxEnd: localStorage.getItem('voice_beep_rx_end') !== 'false'
+};
+
+function voiceBeepSave() {
+  localStorage.setItem('voice_beep_tx_start', voiceBeepPrefs.txStart);
+  localStorage.setItem('voice_beep_rx_end', voiceBeepPrefs.rxEnd);
+}
+
+function voiceBeep(type) {
+  try {
+    var ctx = new AudioContext();
+    var g = ctx.createGain();
+    g.connect(ctx.destination);
+
+    if (type === 'tx-start') {
+      var o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = 1200;
+      g.gain.setValueAtTime(0.15, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+      o.connect(g);
+      o.start(ctx.currentTime);
+      o.stop(ctx.currentTime + 0.08);
+    } else if (type === 'rx-end') {
+      var o1 = ctx.createOscillator();
+      o1.type = 'sine';
+      o1.frequency.value = 800;
+      var g1 = ctx.createGain();
+      g1.gain.setValueAtTime(0.12, ctx.currentTime);
+      g1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.06);
+      o1.connect(g1); g1.connect(ctx.destination);
+      o1.start(ctx.currentTime);
+      o1.stop(ctx.currentTime + 0.06);
+
+      var o2 = ctx.createOscillator();
+      o2.type = 'sine';
+      o2.frequency.value = 600;
+      var g2 = ctx.createGain();
+      g2.gain.setValueAtTime(0.12, ctx.currentTime + 0.07);
+      g2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.14);
+      o2.connect(g2); g2.connect(ctx.destination);
+      o2.start(ctx.currentTime + 0.07);
+      o2.stop(ctx.currentTime + 0.14);
+    }
+    setTimeout(function() { ctx.close(); }, 300);
+  } catch(e) {}
+}
+
 let voiceInitialized = false;
 let voiceData = null;
+let voicePrevHwTx = false;
+let voicePrevHwRx = false;
+let voicePrevWebRx = false;
 let voiceClient = null;
 let voicePollTimer = null;
 let voiceChannelTimer = null;
@@ -8,11 +62,20 @@ let voiceSelectedInput = '';
 let voiceSelectedOutput = '';
 let voiceChannelData = null;
 
+function voiceLoadBeepPrefs() {
+  fetch('/api/data').then(function(r) { return r.json(); }).then(function(d) {
+    var cfg = d.config || {};
+    if (cfg.voice_beep_tx_start) voiceBeepPrefs.txStart = cfg.voice_beep_tx_start !== 'n';
+    if (cfg.voice_beep_rx_end) voiceBeepPrefs.rxEnd = cfg.voice_beep_rx_end !== 'n';
+  }).catch(function() {});
+}
+
 function voiceActivate() {
   var panel = document.getElementById('tab-voice');
   if (!voiceInitialized) {
     panel.innerHTML = '<div class="loading-msg">Loading voice...</div>';
     voiceInitialized = true;
+    voiceLoadBeepPrefs();
   }
   voiceEnumerateDevices();
   voiceFetch();
@@ -264,7 +327,7 @@ function voiceUpdateHWIndicators() {
     label.textContent = 'SERVICE OFF';
   }
 
-  // TX/RX
+  // TX/RX with beep state tracking
   var txDot = document.getElementById('hw-tx-dot');
   var txLabel = document.getElementById('hw-tx-label');
   var rxDot = document.getElementById('hw-rx-dot');
@@ -273,6 +336,11 @@ function voiceUpdateHWIndicators() {
   if (txLabel) txLabel.textContent = d.tx ? 'TX PTT' : 'TX PTT Idle';
   if (rxDot) rxDot.className = 'voice-dot ' + (d.rx ? 'rx' : 'off');
   if (rxLabel) rxLabel.textContent = d.rx ? 'RX PTT' : 'RX PTT Silent';
+
+  if (d.tx && !voicePrevHwTx && voiceBeepPrefs.txStart) voiceBeep('tx-start');
+  if (!d.rx && voicePrevHwRx && voiceBeepPrefs.rxEnd) voiceBeep('rx-end');
+  voicePrevHwTx = !!d.tx;
+  voicePrevHwRx = !!d.rx;
 }
 
 function voiceBindPTT() {
@@ -430,7 +498,11 @@ async function voiceClientStart() {
         voiceUpdateClientIndicators();
         clearTimeout(rxTimeout);
         rxTimeout = setTimeout(function() {
-          if (voiceClient) { voiceClient.receiving = false; voiceUpdateClientIndicators(); }
+          if (voiceClient) {
+            voiceClient.receiving = false;
+            voiceUpdateClientIndicators();
+            if (voiceBeepPrefs.rxEnd) voiceBeep('rx-end');
+          }
         }, 500);
       }
     };
@@ -487,8 +559,10 @@ function voiceClientCleanup() {
 
 function voiceClientPTT(down) {
   if (!voiceClient || !voiceClient.connected) return;
+  var wasTransmitting = voiceClient.transmitting;
   voiceClient.transmitting = down;
   voiceClient.setCaptureActive(down);
+  if (down && !wasTransmitting && voiceBeepPrefs.txStart) voiceBeep('tx-start');
   voiceUpdateClientIndicators();
 }
 

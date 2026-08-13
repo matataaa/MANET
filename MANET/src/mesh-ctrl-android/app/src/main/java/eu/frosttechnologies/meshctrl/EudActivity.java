@@ -659,12 +659,36 @@ public class EudActivity extends AppCompatActivity {
         StringBuilder sb = new StringBuilder();
         String voiceState = "--", pttState = "--";
         if (apiVoice != null) {
-            voiceState = apiVoice.optBoolean("running", false) ? "ACTIVE" : "STOPPED";
+            voiceState = apiVoice.optBoolean("active", false) ? "ACTIVE" : "STOPPED";
             pttState = apiVoice.optBoolean("ptt_active", false) ? "TX ■" : "RX";
         }
         sb.append(row("VOICE", voiceState + "  " + pttState));
+        sb.append(row("TX CH", String.valueOf(txChannel)));
+
+        StringBuilder rxStr = new StringBuilder();
+        for (int c : rxChannels) {
+            if (rxStr.length() > 0) rxStr.append(",");
+            rxStr.append(c);
+        }
+        sb.append(row("RX CH", rxStr.length() > 0 ? rxStr.toString() : "--"));
         sb.append(row("MIC", micVolume + "%"));
         sb.append(row("VOL", spkVolume + "%"));
+
+        if (apiChannels != null) {
+            JSONArray chArr = apiChannels.optJSONArray("channels");
+            if (chArr != null) {
+                StringBuilder active = new StringBuilder();
+                for (int i = 0; i < chArr.length(); i++) {
+                    JSONObject ch = chArr.optJSONObject(i);
+                    if (ch != null && ch.optBoolean("active", false)) {
+                        if (active.length() > 0) active.append(",");
+                        active.append(ch.optInt("channel"));
+                    }
+                }
+                sb.append(row("ACTV", active.length() > 0 ? active.toString() : "NONE"));
+            }
+        }
+
         sb.append(row("CHAT", chatUnread > 0 ? chatUnread + " UNREAD" : "0 UNREAD"));
         return sb.toString();
     }

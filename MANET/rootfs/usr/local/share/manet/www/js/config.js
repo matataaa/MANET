@@ -131,6 +131,8 @@ function configRenderView(panel, cfg) {
       { label: 'Speaker Volume', key: 'voice_speaker_volume', fmt: function(v) { return (v || '80') + '%'; } },
       { label: 'Port', voiceKey: 'port', fallback: '4370' },
       { label: 'Interface', voiceKey: 'interface', fallback: 'br0' },
+      { label: 'TX Beep', key: 'voice_beep_tx_start', fmt: function(v) { return (v||'').toLowerCase() === 'n' ? 'Off' : 'On'; } },
+      { label: 'RX End Beep', key: 'voice_beep_rx_end', fmt: function(v) { return (v||'').toLowerCase() === 'n' ? 'Off' : 'On'; } },
     ]},
   ];
 
@@ -220,6 +222,8 @@ function configRenderEdit(panel, cfg) {
     { label: 'Speaker Volume', key: 'voice_speaker_volume', type: 'range', min: 0, max: 100 },
     { label: 'Port', key: 'voice_port', type: 'text', voiceKey: 'port', fallback: '4370' },
     { label: 'Interface', key: 'voice_iface', type: 'text', voiceKey: 'interface', fallback: 'br0' },
+    { label: 'TX Beep', key: 'voice_beep_tx_start', type: 'select', options: [{v:'y',l:'On'},{v:'n',l:'Off'}] },
+    { label: 'RX End Beep', key: 'voice_beep_rx_end', type: 'select', options: [{v:'y',l:'On'},{v:'n',l:'Off'}] },
   ];
 
   let html = '<div class="card"><div class="cfg-section-title">Edit Configuration' + (configTarget ? ' — ' + escHtml(configTarget) : '') + '</div>';
@@ -292,7 +296,8 @@ async function configSave() {
     'ipv4_network','regulatory_domain','halow_bw','multicast_mode','battery_monitor','admin_password','require_auth',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
     'auto_update','update_url',
-    'voice_mic_volume','voice_speaker_volume','voice_channel'];
+    'voice_mic_volume','voice_speaker_volume','voice_channel',
+    'voice_beep_tx_start','voice_beep_rx_end'];
   const config = {};
   meshFields.forEach(f => {
     const el = document.getElementById('cfg-f-' + f);

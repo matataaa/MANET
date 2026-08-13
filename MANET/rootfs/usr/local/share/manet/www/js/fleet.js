@@ -60,6 +60,8 @@ const PROFILE_SECTIONS = [
     { key: 'voice_ptt_mode', label: 'PTT Mode', type: 'select', options: [
       {v:'openvlm',l:'OpenVLM HID'},{v:'gpio',l:'GPIO Button'},{v:'always',l:'Always On'},{v:'vox',l:'VOX (auto)'}
     ] },
+    { key: 'voice_beep_tx_start', label: 'TX Beep', type: 'select', options: [{v:'y',l:'On'},{v:'n',l:'Off'}] },
+    { key: 'voice_beep_rx_end', label: 'RX End Beep', type: 'select', options: [{v:'y',l:'On'},{v:'n',l:'Off'}] },
   ]},
 ];
 
