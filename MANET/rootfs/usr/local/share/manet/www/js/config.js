@@ -179,7 +179,21 @@ function configRenderView(panel, cfg) {
 
 function configRenderEdit(panel, cfg) {
   const fields = [
+    { section: 'Node' },
     { label: 'Node Hostname', key: 'node_hostname', type: 'text', hint: 'Prefix — full hostname: {this}-{ssid}-{mac}', preview: true },
+    { section: 'Mesh Settings' },
+    { label: 'Mesh SSID', key: 'mesh_ssid', type: 'text' },
+    { label: 'Mesh Key', key: 'mesh_key', type: 'password' },
+    { label: 'IPv4 Network', key: 'ipv4_network', type: 'text' },
+    { label: 'Regulatory Domain', key: 'regulatory_domain', type: 'select', options: ['US', 'EU', 'JP', 'AU'] },
+    { label: 'HaLow Bandwidth', key: 'halow_bw', type: 'select', options: [
+      {v:'1MHz',l:'1 MHz'},{v:'2MHz',l:'2 MHz'},{v:'4MHz',l:'4 MHz'},{v:'8MHz',l:'8 MHz'}
+    ], hint: 'Primary channel width for 802.11ah mesh' },
+    { label: 'Multicast Mode', key: 'multicast_mode', type: 'select', options: [
+      {v:'flood',l:'Flood (recommended ≤10 nodes)'},
+      {v:'optimized',l:'Optimized IGMP (10+ nodes)'}
+    ], hint: 'Flood sends all multicast to all peers; IGMP uses snooping for selective delivery' },
+    { section: 'Access Point' },
     { label: 'EUD Mode', key: 'eud', type: 'select', options: ['wired', 'wireless', 'both', 'auto', 'none'] },
     { label: 'AP SSID', key: 'lan_ap_ssid', type: 'text' },
     { label: 'AP Key', key: 'lan_ap_key', type: 'password' },
@@ -197,22 +211,10 @@ function configRenderEdit(panel, cfg) {
       {v:'0',l:'Unlimited'},{v:'1',l:'1 Mbit'},{v:'2',l:'2 Mbit'},{v:'5',l:'5 Mbit'},
       {v:'10',l:'10 Mbit'},{v:'20',l:'20 Mbit'},{v:'50',l:'50 Mbit'},{v:'100',l:'100 Mbit'}
     ], hint: 'Per-device download limit for connected EUDs' },
-    { label: 'Mesh SSID', key: 'mesh_ssid', type: 'text' },
-    { label: 'Mesh Key', key: 'mesh_key', type: 'password' },
-    { label: 'IPv4 Network', key: 'ipv4_network', type: 'text' },
-    { label: 'Regulatory Domain', key: 'regulatory_domain', type: 'select', options: ['US', 'EU', 'JP', 'AU'] },
-    { label: 'HaLow Bandwidth', key: 'halow_bw', type: 'select', options: [
-      {v:'1MHz',l:'1 MHz'},{v:'2MHz',l:'2 MHz'},{v:'4MHz',l:'4 MHz'},{v:'8MHz',l:'8 MHz'}
-    ], hint: 'Primary channel width for 802.11ah mesh' },
-    { label: 'Multicast Mode', key: 'multicast_mode', type: 'select', options: [
-      {v:'flood',l:'Flood (recommended ≤10 nodes)'},
-      {v:'optimized',l:'Optimized IGMP (10+ nodes)'}
-    ], hint: 'Flood sends all multicast to all peers; IGMP uses snooping for selective delivery' },
+    { section: 'Services' },
     { label: 'Battery Monitor', key: 'battery_monitor', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Trigger update check when internet is detected' },
     { label: 'Update URL', key: 'update_url', type: 'text', hint: 'Base URL for OTA tarball server (blank = disabled)' },
-    { label: 'Admin Key', key: 'admin_password', type: 'password' },
-    { label: 'Require Auth', key: 'require_auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },
     { section: 'Gateway' },
     { label: 'Gateway Enabled', key: 'gateway', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}], hint: 'Allow this node to act as a mesh gateway' },
     { label: 'NAT Masquerade', key: 'gateway_nat', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
@@ -222,6 +224,9 @@ function configRenderEdit(panel, cfg) {
       {v:'20M/20M',l:'20M/20M'},{v:'50M/50M',l:'50M/50M'},{v:'100M/100M',l:'100M/100M'}
     ] },
     { label: 'DNS Servers', key: 'dns_servers', type: 'text', hint: 'Comma-separated (e.g. 8.8.8.8,8.8.4.4)' },
+    { section: 'Access' },
+    { label: 'Admin Key', key: 'admin_password', type: 'password' },
+    { label: 'Require Auth', key: 'require_auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },
     { section: 'Voice' },
     { label: 'PTT Mode', key: 'voice_ptt_mode', type: 'select', options: [
       {v:'openvlm',l:'OpenVLM HID'},{v:'gpio',l:'GPIO Button'},{v:'always',l:'Always On'},{v:'vox',l:'VOX (auto)'}
@@ -238,7 +243,7 @@ function configRenderEdit(panel, cfg) {
     { label: 'RX End Beep', key: 'voice_beep_rx_end', type: 'select', options: [{v:'y',l:'On'},{v:'n',l:'Off'}] },
   ];
 
-  let html = '<div class="card"><div class="cfg-section-title">Edit Configuration' + (configTarget ? ' — ' + escHtml(configTarget) : '') + '</div>';
+  let html = (configTarget ? '<div class="cfg-target-label">Editing: ' + escHtml(configTarget) + '</div>' : '') + '<div class="card">';
   fields.forEach(f => {
     if (f.section) {
       html += '</div><div class="card"><div class="cfg-section-title">' + f.section + '</div>';
