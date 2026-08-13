@@ -467,11 +467,14 @@ WRAPPER_HEAD
         cm4|rpi4) tarball_name="cm4-tools.tar.gz"; build_script="build-cm4-tarball.sh" ;;
         rpi5)     tarball_name="rpi5-tools.tar.gz"; build_script="build-rpi5-tarball.sh" ;;
     esac
-    local tarball_path="../install_packages/${tarball_name}"
-    if [ -n "$build_script" ] && [ -f "../packaging/${build_script}" ]; then
+    local repo_root
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    local tarball_path="${repo_root}/install_packages/${tarball_name}"
+    local packaging_dir="${repo_root}/packaging"
+    if [ -n "$build_script" ] && [ -f "${packaging_dir}/${build_script}" ]; then
         echo "Rebuilding ${tarball_name}..."
-        mkdir -p ../install_packages
-        (cd ../packaging && bash "$build_script" "$tarball_path")
+        mkdir -p "${repo_root}/install_packages"
+        bash "${packaging_dir}/${build_script}" "$tarball_path"
         echo "Tarball rebuilt: $(du -h "$tarball_path" | cut -f1)"
     fi
     if [ -n "$tarball_name" ] && [ -f "$tarball_path" ]; then

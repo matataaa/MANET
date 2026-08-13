@@ -462,6 +462,27 @@ func run(ctx context.Context, cfg Config) error {
 		}()
 	}
 
+	// Periodic audio hot-plug retry for all PTT modes
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				audioMu.Lock()
+				hasDevices := captureDevicePtr != nil
+				audioMu.Unlock()
+				if !hasDevices {
+					initAudioDevices()
+				}
+			}
+		}
+	}()
+
 	defer teardownAudioDevices()
 
 	go func() {
