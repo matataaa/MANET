@@ -114,7 +114,7 @@ func assembleAdminStatus() AdminStatus {
 		"voice_speaker_volume": confGet(conf, "voice_speaker_volume", "80"),
 		"voice_channel":        confGet(conf, "voice_channel", "1"),
 		"voice_rx_channels":    confGet(conf, "voice_rx_channels", "1"),
-		"voice_ptt_mode":       confGet(conf, "voice_ptt_mode", "always"),
+		"voice_ptt_mode":       confGet(conf, "voice_ptt_mode", "openvlm"),
 		"dns_servers":          confGet(conf, "dns_servers", "8.8.8.8,8.8.4.4"),
 	}
 

@@ -146,17 +146,30 @@ function voiceRender() {
 
   // OpenVLM connection status
   var vlmConn = d.ptt_connected;
+  var pttAlways = d.ptt_mode === 'always';
   html += '<div class="voice-hw-device-row" id="hw-vlm-row">';
-  html += '<span class="voice-dot ' + (vlmConn ? 'on' : 'off') + '" id="hw-vlm-dot"></span>';
-  html += '<span class="voice-hw-device-label">OpenVLM</span>';
-  html += '<span class="voice-hw-device-status ' + (vlmConn ? 'connected' : 'disconnected') + '" id="hw-vlm-status">' + (vlmConn ? 'Connected' : 'Disconnected') + '</span>';
+  if (pttAlways) {
+    html += '<span class="voice-dot on" id="hw-vlm-dot"></span>';
+    html += '<span class="voice-hw-device-label">PTT Mode</span>';
+    html += '<span class="voice-hw-device-status connected" id="hw-vlm-status">Always On</span>';
+  } else {
+    html += '<span class="voice-dot ' + (vlmConn ? 'on' : 'off') + '" id="hw-vlm-dot"></span>';
+    html += '<span class="voice-hw-device-label">OpenVLM</span>';
+    html += '<span class="voice-hw-device-status ' + (vlmConn ? 'connected' : 'disconnected') + '" id="hw-vlm-status">' + (vlmConn ? 'Connected' : 'Disconnected') + '</span>';
+  }
   html += '</div>';
 
   // PTT state
+  var pttLabel = 'SERVICE OFF';
+  if (active) {
+    if (pttAlways) pttLabel = 'ALWAYS ON';
+    else if (d.ptt_active) pttLabel = 'PTT PRESSED';
+    else pttLabel = 'PTT IDLE';
+  }
   html += '<div class="voice-hw-ptt-wrap">';
   html += '<div class="voice-hw-ptt-indicator' + (active && d.ptt_active ? ' active' : '') + '" id="hw-ptt-indicator">';
   html += '<div class="voice-hw-ptt-dot" id="hw-ptt-dot"></div>';
-  html += '<div class="voice-hw-ptt-label" id="hw-ptt-label">' + (active ? (d.ptt_active ? 'PTT PRESSED' : 'PTT UNPRESSED') : 'SERVICE OFF') + '</div>';
+  html += '<div class="voice-hw-ptt-label" id="hw-ptt-label">' + pttLabel + '</div>';
   html += '</div>';
   html += '</div>';
 
@@ -219,12 +232,16 @@ function voiceUpdateHWIndicators() {
   // OpenVLM connection
   var vlmDot = document.getElementById('hw-vlm-dot');
   var vlmStatus = document.getElementById('hw-vlm-status');
-  if (vlmDot) {
-    vlmDot.className = 'voice-dot ' + (d.ptt_connected ? 'on' : 'off');
-  }
-  if (vlmStatus) {
-    vlmStatus.textContent = d.ptt_connected ? 'Connected' : 'Disconnected';
-    vlmStatus.className = 'voice-hw-device-status ' + (d.ptt_connected ? 'connected' : 'disconnected');
+  if (vlmDot && vlmStatus) {
+    if (d.ptt_mode === 'always') {
+      vlmDot.className = 'voice-dot on';
+      vlmStatus.textContent = 'Always On';
+      vlmStatus.className = 'voice-hw-device-status connected';
+    } else {
+      vlmDot.className = 'voice-dot ' + (d.ptt_connected ? 'on' : 'off');
+      vlmStatus.textContent = d.ptt_connected ? 'Connected' : 'Disconnected';
+      vlmStatus.className = 'voice-hw-device-status ' + (d.ptt_connected ? 'connected' : 'disconnected');
+    }
   }
 
   // PTT state
@@ -232,12 +249,16 @@ function voiceUpdateHWIndicators() {
   var label = document.getElementById('hw-ptt-label');
   if (!indicator) return;
 
-  if (d.active && d.ptt_active) {
+  var isAlways = d.ptt_mode === 'always';
+  if (d.active && isAlways) {
+    indicator.className = 'voice-hw-ptt-indicator active';
+    label.textContent = 'ALWAYS ON';
+  } else if (d.active && d.ptt_active) {
     indicator.className = 'voice-hw-ptt-indicator active';
     label.textContent = 'PTT PRESSED';
   } else if (d.active) {
     indicator.className = 'voice-hw-ptt-indicator';
-    label.textContent = 'PTT UNPRESSED';
+    label.textContent = 'PTT IDLE';
   } else {
     indicator.className = 'voice-hw-ptt-indicator';
     label.textContent = 'SERVICE OFF';

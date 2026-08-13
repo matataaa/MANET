@@ -41,7 +41,7 @@ func main() {
 	flag.StringVar(&cfg.Iface, "iface", "br0", "network interface for multicast")
 	flag.StringVar(&cfg.McastAddr, "addr", "239.69.0.1", "multicast group address")
 	flag.IntVar(&cfg.McastPort, "port", 4370, "multicast RTP port")
-	flag.StringVar(&cfg.PTTSource, "ptt", "always", "PTT source: always, gpio, openvlm, vox")
+	flag.StringVar(&cfg.PTTSource, "ptt", "openvlm", "PTT source: openvlm, gpio, always, vox")
 	flag.IntVar(&cfg.GPIOPin, "gpio-pin", 17, "GPIO pin number for PTT button")
 	flag.StringVar(&cfg.GPIOKey, "gpio-key", "any", "evdev key code or 'any'")
 	flag.StringVar(&cfg.DeviceIn, "input", "", "ALSA capture device")

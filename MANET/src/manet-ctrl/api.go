@@ -221,7 +221,7 @@ func apiVoiceConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ptt := jsonStr(body, "ptt_mode", "always")
+	ptt := jsonStr(body, "ptt_mode", "openvlm")
 	iface := jsonStr(body, "interface", "br0")
 	addr := jsonStr(body, "mcast_addr", "239.69.0.1")
 	port := jsonStr(body, "port", "4370")

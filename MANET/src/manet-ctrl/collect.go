@@ -912,7 +912,6 @@ func getVoiceStatus() VoiceStatus {
 		}
 	} else if vs.PTTMode == "always" {
 		vs.PTTActive = true
-		vs.PTTConnected = true
 		vs.PTTDevice = "always"
 	}
 

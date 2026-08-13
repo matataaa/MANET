@@ -383,16 +383,10 @@ func voiceRestartDaemon(txCh int) {
 	if exec.Command("systemctl", "is-active", "--quiet", "mesh-voice").Run() != nil {
 		return
 	}
-	vs := getVoiceStatus()
-	iface := vs.Interface
-	if iface == "" {
-		iface = "br0"
-	}
+	conf := loadKVFile(MeshConfFile)
+	iface := confGet(conf, "voice_iface", "br0")
 	port := strconv.Itoa(voiceChannelPort(txCh))
-	ptt := vs.PTTMode
-	if ptt == "" {
-		ptt = "always"
-	}
+	ptt := confGet(conf, "voice_ptt_mode", "openvlm")
 	addr := voiceChannelAddr(txCh)
 
 	execLine := fmt.Sprintf("/usr/local/bin/mesh-voice -iface %s -addr %s -port %s -ptt %s", iface, addr, port, ptt)
