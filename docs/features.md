@@ -9,6 +9,7 @@
 - **Self-forming mesh** — nodes discover peers automatically on a lobby channel at boot
 - **Self-healing** — batman-adv reroutes around failed links, SAE watchdog restarts stalled auth
 - **batman-enslave watchdog** — re-enslaves interfaces to bat0 if the link drops
+- **Morse SPI watchdog** — detects TX failure on the HaLow radio and performs GPIO reset recovery
 - **Multicast mode** — configurable via UI/CLI: flood (forceflood, recommended ≤10 nodes) or optimized (IGMP snooping + querier for 10+ nodes)
 
 ## Zero-Configuration Networking
@@ -27,26 +28,31 @@
 - **DHCP** — automatic IP assignment for connected clients via dnsmasq
 - **DNS for EUDs** — `.mesh` hostnames resolvable by connected devices, upstream queries forwarded
 - **Applet DNS** — applets declare hostnames (e.g. `chat.mesh`) accessible from EUDs
+- **CoT relay** — forwards ATAK blue-force position data to EUD devices on the local network
 
-## Web Interface (manet-ctrl)
+## Web Interface (MANET//CTRL)
 
 - **Single-page application** — tabbed UI served from a single Go binary on port 80/443
 - **Auto TLS** — self-signed HTTPS certificate generated on first run
-- **Dashboard** — D3.js force-directed topology graph, node list with TQ/hops/last-seen, auto-refresh
-- **Nodes** — sortable table of all mesh nodes with hostname, IP, DNS, TQ, hops, battery, uptime
-- **Config** — view/edit node configuration (hostname, SSID, keys, network, services) with save/apply
-- **Hardware** — radio interfaces (driver, channel, TX power, MCS rates), GPS, system info
+- **Dashboard** — D3.js force-directed topology graph with throughput labels, gateway route glow, and data orbs. Node list sidebar with TQ/hops/last-seen. Auto-refresh with stale node cleanup.
+- **Nodes** — sortable table of all mesh nodes with hostname, IP, DNS, TQ, hops, services, battery, uptime, last seen
+- **Config** — view/edit node configuration (hostname, SSID, keys, network, services, QoS) with stage/activate/cancel workflow
+- **Hardware** — radio interfaces (driver, channel, TX power, MCS rates), GPS status, system info, PTT hardware status
 - **Mesh** — batman-adv originators, neighbors, gateways with hostname resolution and last-seen timestamps, DNS records table
 - **Voice** — PTT controls (web and hardware), TX/RX indicators, OpenVLM connection status, service management
-- **Performance** — iperf3 throughput and ping latency testing with streaming results
-- **Services** — systemd service management grouped by category, start/stop/restart controls
+- **Performance** — iperf3 throughput and ping latency testing with streaming results, sub-tabs for Measure/Radio/Ping
+- **Services** — systemd service management grouped by category (Core Mesh, Network, Radio, Applications, System), start/stop/restart controls
 - **Terminal** — full xterm.js PTY shell over WebSocket, SSH to peer nodes, live journalctl log viewer
-- **Applets** — install/uninstall applets, each gets its own sub-path and optional DNS hostname
-- **Docs** — built-in documentation: overview, configuration, API reference, services, CLI
+- **Applets** — install/uninstall applets with open/config/start/stop/restart/disable/logs/uninstall controls
+- **Fleet** — fleet-wide configuration management via multicast, coordinated settings distribution
+- **Docs** — built-in documentation: Overview, Configuration, API Reference, Services, MESH CLI, OpenVLM
+- **Notifications** — toast notification system with browser notification API support and applet unread badges
+- **Mobile support** — responsive layout with dropdown navigation for small screens
 
 ## Voice Communications
 
 - **Push-to-talk** over multicast RTP with Opus codec (48 kHz, 32 kbps)
+- **Multi-channel** — per-channel multicast ports prevent cross-channel audio bleed
 - **Hardware PTT** — OpenVLM USB HID device with GPIO3 button, GPIO evdev, always-on, VOX modes
 - **Web PTT** — browser-based push-to-talk via WebSocket relay (requires HTTPS for mic access)
 - **Half-duplex** — automatic remote-active detection prevents talking over incoming audio
@@ -67,7 +73,14 @@
 - **Manifest-driven** — `applet.json` declares binary, port, frontend, config, DNS records
 - **DNS integration** — applets declare `.mesh` hostnames with local or global scope
 - **Host-header redirect** — browsing to `chat.mesh` auto-redirects to the applet frontend
-- **Lifecycle management** — install, uninstall, start, stop via API; DNS updated on change
+- **Lifecycle management** — install, uninstall, start, stop, restart, disable via API; DNS updated on change
+- **Bundled applets** — Mesh Chat (UDP multicast text chat), Tailscale VPN, WireGuard VPN, Hello World
+
+## Fleet Management
+
+- **Multicast coordination** — fleet config distributed via multicast on br0
+- **Mesh-wide settings** — push configuration changes to all reachable nodes simultaneously
+- **Fleet UI tab** — manage fleet settings from the web interface
 
 ## Mesh Registry
 
@@ -80,12 +93,25 @@
 
 - **GPS integration** — gpsd reads NMEA, gps-reader publishes to `/run/gps_status.json`
 - **Cursor on Target (CoT)** — broadcasts GPS position as CoT XML for ATAK/TAK blue-force tracking
+- **CoT relay to EUDs** — forwards CoT data to locally connected end-user devices
 - **Position in registry** — GPS coordinates shared mesh-wide via the node registry
+
+## OTA Updates
+
+- **Go update service** — `node-update` daemon polls for tools tarball updates every 6 hours
+- **Version checking** — compares local version against upstream, applies only when newer
+- **Cooldown** — 1-hour cooldown between update checks to avoid churn
+- **Configurable** — enabled/disabled via `auto_update` in mesh.conf
 
 ## File Synchronization
 
 - **Syncthing** — decentralized file sync across mesh nodes
 - **Peer management** — automatic discovery and add/remove of Syncthing peers as nodes join/leave
+
+## Android App
+
+- **MANET KDU** — Android companion app for mesh node status and control
+- **APK download** — downloadable from the web UI dashboard
 
 ## CLI Tool
 
@@ -107,9 +133,10 @@
 
 | Hardware | Status | Notes |
 |----------|--------|-------|
-| Raspberry Pi CM4 | Primary target | 802.11ax + HaLow |
-| Raspberry Pi 5 | Functional | 802.11ax + HaLow |
-| Radxa Rock 3A | Functional | 802.11ax + HaLow |
+| Raspberry Pi CM4 | Primary target | 802.11ax + HaLow (SPI) |
+| Raspberry Pi 5 | Functional | 802.11ax + HaLow (SPI) |
+| Radxa Rock 3A | Functional | 802.11ax + HaLow (SPI) |
+| x86 (gateway) | Functional | HaLow via USB (Lunpid MM8108) |
 
 ## Power Management
 
