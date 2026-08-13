@@ -119,7 +119,7 @@ function svcRender() {
 async function svcReboot() {
   if (!confirm('Reboot this node? You will lose connection until it comes back up.')) return;
   try {
-    await fetch('/api/terminal/reboot', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+    await authFetch('/api/terminal/reboot', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
     document.getElementById('tab-services').innerHTML =
       '<div class="loading-msg" style="padding:40px;text-align:center">' +
       '<div style="font-size:16px;font-weight:700;margin-bottom:8px">Rebooting...</div>' +
@@ -128,7 +128,7 @@ async function svcReboot() {
     setTimeout(function poll() {
       fetch('/api/data').then(function() { location.reload(); }).catch(function() { setTimeout(poll, 3000); });
     }, 8000);
-  } catch(e) { alert('Reboot failed: ' + e.message); }
+  } catch(e) { notify('Reboot Failed', e.message, {type:'error'}); }
 }
 
 async function svcDoAction(btn) {
@@ -139,15 +139,15 @@ async function svcDoAction(btn) {
   btn.textContent = action + 'ing...';
   try {
     const url = applet ? '/api/applets/' + applet : '/api/services/' + svcId;
-    const r = await fetch(url, {
+    const r = await authFetch(url, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({action}),
     });
     const result = await r.json();
-    if (!result.ok) alert(action + ' failed: ' + (result.error || 'unknown'));
+    if (!result.ok) notify('Action Failed', action + ': ' + (result.error || 'unknown'), {type:'error'});
   } catch(e) {
-    alert(action + ' failed: ' + e.message);
+    notify('Action Failed', action + ': ' + e.message, {type:'error'});
   }
   setTimeout(svcFetch, 800);
 }

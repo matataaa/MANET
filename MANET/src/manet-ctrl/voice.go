@@ -287,6 +287,9 @@ func apiVoiceChannels(w http.ResponseWriter, r *http.Request) {
 		voiceGetChannels(w)
 		return
 	}
+	if !checkAuth(w, r) {
+		return
+	}
 	voiceSetChannels(w, r)
 }
 

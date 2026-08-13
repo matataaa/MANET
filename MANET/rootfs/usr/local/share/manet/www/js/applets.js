@@ -92,7 +92,7 @@ function appletDisplayName(name) {
 }
 
 function appletAction(name, action) {
-  fetch('/api/applets/' + encodeURIComponent(name) + '/action', {
+  authFetch('/api/applets/' + encodeURIComponent(name) + '/action', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({action: action})
@@ -163,7 +163,7 @@ function openAppletConfig(name) {
 
 function uninstallApplet(name) {
   if (!confirm('Uninstall applet "' + name + '"? This will stop the service and remove all files.')) return;
-  fetch('/api/applets/' + encodeURIComponent(name), {method: 'DELETE'})
+  authFetch('/api/applets/' + encodeURIComponent(name), {method: 'DELETE'})
     .then(function(r) { return r.json(); })
     .then(function(d) {
       if (d.ok) fetchApplets();
@@ -172,6 +172,10 @@ function uninstallApplet(name) {
 }
 
 function uploadApplet() {
+  if (_authRequired && !_authenticated) {
+    authShowLogin(uploadApplet);
+    return;
+  }
   var fileInput = document.getElementById('applet-file-input');
   var statusEl = document.getElementById('upload-status');
   if (!fileInput.files.length) return;
@@ -185,6 +189,11 @@ function uploadApplet() {
   xhr.setRequestHeader('Content-Type', 'application/gzip');
 
   xhr.onload = function() {
+    if (xhr.status === 401) {
+      statusEl.textContent = '';
+      authShowLogin(uploadApplet);
+      return;
+    }
     try {
       var resp = JSON.parse(xhr.responseText);
       if (resp.ok) {

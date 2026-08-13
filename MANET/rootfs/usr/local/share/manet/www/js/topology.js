@@ -536,7 +536,7 @@ function topoStreamPanel(ip, hostname, type) {
     body = JSON.stringify({target: ip});
   }
 
-  fetch(url, {
+  authFetch(url, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: body,
@@ -570,9 +570,9 @@ function topoStopStream() {
     topoStreamAbort = null;
   }
   if (topoStreamType === 'ping') {
-    fetch('/api/ping/stop', {method: 'POST'}).catch(function(){});
+    authFetch('/api/ping/stop', {method: 'POST'}).catch(function(){});
   } else if (topoStreamType === 'traceroute') {
-    fetch('/api/traceroute/stop', {method: 'POST'}).catch(function(){});
+    authFetch('/api/traceroute/stop', {method: 'POST'}).catch(function(){});
   }
   topoStreamType = null;
 }

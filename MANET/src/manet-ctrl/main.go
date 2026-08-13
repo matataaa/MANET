@@ -373,11 +373,11 @@ func main() {
 	mux := http.NewServeMux()
 
 	// WebSocket
-	mux.HandleFunc("/ws/terminal", handleTerminal)
+	mux.HandleFunc("/ws/terminal", requireAuth(handleTerminal))
 	mux.HandleFunc("/ws/logs", handleLogs)
 	mux.HandleFunc("/ws/voice", handleVoiceWS)
 
-	// Status APIs
+	// Status APIs (read-only — no auth)
 	mux.HandleFunc("/api/data", apiData)
 	mux.HandleFunc("/api/local", apiLocal)
 	mux.HandleFunc("/api/peer/", apiPeer)
@@ -389,48 +389,52 @@ func main() {
 	mux.HandleFunc("/api/mesh-ctrl.apk", apiDownloadAPK)
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
+			if !checkAuth(w, r) {
+				return
+			}
 			apiServiceAction(w, r)
 		} else {
 			apiServices(w, r)
 		}
 	})
-	mux.HandleFunc("/api/services/", apiServiceAction)
+	mux.HandleFunc("/api/services/", requireAuth(apiServiceAction))
 	mux.HandleFunc("/api/mesh", apiMesh)
 	mux.HandleFunc("/api/qos", apiQoS)
 	mux.HandleFunc("/api/registry", apiRegistry)
 
-	// Control APIs
-	mux.HandleFunc("/api/control/interface", apiControlInterface)
-	mux.HandleFunc("/api/control/txpower", apiControlTxPower)
-	mux.HandleFunc("/api/control/halow_channel", apiControlHalowChannel)
-	mux.HandleFunc("/api/control/wifi_channel", apiControlWifiChannel)
-	mux.HandleFunc("/api/control/hostname", apiControlHostname)
+	// Control APIs (all destructive — require auth)
+	mux.HandleFunc("/api/control/interface", requireAuth(apiControlInterface))
+	mux.HandleFunc("/api/control/txpower", requireAuth(apiControlTxPower))
+	mux.HandleFunc("/api/control/halow_channel", requireAuth(apiControlHalowChannel))
+	mux.HandleFunc("/api/control/wifi_channel", requireAuth(apiControlWifiChannel))
+	mux.HandleFunc("/api/control/hostname", requireAuth(apiControlHostname))
 
-	// Admin APIs
-	mux.HandleFunc("/api/admin/save", apiAdminSave)
-	mux.HandleFunc("/api/admin/stage", apiAdminStage)
-	mux.HandleFunc("/api/admin/activate", apiAdminActivate)
-	mux.HandleFunc("/api/admin/cancel", apiAdminCancel)
-	mux.HandleFunc("/api/admin/preferences", apiFleetPreferences)
+	// Admin APIs (all destructive — require auth)
+	mux.HandleFunc("/api/admin/save", requireAuth(apiAdminSave))
+	mux.HandleFunc("/api/admin/stage", requireAuth(apiAdminStage))
+	mux.HandleFunc("/api/admin/activate", requireAuth(apiAdminActivate))
+	mux.HandleFunc("/api/admin/cancel", requireAuth(apiAdminCancel))
+	mux.HandleFunc("/api/admin/preferences", requireAuth(apiFleetPreferences))
 
-	// Perf APIs
-	mux.HandleFunc("/api/iperf/server/start", apiIperfServerStart)
-	mux.HandleFunc("/api/iperf/server/stop", apiIperfServerStop)
-	mux.HandleFunc("/api/iperf/client/run", apiIperfClientRun)
-	mux.HandleFunc("/api/iperf/client/stream", apiIperfClientStream)
-	mux.HandleFunc("/api/iperf/stop", apiIperfStop)
-	mux.HandleFunc("/api/ping/run", apiPingRun)
-	mux.HandleFunc("/api/ping/stream", apiPingStream)
-	mux.HandleFunc("/api/ping/stop", apiPingStop)
-	mux.HandleFunc("/api/traceroute/stream", apiTracerouteStream)
-	mux.HandleFunc("/api/traceroute/stop", apiTracerouteStop)
+	// Perf APIs (run tests on mesh — require auth)
+	mux.HandleFunc("/api/iperf/server/start", requireAuth(apiIperfServerStart))
+	mux.HandleFunc("/api/iperf/server/stop", requireAuth(apiIperfServerStop))
+	mux.HandleFunc("/api/iperf/client/run", requireAuth(apiIperfClientRun))
+	mux.HandleFunc("/api/iperf/client/stream", requireAuth(apiIperfClientStream))
+	mux.HandleFunc("/api/iperf/stop", requireAuth(apiIperfStop))
+	mux.HandleFunc("/api/ping/run", requireAuth(apiPingRun))
+	mux.HandleFunc("/api/ping/stream", requireAuth(apiPingStream))
+	mux.HandleFunc("/api/ping/stop", requireAuth(apiPingStop))
+	mux.HandleFunc("/api/traceroute/stream", requireAuth(apiTracerouteStream))
+	mux.HandleFunc("/api/traceroute/stop", requireAuth(apiTracerouteStop))
 
-	// Terminal HTTP fallback
-	mux.HandleFunc("/api/terminal/exec", apiTerminalExec)
-	mux.HandleFunc("/api/terminal/complete", apiTerminalComplete)
-	mux.HandleFunc("/api/terminal/reboot", apiTerminalReboot)
+	// Terminal HTTP fallback (all destructive — require auth)
+	mux.HandleFunc("/api/terminal/exec", requireAuth(apiTerminalExec))
+	mux.HandleFunc("/api/terminal/complete", requireAuth(apiTerminalComplete))
+	mux.HandleFunc("/api/terminal/reboot", requireAuth(apiTerminalReboot))
 
 	// Auth
+	mux.HandleFunc("/api/auth/status", apiAuthStatus)
 	mux.HandleFunc("/api/perf-auth", apiPerfAuth)
 
 	// Applets

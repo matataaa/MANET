@@ -310,7 +310,7 @@ function openNodeConfig(ip, hostname) {
 
 // Boot — fetch data before routing so tabs have data on first render
 (async () => {
-  await fetchData();
+  await Promise.all([fetchData(), authCheckStatus()]);
   booted = true;
   const loader = document.getElementById('boot-loader');
   if (loader) loader.remove();

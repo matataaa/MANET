@@ -539,7 +539,7 @@ async function fleetStageConfig() {
 async function fleetSaveAndStage(state, btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Staging...'; }
   try {
-    await fetch('/api/admin/preferences', {
+    await authFetch('/api/admin/preferences', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -549,7 +549,7 @@ async function fleetSaveAndStage(state, btn) {
       }),
     });
 
-    var r = await fetch('/api/admin/stage', {
+    var r = await authFetch('/api/admin/stage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: state.meshCfg }),
@@ -576,7 +576,7 @@ function fleetActivateConfig(force) {
     { label: label, danger: force },
     async function() {
       try {
-        var r = await fetch('/api/admin/activate', {
+        var r = await authFetch('/api/admin/activate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ force: force }),
@@ -598,7 +598,7 @@ function fleetActivateConfig(force) {
 function fleetCancelConfig() {
   fleetConfirm('Cancel the staged configuration?', { label: 'Cancel Staged Config' }, async function() {
     try {
-      await fetch('/api/admin/cancel', {
+      await authFetch('/api/admin/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
@@ -606,7 +606,7 @@ function fleetCancelConfig() {
       // Reset preferences mesh_config back to the running config
       var curCfg = fleetData ? fleetData.current_config || {} : {};
       var prefs = (fleetData && fleetData.preferences) ? fleetData.preferences : {};
-      await fetch('/api/admin/preferences', {
+      await authFetch('/api/admin/preferences', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

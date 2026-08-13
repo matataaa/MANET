@@ -100,7 +100,7 @@ async function perfStreamTo(url, body, pre, abortKey) {
   else perfIperfAbort = controller;
 
   try {
-    const resp = await fetch(url, {
+    const resp = await authFetch(url, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
@@ -149,16 +149,16 @@ async function perfRunIperf() {
 
 async function perfStopIperf() {
   if (perfIperfAbort) perfIperfAbort.abort();
-  try { await fetch('/api/iperf/stop', {method: 'POST'}); } catch(e) {}
+  try { await authFetch('/api/iperf/stop', {method: 'POST'}); } catch(e) {}
   document.getElementById('perf-run-btn').style.display = '';
   document.getElementById('perf-stop-btn').style.display = 'none';
 }
 
 async function perfIperfServer(action) {
   try {
-    await fetch('/api/iperf/server/' + action, {method: 'POST'});
+    await authFetch('/api/iperf/server/' + action, {method: 'POST'});
   } catch(e) {
-    alert('Failed: ' + e.message);
+    notify('Failed', e.message, {type:'error'});
   }
 }
 
@@ -188,7 +188,7 @@ async function perfRunPing() {
 
 async function perfStopPing() {
   if (perfPingAbort) perfPingAbort.abort();
-  try { await fetch('/api/ping/stop', {method: 'POST'}); } catch(e) {}
+  try { await authFetch('/api/ping/stop', {method: 'POST'}); } catch(e) {}
   document.getElementById('ping-run-btn').style.display = '';
   document.getElementById('ping-stop-btn').style.display = 'none';
 }

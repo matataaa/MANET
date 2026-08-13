@@ -323,6 +323,10 @@ function termDoCustomConnect() {
 // ===== SINGLE: WEBSOCKET =====
 
 function termConnectWs(target, session) {
+  if (_authRequired && !_authenticated) {
+    authShowLogin(function() { termConnectWs(target, session); });
+    return;
+  }
   if (termWs) { termWs.onclose = null; termWs.close(); termWs = null; }
   var reconnBtn = document.getElementById('term-reconnect');
   var statusEl = document.getElementById('term-status');
@@ -472,6 +476,10 @@ function termSendResize(cols, rows) {
 // ===== MULTI PANE =====
 
 function termMultiAddPane(target, label, user, password) {
+  if (_authRequired && !_authenticated) {
+    authShowLogin(function() { termMultiAddPane(target, label, user, password); });
+    return;
+  }
   var id = termMultiNextId++;
   var paneEl = document.createElement('div');
   paneEl.className = 'term-multi-pane' + (termMultiSync ? ' sync-on' : '');

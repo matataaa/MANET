@@ -312,8 +312,8 @@ async function configSave() {
   var base = configBaseUrl();
   try {
     const [meshR, voiceR] = await Promise.all([
-      fetch(base + '/api/admin/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({config}) }),
-      fetch(base + '/api/voice', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(voiceCfg) })
+      authFetch(base + '/api/admin/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({config}) }),
+      authFetch(base + '/api/voice', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(voiceCfg) })
     ]);
     const meshResult = await meshR.json();
     const voiceResult = await voiceR.json();
@@ -324,9 +324,9 @@ async function configSave() {
       const errors = [];
       if (!meshResult.ok) errors.push('Mesh: ' + (meshResult.error || 'unknown'));
       if (!voiceResult.ok) errors.push('Voice: ' + (voiceResult.error || 'unknown'));
-      alert('Save failed: ' + errors.join(', '));
+      notify('Save Failed', errors.join(', '), {type:'error'});
     }
-  } catch(e) { alert('Save failed: ' + e.message); }
+  } catch(e) { notify('Save Failed', e.message, {type:'error'}); }
 }
 
 // QOS Priority
@@ -405,7 +405,7 @@ function qosRender() {
 
   var base = configBaseUrl();
   document.getElementById('qos-toggle').addEventListener('click', function() {
-    fetch(base + '/api/qos', {
+    authFetch(base + '/api/qos', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({enabled: !d.enabled})
@@ -414,7 +414,7 @@ function qosRender() {
 
   card.querySelectorAll('.qos-rule-band').forEach(function(sel) {
     sel.addEventListener('change', function() {
-      fetch(base + '/api/qos', {
+      authFetch(base + '/api/qos', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({service: sel.dataset.svc, band: parseInt(sel.value)})

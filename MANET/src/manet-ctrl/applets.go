@@ -598,6 +598,9 @@ func apiAppletsRouter(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if path == "install" && r.Method == "POST" {
+		if !checkAuth(w, r) {
+			return
+		}
 		apiAppletInstall(w, r)
 		return
 	}
@@ -634,8 +637,14 @@ func apiAppletsRouter(w http.ResponseWriter, r *http.Request) {
 	case "POST":
 		switch action {
 		case "action":
+			if !checkAuth(w, r) {
+				return
+			}
 			apiAppletAction(w, r, name)
 		case "config":
+			if !checkAuth(w, r) {
+				return
+			}
 			apiAppletConfigPost(w, r, name)
 		case "proxy":
 			apiAppletProxy(w, r, name, sub)
@@ -645,6 +654,9 @@ func apiAppletsRouter(w http.ResponseWriter, r *http.Request) {
 	case "DELETE":
 		switch action {
 		case "":
+			if !checkAuth(w, r) {
+				return
+			}
 			apiAppletUninstall(w, r, name)
 		case "proxy":
 			apiAppletProxy(w, r, name, sub)

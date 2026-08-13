@@ -290,16 +290,16 @@ function voiceBindPTT() {
 
 async function voiceAction(action) {
   try {
-    var r = await fetch('/api/voice', {
+    var r = await authFetch('/api/voice', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ action: action })
     });
     var result = await r.json();
-    if (!result.ok && result.error) alert('Voice ' + action + ' failed: ' + result.error);
+    if (!result.ok && result.error) notify('Voice Failed', action + ': ' + result.error, {type:'error'});
     setTimeout(voiceFetch, 1000);
   } catch(e) {
-    alert('Voice ' + action + ' failed: ' + e.message);
+    notify('Voice Failed', action + ': ' + e.message, {type:'error'});
   }
 }
 
@@ -444,7 +444,7 @@ async function voiceClientStart() {
     };
 
   } catch(e) {
-    alert('Voice client error: ' + e.message);
+    notify('Voice Error', e.message, {type:'error'});
     voiceClientCleanup();
   }
 }
@@ -542,7 +542,7 @@ async function voiceToggleRxChannel(ch) {
     rxList.push(ch);
   }
   try {
-    var r = await fetch('/api/voice/channels', {
+    var r = await authFetch('/api/voice/channels', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rx: rxList })
@@ -556,7 +556,7 @@ async function voiceSetTxChannel(ch) {
   try {
     var rxList = (voiceChannelData.rx_channels || []).slice();
     if (rxList.indexOf(ch) < 0) rxList.push(ch);
-    var r = await fetch('/api/voice/channels', {
+    var r = await authFetch('/api/voice/channels', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tx: ch, rx: rxList })
@@ -586,7 +586,7 @@ async function voiceVolSend() {
   var spkEl = document.getElementById('voice-vol-spk');
   if (!micEl || !spkEl) return;
   try {
-    await fetch('/api/voice', {
+    await authFetch('/api/voice', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'volume', mic_volume: micEl.value, speaker_volume: spkEl.value })

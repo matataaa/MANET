@@ -181,6 +181,9 @@ func apiQoS(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case "POST":
+		if !checkAuth(w, r) {
+			return
+		}
 		body := readBody(r)
 
 		cfg := loadQoSConfig()
