@@ -749,6 +749,7 @@ var saveableKeys = map[string]bool{
 	"voice_channel": true, "voice_rx_channels": true,
 	"voice_ptt_mode": true,
 	"dns_servers": true,
+	"eud_bandwidth": true,
 	"qos_enabled": true, "qos_voice_band": true, "qos_cot_band": true, "qos_chat_band": true,
 	"auto_update": true, "update_url": true,
 }
@@ -812,6 +813,12 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	if updates["gateway"] != "" || updates["gateway_nat"] != "" || updates["gateway_mss_clamp"] != "" || updates["gateway_bandwidth"] != "" {
 		runCmd(5*time.Second, "systemctl", "reload", "gateway-manager")
 		applied["gateway_reloaded"] = true
+	}
+
+	// Apply EUD bandwidth cap
+	if updates["eud_bandwidth"] != "" {
+		applyEUDBandwidth(conf["eud_bandwidth"])
+		applied["eud_bandwidth_applied"] = true
 	}
 
 	// Apply EUD mode changes
@@ -1695,6 +1702,34 @@ func apiATAKPackage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="MANET-Mesh-CoT.zip"`)
 	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 	w.Write(buf.Bytes())
+}
+
+func applyEUDBandwidth(capMbit string) {
+	iface := "br0"
+	// Clear existing tc config
+	runCmd(3*time.Second, "tc", "qdisc", "del", "dev", iface, "root")
+
+	if capMbit == "" || capMbit == "0" {
+		return
+	}
+
+	rate := capMbit + "mbit"
+	euds := getEUDs()
+	if len(euds) == 0 {
+		return
+	}
+
+	// HTB root qdisc + default class
+	runCmd(3*time.Second, "tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "htb", "default", "99")
+	runCmd(3*time.Second, "tc", "class", "add", "dev", iface, "parent", "1:", "classid", "1:99", "htb", "rate", "1000mbit")
+
+	for i, eud := range euds {
+		classID := fmt.Sprintf("1:%d", 10+i)
+		handleID := fmt.Sprintf("%d:", 10+i)
+		runCmd(3*time.Second, "tc", "class", "add", "dev", iface, "parent", "1:", "classid", classID, "htb", "rate", rate, "ceil", rate)
+		runCmd(3*time.Second, "tc", "qdisc", "add", "dev", iface, "parent", classID, "handle", handleID, "sfq", "perturb", "10")
+		runCmd(3*time.Second, "tc", "filter", "add", "dev", iface, "parent", "1:", "protocol", "ip", "prio", "1", "u32", "match", "ip", "dst", eud.IP+"/32", "flowid", classID)
+	}
 }
 
 func apiDownloadAPK(w http.ResponseWriter, r *http.Request) {

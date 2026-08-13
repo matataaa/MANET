@@ -128,6 +128,10 @@
   flex: 1; font-family: var(--font);
 }
 .term-multi-pane-status { font-size: 10px; }
+.term-multi-pane-latency {
+  font-size: 9px; font-weight: 700; color: #8b949e;
+  font-family: var(--font); letter-spacing: .2px;
+}
 .term-multi-pane-close {
   background: none; border: none; color: #8b949e;
   cursor: pointer; font-size: 16px; padding: 0 2px; line-height: 1;

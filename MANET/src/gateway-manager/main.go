@@ -23,11 +23,12 @@ const (
 )
 
 type Config struct {
-	Enabled   bool
-	NAT       bool
-	MSSClamp  bool
-	Bandwidth string
-	PollSec   int
+	Enabled      bool
+	NAT          bool
+	MSSClamp     bool
+	Bandwidth    string
+	EUDBandwidth string
+	PollSec      int
 }
 
 func loadConfig() Config {
@@ -49,6 +50,9 @@ func loadConfig() Config {
 	}
 	if v, ok := kv["gateway_bandwidth"]; ok && v != "" {
 		cfg.Bandwidth = v
+	}
+	if v, ok := kv["eud_bandwidth"]; ok && v != "" && v != "0" {
+		cfg.EUDBandwidth = v
 	}
 	if v, ok := kv["gateway_poll"]; ok && v != "" {
 		n := 0
@@ -115,6 +119,8 @@ func poll(cfg Config) {
 	} else {
 		pollClient(cfg)
 	}
+
+	enforceEUDBandwidth(cfg.EUDBandwidth)
 }
 
 func pollGateway(cfg Config) {
@@ -349,4 +355,74 @@ func run(name string, args ...string) {
 func runOut(name string, args ...string) string {
 	out, _ := exec.Command(name, args...).CombinedOutput()
 	return strings.TrimSpace(string(out))
+}
+
+// --- EUD bandwidth shaping ---
+
+var lastEUDBwState string
+
+func enforceEUDBandwidth(capMbit string) {
+	iface := "br0"
+
+	if capMbit == "" {
+		if lastEUDBwState != "" {
+			run("tc", "qdisc", "del", "dev", iface, "root")
+			lastEUDBwState = ""
+			log.Println("EUD bandwidth caps removed")
+		}
+		return
+	}
+
+	leaseIPs := readLeaseIPs()
+	stateKey := capMbit + ":" + strings.Join(leaseIPs, ",")
+	if stateKey == lastEUDBwState {
+		return
+	}
+
+	rate := capMbit + "mbit"
+	run("tc", "qdisc", "del", "dev", iface, "root")
+
+	if len(leaseIPs) == 0 {
+		lastEUDBwState = stateKey
+		return
+	}
+
+	run("tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "htb", "default", "99")
+	run("tc", "class", "add", "dev", iface, "parent", "1:", "classid", "1:99", "htb", "rate", "1000mbit")
+
+	for i, ip := range leaseIPs {
+		classID := fmt.Sprintf("1:%d", 10+i)
+		handleID := fmt.Sprintf("%d:", 10+i)
+		run("tc", "class", "add", "dev", iface, "parent", "1:", "classid", classID, "htb", "rate", rate, "ceil", rate)
+		run("tc", "qdisc", "add", "dev", iface, "parent", classID, "handle", handleID, "sfq", "perturb", "10")
+		run("tc", "filter", "add", "dev", iface, "parent", "1:", "protocol", "ip", "prio", "1", "u32", "match", "ip", "dst", ip+"/32", "flowid", classID)
+	}
+
+	lastEUDBwState = stateKey
+	log.Printf("EUD bandwidth caps applied: %s mbit for %d devices", capMbit, len(leaseIPs))
+}
+
+func readLeaseIPs() []string {
+	now := time.Now().Unix()
+	for _, path := range []string{"/var/lib/misc/dnsmasq.leases", "/tmp/dnsmasq.leases", "/run/dnsmasq.leases"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var ips []string
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 4 {
+				continue
+			}
+			exp := int64(0)
+			fmt.Sscanf(fields[0], "%d", &exp)
+			if exp > 0 && exp < now {
+				continue
+			}
+			ips = append(ips, fields[2])
+		}
+		return ips
+	}
+	return nil
 }

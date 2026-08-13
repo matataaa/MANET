@@ -192,6 +192,10 @@ function configRenderEdit(panel, cfg) {
       {v:'20',l:'20 MHz'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
     ] },
     { label: 'Max EUDs/Node', key: 'max_euds_per_node', type: 'text' },
+    { label: 'EUD Bandwidth Cap', key: 'eud_bandwidth', type: 'select', options: [
+      {v:'0',l:'Unlimited'},{v:'1',l:'1 Mbit'},{v:'2',l:'2 Mbit'},{v:'5',l:'5 Mbit'},
+      {v:'10',l:'10 Mbit'},{v:'20',l:'20 Mbit'},{v:'50',l:'50 Mbit'},{v:'100',l:'100 Mbit'}
+    ], hint: 'Per-device download limit for connected EUDs' },
     { label: 'Mesh SSID', key: 'mesh_ssid', type: 'text' },
     { label: 'Mesh Key', key: 'mesh_key', type: 'password' },
     { label: 'IPv4 Network', key: 'ipv4_network', type: 'text' },
@@ -299,7 +303,7 @@ function configRenderEdit(panel, cfg) {
 }
 
 async function configSave() {
-  const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','mesh_ssid','mesh_key',
+  const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','eud_bandwidth','mesh_ssid','mesh_key',
     'ipv4_network','regulatory_domain','halow_bw','multicast_mode','battery_monitor','admin_password','require_auth',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
     'auto_update','update_url',

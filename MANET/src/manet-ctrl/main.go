@@ -25,9 +25,10 @@ import (
 var Version = "dev"
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  16384,
-	WriteBufferSize: 16384,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	ReadBufferSize:    16384,
+	WriteBufferSize:   16384,
+	CheckOrigin:       func(r *http.Request) bool { return true },
+	EnableCompression: true,
 }
 
 var peerTLSConfig *tls.Config
@@ -60,9 +61,10 @@ func handleTerminal(w http.ResponseWriter, r *http.Request) {
 func handleTerminalProxy(client *websocket.Conn, target string) {
 	remoteURL := fmt.Sprintf("wss://%s/ws/terminal", target)
 	dialer := websocket.Dialer{
-		ReadBufferSize:  16384,
-		WriteBufferSize: 16384,
-		TLSClientConfig: peerTLSConfig,
+		ReadBufferSize:    16384,
+		WriteBufferSize:   16384,
+		TLSClientConfig:   peerTLSConfig,
+		EnableCompression: true,
 	}
 	remote, _, err := dialer.Dial(remoteURL, nil)
 	if err != nil {
@@ -145,20 +147,62 @@ func handleTerminalPTY(conn *websocket.Conn, cmd *exec.Cmd, target string) {
 	log.Printf("terminal pid=%d target=%q", pid, target)
 
 	var wmu sync.Mutex
+	dataCh := make(chan []byte, 32)
 
 	go func() {
 		buf := make([]byte, 16384)
 		for {
 			n, err := ptmx.Read(buf)
 			if err != nil {
-				conn.Close()
+				close(dataCh)
+				return
+			}
+			cp := make([]byte, n)
+			copy(cp, buf[:n])
+			dataCh <- cp
+		}
+	}()
+
+	go func() {
+		var batch []byte
+		timer := time.NewTimer(10 * time.Millisecond)
+		if !timer.Stop() {
+			<-timer.C
+		}
+
+		flush := func() {
+			if len(batch) == 0 {
 				return
 			}
 			wmu.Lock()
-			err = conn.WriteMessage(websocket.BinaryMessage, buf[:n])
+			conn.WriteMessage(websocket.BinaryMessage, batch)
 			wmu.Unlock()
-			if err != nil {
-				return
+			batch = nil
+		}
+
+		for {
+			select {
+			case data, ok := <-dataCh:
+				if !ok {
+					flush()
+					conn.Close()
+					return
+				}
+				batch = append(batch, data...)
+				if len(batch) >= 4096 {
+					timer.Stop()
+					flush()
+				} else {
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					timer.Reset(10 * time.Millisecond)
+				}
+			case <-timer.C:
+				flush()
 			}
 		}
 	}()
@@ -176,6 +220,13 @@ func handleTerminalPTY(conn *websocket.Conn, cmd *exec.Cmd, target string) {
 				cols := binary.BigEndian.Uint16(msg[1:3])
 				rows := binary.BigEndian.Uint16(msg[3:5])
 				pty.Setsize(ptmx, &pty.Winsize{Cols: cols, Rows: rows})
+			} else if len(msg) == 9 && msg[0] == 2 {
+				pong := make([]byte, 9)
+				copy(pong, msg)
+				pong[0] = 3
+				wmu.Lock()
+				conn.WriteMessage(websocket.BinaryMessage, pong)
+				wmu.Unlock()
 			}
 		}
 	}
@@ -268,10 +319,11 @@ func handleLogsProxy(client *websocket.Conn, target string, q url.Values) {
 	remoteURL := fmt.Sprintf("wss://%s/ws/logs?%s", target, params.Encode())
 
 	dialer := websocket.Dialer{
-		ReadBufferSize:  16384,
-		WriteBufferSize: 16384,
-		TLSClientConfig: peerTLSConfig,
-		HandshakeTimeout: 5 * time.Second,
+		ReadBufferSize:    16384,
+		WriteBufferSize:   16384,
+		TLSClientConfig:   peerTLSConfig,
+		HandshakeTimeout:  5 * time.Second,
+		EnableCompression: true,
 	}
 	remote, _, err := dialer.Dial(remoteURL, nil)
 	if err != nil {

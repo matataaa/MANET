@@ -11,7 +11,19 @@ var termMultiPanes = [];
 var termMultiSync = true;
 var termMultiNextId = 1;
 
+var termInputBuf = '';
+var termInputTimer = null;
+var termPingInterval = null;
+var termLatency = null;
+var termReconnectAttempt = 0;
+var termLocalEcho = localStorage.getItem('termLocalEcho') === 'true';
+var termEchoQueue = [];
+var termMultiInputBuf = '';
+var termMultiInputTimer = null;
+
 var TERM_PORT = location.port || (location.protocol === 'https:' ? '443' : '80');
+var TERM_INPUT_DELAY = 30;
+var TERM_PING_INTERVAL = 5000;
 
 var TERM_THEME = {
   background: '#0d1117',
@@ -25,6 +37,175 @@ var TERM_THEME = {
   brightYellow: '#e3b341', brightBlue: '#79c0ff', brightMagenta: '#d2a8ff',
   brightCyan: '#56d364', brightWhite: '#f0f6fc'
 };
+
+// ===== LATENCY HELPERS =====
+
+function termHasControl(data) {
+  for (var i = 0; i < data.length; i++) {
+    var c = data.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return true;
+  }
+  return false;
+}
+
+function termFlushInput(ws) {
+  if (termInputBuf && ws && ws.readyState === 1) ws.send(termInputBuf);
+  termInputBuf = '';
+  termInputTimer = null;
+}
+
+function termQueueInput(ws, data) {
+  termInputBuf += data;
+  if (termHasControl(data) || termInputBuf.length >= 128) {
+    if (termInputTimer) { clearTimeout(termInputTimer); termInputTimer = null; }
+    termFlushInput(ws);
+  } else if (!termInputTimer) {
+    var w = ws;
+    termInputTimer = setTimeout(function() { termFlushInput(w); }, TERM_INPUT_DELAY);
+  }
+}
+
+function termStartPing(ws) {
+  termStopPing();
+  termLatency = null;
+  termPingInterval = setInterval(function() {
+    if (ws && ws.readyState === 1) {
+      var buf = new ArrayBuffer(9);
+      var view = new DataView(buf);
+      view.setUint8(0, 2);
+      view.setFloat64(1, Date.now());
+      ws.send(buf);
+    }
+  }, TERM_PING_INTERVAL);
+}
+
+function termStopPing() {
+  if (termPingInterval) { clearInterval(termPingInterval); termPingInterval = null; }
+  termLatency = null;
+}
+
+function termIsPong(data) {
+  return data instanceof ArrayBuffer && data.byteLength === 9 && new DataView(data).getUint8(0) === 3;
+}
+
+function termDecodePong(data) {
+  return Math.round(Date.now() - new DataView(data).getFloat64(1));
+}
+
+function termUpdateStatusLatency(el, latency) {
+  if (!el) return;
+  var text = el.textContent.replace(/ \(\d+ms\)$/, '');
+  if (latency !== null && latency !== undefined) text += ' (' + latency + 'ms)';
+  el.textContent = text;
+}
+
+function termGetReconnectDelay() {
+  var delay = Math.min(3000 * Math.pow(2, termReconnectAttempt), 30000);
+  termReconnectAttempt++;
+  return Math.round(delay);
+}
+
+function termCloseWs() {
+  if (termWs) {
+    termWs.onmessage = null;
+    termWs.onclose = null;
+    termWs.close();
+    termWs = null;
+  }
+}
+
+function termNodeLabel(ip) {
+  if (!ip) return '';
+  var label = ip;
+  if (DATA && DATA.nodes) {
+    DATA.nodes.forEach(function(n) {
+      if (n.ip === ip) label = (n.hostname || ip) + ' (' + ip + ')';
+    });
+  }
+  return label;
+}
+
+function termLocalEchoWrite(t, data) {
+  for (var i = 0; i < data.length; i++) {
+    var c = data.charCodeAt(i);
+    if (c >= 0x20 && c !== 0x7f) {
+      t.write(data[i]);
+      termEchoQueue.push(c);
+    }
+  }
+}
+
+function termFilterEcho(data) {
+  if (termEchoQueue.length === 0) return data;
+  if (data instanceof Uint8Array) {
+    var i = 0;
+    while (i < data.length && termEchoQueue.length > 0) {
+      if (data[i] === termEchoQueue[0]) { termEchoQueue.shift(); i++; }
+      else { termEchoQueue = []; break; }
+    }
+    return i < data.length ? data.subarray(i) : null;
+  }
+  var i = 0;
+  while (i < data.length && termEchoQueue.length > 0) {
+    if (data.charCodeAt(i) === termEchoQueue[0]) { termEchoQueue.shift(); i++; }
+    else { termEchoQueue = []; break; }
+  }
+  return i < data.length ? data.substring(i) : null;
+}
+
+function termMultiFlushInput() {
+  var buf = termMultiInputBuf;
+  termMultiInputBuf = '';
+  termMultiInputTimer = null;
+  if (!buf) return;
+  termMultiPanes.forEach(function(p) {
+    if (p.ws && p.ws.readyState === 1) p.ws.send(buf);
+  });
+}
+
+function termMultiQueueInput(pane, data) {
+  if (termMultiSync) {
+    termMultiInputBuf += data;
+    if (termHasControl(data) || termMultiInputBuf.length >= 128) {
+      if (termMultiInputTimer) { clearTimeout(termMultiInputTimer); termMultiInputTimer = null; }
+      termMultiFlushInput();
+    } else if (!termMultiInputTimer) {
+      termMultiInputTimer = setTimeout(termMultiFlushInput, TERM_INPUT_DELAY);
+    }
+  } else {
+    pane._inputBuf = (pane._inputBuf || '') + data;
+    if (termHasControl(data) || pane._inputBuf.length >= 128) {
+      if (pane._inputTimer) { clearTimeout(pane._inputTimer); pane._inputTimer = null; }
+      if (pane.ws && pane.ws.readyState === 1) pane.ws.send(pane._inputBuf);
+      pane._inputBuf = '';
+    } else if (!pane._inputTimer) {
+      pane._inputTimer = setTimeout(function() {
+        pane._inputTimer = null;
+        if (pane.ws && pane.ws.readyState === 1) pane.ws.send(pane._inputBuf || '');
+        pane._inputBuf = '';
+      }, TERM_INPUT_DELAY);
+    }
+  }
+}
+
+function termPaneStartPing(pane) {
+  termPaneStopPing(pane);
+  pane._pingInterval = setInterval(function() {
+    if (pane.ws && pane.ws.readyState === 1) {
+      var buf = new ArrayBuffer(9);
+      var view = new DataView(buf);
+      view.setUint8(0, 2);
+      view.setFloat64(1, Date.now());
+      pane.ws.send(buf);
+    }
+  }, TERM_PING_INTERVAL);
+}
+
+function termPaneStopPing(pane) {
+  if (pane._pingInterval) { clearInterval(pane._pingInterval); pane._pingInterval = null; }
+}
+
+// ===== MAIN =====
 
 function terminalActivate() {
   var panel = document.getElementById('tab-terminal');
@@ -58,6 +239,7 @@ function terminalActivate() {
             '<button class="term-multi-btn term-multi-btn-danger" id="term-multi-clear">Clear</button>' +
           '</div>' +
           '<span id="term-status" class="term-status" style="margin-left:auto"></span>' +
+          '<button class="term-mode-btn' + (termLocalEcho ? ' active' : '') + '" id="term-echo-btn" title="Local echo for high-latency links">Echo</button>' +
           '<button class="cfg-btn cfg-btn-danger" id="term-reconnect" style="display:none">Reconnect</button>' +
         '</div>' +
         '<div id="term-container" class="term-container"></div>' +
@@ -75,7 +257,10 @@ function terminalActivate() {
     termFit.fit();
 
     term.onData(function(data) {
-      if (termWs && termWs.readyState === 1 && termMode === 'terminal') termWs.send(data);
+      if (termWs && termWs.readyState === 1 && termMode === 'terminal') {
+        if (termLocalEcho) termLocalEchoWrite(term, data);
+        termQueueInput(termWs, data);
+      }
     });
     term.onResize(function(size) {
       if (termMode === 'terminal') termSendResize(size.cols, size.rows);
@@ -98,6 +283,12 @@ function terminalActivate() {
     document.getElementById('term-log-unit').addEventListener('change', function() {
       localStorage.setItem('termLogUnit', this.value);
       termConnectLogs();
+    });
+    document.getElementById('term-echo-btn').addEventListener('click', function() {
+      termLocalEcho = !termLocalEcho;
+      localStorage.setItem('termLocalEcho', termLocalEcho);
+      this.classList.toggle('active', termLocalEcho);
+      if (!termLocalEcho) termEchoQueue = [];
     });
 
     document.getElementById('term-multi-add-node').addEventListener('click', termMultiAddSelectedNode);
@@ -161,7 +352,8 @@ function termSetMode(mode) {
   if (isSingle) {
     document.getElementById('term-cred-area').style.display = mode === 'terminal' ? '' : 'none';
     document.getElementById('term-log-controls').style.display = mode === 'logs' ? 'flex' : 'none';
-    if (termWs) { termWs.onclose = null; termWs.close(); termWs = null; }
+    termCloseWs();
+    termStopPing();
     term.clear();
     if (mode === 'logs') {
       termPopulateLogUnits();
@@ -171,7 +363,8 @@ function termSetMode(mode) {
     }
     setTimeout(function() { if (termFit) termFit.fit(); }, 50);
   } else {
-    if (termWs) { termWs.onclose = null; termWs.close(); termWs = null; }
+    termCloseWs();
+    termStopPing();
     termMultiPopulateNodes();
     termMultiUpdatePlaceholder();
     termMultiUpdateStatus();
@@ -257,7 +450,8 @@ function termOnTargetChange() {
 
   if (target === '__custom__') {
     termCurrentTarget = '';
-    if (termWs) { termWs.onclose = null; termWs.close(); termWs = null; }
+    termCloseWs();
+    termStopPing();
     term.clear();
     termShowCustomHostForm();
     return;
@@ -270,12 +464,12 @@ function termOnTargetChange() {
     return;
   }
 
-  // Auto-proxy to mesh node via local WebSocket (no credentials prompt)
   area.innerHTML =
     '<span class="term-proto-badge term-proto-ws">PROXY</span>' +
     '<button class="term-cred-btn term-cred-disconnect" id="term-disconnect">Disconnect</button>';
   document.getElementById('term-disconnect').addEventListener('click', function() {
-    if (termWs) { termWs.onclose = null; termWs.close(); termWs = null; }
+    termCloseWs();
+    termStopPing();
     term.clear();
     area.innerHTML = '';
     document.getElementById('term-target').value = '';
@@ -314,7 +508,8 @@ function termDoCustomConnect() {
   document.getElementById('term-disconnect').addEventListener('click', function() {
     delete termSessions[host];
     document.getElementById('term-target').value = '__custom__';
-    if (termWs) { termWs.onclose = null; termWs.close(); termWs = null; }
+    termCloseWs();
+    termStopPing();
     term.clear();
     termShowCustomHostForm();
   });
@@ -328,7 +523,9 @@ function termConnectWs(target, session) {
     authShowLogin(function() { termConnectWs(target, session); });
     return;
   }
-  if (termWs) { termWs.onclose = null; termWs.close(); termWs = null; }
+  termCloseWs();
+  termStopPing();
+  termEchoQueue = [];
   var reconnBtn = document.getElementById('term-reconnect');
   var statusEl = document.getElementById('term-status');
   var params = new URLSearchParams();
@@ -342,29 +539,58 @@ function termConnectWs(target, session) {
   var wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.hostname + ':' + TERM_PORT + '/ws/terminal';
   if (params.toString()) wsUrl += '?' + params;
 
+  var connectLabel = isRemote ? termNodeLabel(target) : 'local shell';
   statusEl.textContent = 'Connecting…';
   statusEl.className = 'term-status term-status-connecting';
   reconnBtn.style.display = 'none';
   term.clear();
+  if (isRemote) {
+    term.writeln('\r\n\x1b[33m  Connecting to ' + connectLabel + '…\x1b[0m\r\n');
+  }
 
   var openedAt = 0;
+  var gotFirstData = false;
   termWs = new WebSocket(wsUrl);
   termWs.binaryType = 'arraybuffer';
 
   termWs.onopen = function() {
     openedAt = Date.now();
+    termReconnectAttempt = 0;
     statusEl.textContent = isRemote ? 'Connected to ' + target : 'Connected';
     statusEl.className = 'term-status term-status-ok';
     reconnBtn.style.display = 'none';
     termSendResize(term.cols, term.rows);
+    termStartPing(termWs);
     term.focus();
   };
   termWs.onmessage = function(event) {
-    if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data));
-    else term.write(event.data);
+    if (event.data instanceof ArrayBuffer) {
+      if (termIsPong(event.data)) {
+        termLatency = termDecodePong(event.data);
+        termUpdateStatusLatency(statusEl, termLatency);
+        return;
+      }
+      if (!gotFirstData) { term.clear(); gotFirstData = true; }
+      var bytes = new Uint8Array(event.data);
+      if (termLocalEcho) {
+        var filtered = termFilterEcho(bytes);
+        if (filtered && filtered.length > 0) term.write(filtered);
+      } else {
+        term.write(bytes);
+      }
+    } else {
+      if (!gotFirstData) { term.clear(); gotFirstData = true; }
+      if (termLocalEcho) {
+        var filtered = termFilterEcho(event.data);
+        if (filtered && filtered.length > 0) term.write(filtered);
+      } else {
+        term.write(event.data);
+      }
+    }
   };
   termWs.onclose = function() {
     termWs = null;
+    termStopPing();
     var quickClose = openedAt && (Date.now() - openedAt) < 3000;
     if (isRemote && quickClose) {
       statusEl.textContent = 'Node unreachable';
@@ -376,13 +602,14 @@ function termConnectWs(target, session) {
       statusEl.className = 'term-status term-status-off';
       reconnBtn.style.display = '';
     } else {
-      term.writeln('\r\n\x1b[31m[Connection closed — reconnecting in 3s…]\x1b[0m');
+      var delay = termGetReconnectDelay();
+      term.writeln('\r\n\x1b[31m[Connection closed — reconnecting in ' + (delay / 1000).toFixed(0) + 's…]\x1b[0m');
       statusEl.textContent = 'Reconnecting…';
       statusEl.className = 'term-status term-status-off';
       reconnBtn.style.display = '';
       termReconnectTimer = setTimeout(function() {
         if (termMode === 'terminal') termConnectWs(target, session);
-      }, 3000);
+      }, delay);
     }
   };
   termWs.onerror = function() {
@@ -399,7 +626,8 @@ function termConnectWs(target, session) {
 // ===== SINGLE: LOGS =====
 
 function termConnectLogs() {
-  if (termWs) { termWs.onclose = null; termWs.close(); termWs = null; }
+  termCloseWs();
+  termStopPing();
   var reconnBtn = document.getElementById('term-reconnect');
   var statusEl = document.getElementById('term-status');
   var unit = document.getElementById('term-log-unit').value;
@@ -418,11 +646,16 @@ function termConnectLogs() {
   statusEl.className = 'term-status term-status-connecting';
   reconnBtn.style.display = 'none';
   term.clear();
+  if (isRemote) {
+    term.writeln('\r\n\x1b[33m  Connecting to ' + termNodeLabel(target) + '…\x1b[0m\r\n');
+  }
 
   var openedAt = 0;
   termWs = new WebSocket(wsUrl);
   termWs.onopen = function() {
     openedAt = Date.now();
+    termReconnectAttempt = 0;
+    term.clear();
     var label = 'Streaming' + (unit ? ' — ' + unit : '');
     if (isRemote) label += ' on ' + target;
     statusEl.textContent = label;
@@ -443,13 +676,14 @@ function termConnectLogs() {
       statusEl.className = 'term-status term-status-off';
       reconnBtn.style.display = '';
     } else {
-      term.writeln('\r\n\x1b[31m[Stream ended — reconnecting in 3s…]\x1b[0m');
+      var delay = termGetReconnectDelay();
+      term.writeln('\r\n\x1b[31m[Stream ended — reconnecting in ' + (delay / 1000).toFixed(0) + 's…]\x1b[0m');
       statusEl.textContent = 'Reconnecting…';
       statusEl.className = 'term-status term-status-off';
       reconnBtn.style.display = '';
       termReconnectTimer = setTimeout(function() {
         if (termMode === 'logs') termConnectLogs();
-      }, 3000);
+      }, delay);
     }
   };
   termWs.onerror = function() {
@@ -488,6 +722,7 @@ function termMultiAddPane(target, label, user, password) {
   paneEl.innerHTML =
     '<div class="term-multi-pane-bar">' +
       '<span class="term-multi-pane-label">' + escHtml(label) + '</span>' +
+      '<span class="term-multi-pane-latency"></span>' +
       '<span class="term-multi-pane-status term-status-connecting">●</span>' +
       '<button class="term-multi-pane-close" data-pane="' + id + '">×</button>' +
     '</div>' +
@@ -523,6 +758,7 @@ function termMultiAddPane(target, label, user, password) {
   pane.ws = ws;
 
   var statusEl = paneEl.querySelector('.term-multi-pane-status');
+  var latencyEl = paneEl.querySelector('.term-multi-pane-latency');
 
   ws.onopen = function() {
     statusEl.className = 'term-multi-pane-status term-status-ok';
@@ -532,14 +768,25 @@ function termMultiAddPane(target, label, user, password) {
     view.setUint16(1, t.cols);
     view.setUint16(3, t.rows);
     ws.send(buf);
+    termPaneStartPing(pane);
     t.focus();
   };
   ws.onmessage = function(event) {
-    if (event.data instanceof ArrayBuffer) t.write(new Uint8Array(event.data));
-    else t.write(event.data);
+    if (event.data instanceof ArrayBuffer) {
+      if (termIsPong(event.data)) {
+        pane.latency = termDecodePong(event.data);
+        if (latencyEl) latencyEl.textContent = pane.latency + 'ms';
+        return;
+      }
+      t.write(new Uint8Array(event.data));
+    } else {
+      t.write(event.data);
+    }
   };
   ws.onclose = function() {
     statusEl.className = 'term-multi-pane-status term-status-off';
+    if (latencyEl) latencyEl.textContent = '';
+    termPaneStopPing(pane);
     t.writeln('\r\n\x1b[31m[Disconnected]\x1b[0m');
   };
   ws.onerror = function() {
@@ -547,13 +794,7 @@ function termMultiAddPane(target, label, user, password) {
   };
 
   t.onData(function(data) {
-    if (termMultiSync) {
-      termMultiPanes.forEach(function(p) {
-        if (p.ws && p.ws.readyState === 1) p.ws.send(data);
-      });
-    } else {
-      if (pane.ws && pane.ws.readyState === 1) pane.ws.send(data);
-    }
+    termMultiQueueInput(pane, data);
   });
 
   t.onResize(function(size) {
@@ -583,6 +824,8 @@ function termMultiRemovePane(id) {
   }
   if (idx === -1) return;
   var pane = termMultiPanes[idx];
+  termPaneStopPing(pane);
+  if (pane._inputTimer) clearTimeout(pane._inputTimer);
   if (pane.ws) { pane.ws.onclose = null; pane.ws.close(); }
   pane.term.dispose();
   pane.el.remove();
@@ -595,6 +838,8 @@ function termMultiRemovePane(id) {
 function termMultiClearAll() {
   while (termMultiPanes.length) {
     var pane = termMultiPanes[0];
+    termPaneStopPing(pane);
+    if (pane._inputTimer) clearTimeout(pane._inputTimer);
     if (pane.ws) { pane.ws.onclose = null; pane.ws.close(); }
     pane.term.dispose();
     pane.el.remove();
