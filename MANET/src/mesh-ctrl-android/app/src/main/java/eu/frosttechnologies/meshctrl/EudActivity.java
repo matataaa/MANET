@@ -278,7 +278,7 @@ public class EudActivity extends AppCompatActivity {
     private Button makeChanButton(String text) {
         Button btn = new Button(this);
         btn.setText(text);
-        btn.setTextColor(0xFF1a5a1a);
+        btn.setTextColor(0xFF33FF33);
         btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
         btn.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         btn.setAllCaps(false);
@@ -302,14 +302,13 @@ public class EudActivity extends AppCompatActivity {
             if (txBtn != null) {
                 GradientDrawable txBg = new GradientDrawable();
                 txBg.setCornerRadius(dpToPx(3));
+                txBg.setStroke(dpToPx(1), 0xFF33FF33);
                 if (ch == txChannel) {
                     txBg.setColor(0xFF33FF33);
-                    txBg.setStroke(dpToPx(1), 0xFF33FF33);
                     txBtn.setTextColor(0xFF000000);
                 } else {
                     txBg.setColor(0xFF0a1a0a);
-                    txBg.setStroke(dpToPx(1), 0xFF1a5a1a);
-                    txBtn.setTextColor(0xFF1a5a1a);
+                    txBtn.setTextColor(0xFF33FF33);
                 }
                 txBtn.setText(label + "TX");
                 txBtn.setBackground(txBg);
@@ -319,14 +318,13 @@ public class EudActivity extends AppCompatActivity {
             if (rxBtn != null) {
                 GradientDrawable rxBg = new GradientDrawable();
                 rxBg.setCornerRadius(dpToPx(3));
+                rxBg.setStroke(dpToPx(1), 0xFF33FF33);
                 if (rxChannels.contains(ch)) {
                     rxBg.setColor(0xFF33FF33);
-                    rxBg.setStroke(dpToPx(1), 0xFF33FF33);
                     rxBtn.setTextColor(0xFF000000);
                 } else {
                     rxBg.setColor(0xFF0a1a0a);
-                    rxBg.setStroke(dpToPx(1), 0xFF1a5a1a);
-                    rxBtn.setTextColor(0xFF1a5a1a);
+                    rxBtn.setTextColor(0xFF33FF33);
                 }
                 rxBtn.setText(label + "RX");
                 rxBtn.setBackground(rxBg);
