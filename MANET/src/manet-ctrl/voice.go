@@ -28,8 +28,13 @@ const (
 	voiceMcastIface   = "br0"
 )
 
+type voiceWSClient struct {
+	ssrc   uint32
+	sendCh chan []byte
+}
+
 var (
-	voiceClients   = make(map[*websocket.Conn]uint32)
+	voiceClients   = make(map[*websocket.Conn]*voiceWSClient)
 	voiceClientsMu sync.RWMutex
 	voiceSSRCSeq   uint32
 
@@ -185,13 +190,16 @@ func voiceRxLoop(ctx context.Context, channel int) {
 		pktSSRC := binary.BigEndian.Uint32(buf[8:12])
 
 		voiceClientsMu.RLock()
-		for c, cs := range voiceClients {
-			if cs == pktSSRC {
+		for _, cl := range voiceClients {
+			if cl.ssrc == pktSSRC {
 				continue
 			}
 			pkt := make([]byte, n)
 			copy(pkt, buf[:n])
-			c.WriteMessage(websocket.BinaryMessage, pkt)
+			select {
+			case cl.sendCh <- pkt:
+			default:
+			}
 		}
 		voiceClientsMu.RUnlock()
 	}
@@ -226,15 +234,28 @@ func handleVoiceWS(w http.ResponseWriter, r *http.Request) {
 
 	ssrc := atomic.AddUint32(&voiceSSRCSeq, 1)
 	var seqNum uint16
+	sendCh := make(chan []byte, 128)
+
+	client := &voiceWSClient{ssrc: ssrc, sendCh: sendCh}
 
 	voiceClientsMu.Lock()
-	voiceClients[conn] = ssrc
+	voiceClients[conn] = client
 	voiceClientsMu.Unlock()
 
 	defer func() {
 		voiceClientsMu.Lock()
 		delete(voiceClients, conn)
 		voiceClientsMu.Unlock()
+		close(sendCh)
+	}()
+
+	go func() {
+		for pkt := range sendCh {
+			if err := conn.WriteMessage(websocket.BinaryMessage, pkt); err != nil {
+				conn.Close()
+				return
+			}
+		}
 	}()
 
 	txCh := int(voiceTxCh.Load())
@@ -258,9 +279,12 @@ func handleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		}
 
 		voiceClientsMu.RLock()
-		for c := range voiceClients {
+		for c, cl := range voiceClients {
 			if c != conn {
-				c.WriteMessage(websocket.BinaryMessage, rtp)
+				select {
+				case cl.sendCh <- rtp:
+				default:
+				}
 			}
 		}
 		voiceClientsMu.RUnlock()

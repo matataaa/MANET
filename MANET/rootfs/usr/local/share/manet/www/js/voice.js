@@ -358,12 +358,27 @@ async function voiceClientStart() {
     var playBuf = new Float32Array(playBufSize);
     var playWritePos = 0;
     var playReadPos = 0;
+    var playbackStarted = false;
+    var jitterThreshold = 960 * 3;
 
     var playNode = ctx.createScriptProcessor(VOICE_FRAME_SIZE, 0, 1);
     playNode.onaudioprocess = function(e) {
       var out = e.outputBuffer.getChannelData(0);
+      var buffered = playWritePos - playReadPos;
+      if (!playbackStarted) {
+        if (buffered < jitterThreshold) {
+          for (var i = 0; i < out.length; i++) out[i] = 0;
+          return;
+        }
+        playbackStarted = true;
+      }
+      if (buffered <= 0) {
+        playbackStarted = false;
+        for (var i = 0; i < out.length; i++) out[i] = 0;
+        return;
+      }
       for (var i = 0; i < out.length; i++) {
-        if (playReadPos !== playWritePos) {
+        if (playReadPos < playWritePos) {
           out[i] = playBuf[playReadPos % playBufSize];
           playReadPos++;
         } else {
@@ -416,7 +431,7 @@ async function voiceClientStart() {
         clearTimeout(rxTimeout);
         rxTimeout = setTimeout(function() {
           if (voiceClient) { voiceClient.receiving = false; voiceUpdateClientIndicators(); }
-        }, 300);
+        }, 500);
       }
     };
 
@@ -435,6 +450,9 @@ async function voiceClientStart() {
       for (var i = 0; i < samples.length; i++) {
         playBuf[playWritePos % playBufSize] = samples[i];
         playWritePos++;
+      }
+      if (playWritePos - playReadPos > playBufSize) {
+        playReadPos = playWritePos - playBufSize;
       }
     };
 
