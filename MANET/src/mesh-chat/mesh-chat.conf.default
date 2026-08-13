@@ -5,3 +5,8 @@ MULTICAST_ADDR=239.255.50.50:9800
 INTERFACE=br0
 # Local HTTP/WebSocket port (proxied by manet-ctrl)
 PORT=9800
+# Text-to-speech notifications (requires espeak-ng)
+TTS_ENABLED=false
+TTS_MESSAGE=true
+TTS_FILE_START=true
+TTS_FILE_DONE=true

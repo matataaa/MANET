@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -66,6 +67,20 @@ type Config struct {
 	MulticastAddr string
 	Iface         string
 	Port          int
+	TTSEnabled    bool
+	TTSMessage    bool
+	TTSFileStart  bool
+	TTSFileDone   bool
+}
+
+func speak(text string) {
+	if !cfg.TTSEnabled {
+		return
+	}
+	go func() {
+		cmd := exec.Command("espeak-ng", "-v", "en", "-s", "160", text)
+		cmd.Run()
+	}()
 }
 
 var (
@@ -520,6 +535,9 @@ func handleIncomingMessage(data []byte) {
 	wsEvent("message", msg)
 	wsEvent("unread", map[string]int{"count": unreadCount()})
 	log.Printf("rx %s from %s", msg.Type, msg.From)
+	if cfg.TTSMessage {
+		speak("Message from " + msg.From)
+	}
 	go sendReceipt(msg.ID, msg.FromIP)
 	if msg.File != nil {
 		go autoFetchFile(msg)
@@ -548,6 +566,9 @@ func autoFetchFile(msg Message) {
 		"file_id": msg.File.ID, "name": msg.File.Name,
 		"total": msg.File.Size, "received": 0,
 	})
+	if cfg.TTSFileStart {
+		speak("Downloading attachment " + msg.File.Name)
+	}
 
 	ok := false
 	sources := fileSources(msg)
@@ -578,6 +599,9 @@ func autoFetchFile(msg Message) {
 
 	if ok {
 		wsEvent("file_ready", map[string]string{"file_id": msg.File.ID, "name": msg.File.Name})
+		if cfg.TTSFileDone {
+			speak("Attachment " + msg.File.Name + " downloaded")
+		}
 	} else {
 		reason := "all sources failed"
 		if len(sources) == 0 {
@@ -1126,6 +1150,8 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"multicast_addr": cfg.MulticastAddr, "interface": cfg.Iface, "port": cfg.Port,
+		"tts_enabled": cfg.TTSEnabled, "tts_message": cfg.TTSMessage,
+		"tts_file_start": cfg.TTSFileStart, "tts_file_done": cfg.TTSFileDone,
 	})
 }
 
@@ -1163,6 +1189,9 @@ func handleDeliver(w http.ResponseWriter, r *http.Request) {
 	wsEvent("message", msg)
 	wsEvent("unread", map[string]int{"count": unreadCount()})
 	log.Printf("delivered %s from %s", msg.Type, msg.From)
+	if cfg.TTSMessage {
+		speak("Message from " + msg.From)
+	}
 	go sendReceipt(msg.ID, msg.FromIP)
 	go autoFetchFile(msg)
 
@@ -1402,7 +1431,10 @@ func handleReceipt(w http.ResponseWriter, r *http.Request) {
 // --- Config ---
 
 func loadConfig(path string) Config {
-	c := Config{MulticastAddr: defaultMulticastAddr, Iface: "br0", Port: 9800}
+	c := Config{
+		MulticastAddr: defaultMulticastAddr, Iface: "br0", Port: 9800,
+		TTSEnabled: false, TTSMessage: true, TTSFileStart: true, TTSFileDone: true,
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return c
@@ -1424,6 +1456,14 @@ func loadConfig(path string) Config {
 			c.Iface = v
 		case "PORT":
 			fmt.Sscanf(v, "%d", &c.Port)
+		case "TTS_ENABLED":
+			c.TTSEnabled = v == "true"
+		case "TTS_MESSAGE":
+			c.TTSMessage = v == "true"
+		case "TTS_FILE_START":
+			c.TTSFileStart = v == "true"
+		case "TTS_FILE_DONE":
+			c.TTSFileDone = v == "true"
 		}
 	}
 	return c
@@ -1480,6 +1520,6 @@ func main() {
 	mux.HandleFunc("/remote-delete", handleRemoteDelete)
 
 	listen := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
-	log.Printf("mesh-chat v3: host=%s ip=%s listen=%s mcast=%s", hostname, meshIP, listen, cfg.MulticastAddr)
+	log.Printf("meshcom v3: host=%s ip=%s listen=%s mcast=%s", hostname, meshIP, listen, cfg.MulticastAddr)
 	log.Fatal(http.ListenAndServe(listen, mux))
 }

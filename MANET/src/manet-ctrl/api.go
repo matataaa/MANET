@@ -1595,13 +1595,17 @@ func applyVoiceVolume(conf map[string]string) {
 	if mic != "" {
 		v, err := strconv.Atoi(mic)
 		if err == nil && v >= 0 && v <= 100 {
-			runCmd(3*time.Second, "amixer", "-c", card, "set", "Mic", fmt.Sprintf("%d%%", v))
+			pct := fmt.Sprintf("%d%%", v)
+			runCmd(3*time.Second, "amixer", "-c", card, "set", "Mic Capture", pct)
+			runCmd(3*time.Second, "amixer", "-c", card, "set", "Mic", pct)
 		}
 	}
 	if spk != "" {
 		v, err := strconv.Atoi(spk)
 		if err == nil && v >= 0 && v <= 100 {
-			runCmd(3*time.Second, "amixer", "-c", card, "set", "Speaker", fmt.Sprintf("%d%%", v))
+			pct := fmt.Sprintf("%d%%", v)
+			runCmd(3*time.Second, "amixer", "-c", card, "set", "PCM Playback", pct)
+			runCmd(3*time.Second, "amixer", "-c", card, "set", "Speaker", pct)
 		}
 	}
 }

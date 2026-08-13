@@ -2,7 +2,7 @@
   display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;
   max-width: 1100px;
 }
-.voice-client-card { display: flex; flex-direction: column; }
+.voice-client-card { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 .voice-status-card .status-row {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 14px; border-bottom: 1px solid var(--border2);
@@ -108,17 +108,17 @@
 .voice-device-selectors { padding: 0; }
 .voice-device-row {
   display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px 10px 14px; border-bottom: 1px solid var(--border2);
+  padding: 10px 20px 10px 14px; border-bottom: 1px solid var(--border2);
 }
 .voice-device-label {
-  flex: 0 0 110px; font-size: 11px; font-weight: 700;
+  flex: 0 0 90px; font-size: 11px; font-weight: 700;
   color: var(--muted); text-transform: uppercase; letter-spacing: .5px;
 }
 .voice-device-select {
-  flex: 1; padding: 6px 8px; border-radius: 6px;
+  flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px;
   border: 1px solid var(--border2); background: var(--bg);
   color: var(--text); font-family: var(--font); font-size: 12px;
-  cursor: pointer; max-width: 200px;
+  cursor: pointer;
 }
 .voice-device-select:focus { outline: none; border-color: var(--accent2); }
 
@@ -161,13 +161,13 @@
 }
 
 /* Channel card */
-.voice-channel-card { min-width: 200px; display: flex; flex-direction: column; }
+.voice-channel-card { min-width: 0; display: flex; flex-direction: column; }
 .voice-ch-info {
   font-size: 10px; font-weight: 400; color: var(--muted);
   text-transform: none; letter-spacing: 0;
 }
 .voice-ch-list {
-  flex: 1; overflow-y: auto;
+  flex: 1; overflow-y: auto; max-height: 480px;
 }
 .voice-ch-row {
   display: flex; align-items: center; gap: 6px;
@@ -200,11 +200,11 @@
 .voice-ch-listen { margin-left: auto; }
 .voice-ch-listen:hover { border-color: var(--good); }
 .voice-ch-listen.active {
-  background: var(--good); border-color: var(--good); color: var(--good);
+  background: var(--good); border-color: var(--good); color: #fff;
 }
 .voice-ch-tx:hover { border-color: var(--good); }
 .voice-ch-tx.active {
-  background: var(--good); border-color: var(--good); color: var(--good);
+  background: var(--good); border-color: var(--good); color: #fff;
 }
 
 /* Volume sliders */

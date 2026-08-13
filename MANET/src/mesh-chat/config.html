@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Mesh Chat Config</title>
+<title>MESHCOM Config</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--text:#e4e4e7;--muted:#6b7280;--accent:#3b82f6}
@@ -23,7 +23,7 @@ button{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:
 </style>
 </head>
 <body>
-<h2>Mesh Chat Configuration</h2>
+<h2>MESHCOM Configuration</h2>
 <div class="form-group">
   <label>Multicast Address</label>
   <input id="mcast" type="text" placeholder="239.255.50.50:9800">
@@ -39,6 +39,20 @@ button{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:
   <input id="port" type="number" placeholder="9800" min="1024" max="65535">
   <div class="hint">Local WebSocket port (restart required after change)</div>
 </div>
+<h2 style="margin-top:24px">Text-to-Speech</h2>
+<div class="hint" style="margin-bottom:12px">Requires espeak-ng installed on the node</div>
+<div class="form-group">
+  <label><input type="checkbox" id="tts-enabled"> Enable TTS notifications</label>
+</div>
+<div class="form-group">
+  <label><input type="checkbox" id="tts-message" checked> Announce incoming messages</label>
+</div>
+<div class="form-group">
+  <label><input type="checkbox" id="tts-file-start" checked> Announce attachment download start</label>
+</div>
+<div class="form-group">
+  <label><input type="checkbox" id="tts-file-done" checked> Announce attachment download complete</label>
+</div>
 <div class="actions">
   <button class="btn-save" id="save-btn">Save &amp; Restart</button>
 </div>
@@ -53,6 +67,10 @@ button{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:
       document.getElementById('mcast').value = d.multicast_addr || '';
       document.getElementById('iface').value = d.interface || '';
       document.getElementById('port').value = d.port || '';
+      document.getElementById('tts-enabled').checked = !!d.tts_enabled;
+      document.getElementById('tts-message').checked = d.tts_message !== false;
+      document.getElementById('tts-file-start').checked = d.tts_file_start !== false;
+      document.getElementById('tts-file-done').checked = d.tts_file_done !== false;
     }).catch(function(){});
   }
 
@@ -62,7 +80,11 @@ button{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:
     var body = {
       MULTICAST_ADDR: document.getElementById('mcast').value.trim(),
       INTERFACE: document.getElementById('iface').value.trim(),
-      PORT: document.getElementById('port').value.trim()
+      PORT: document.getElementById('port').value.trim(),
+      TTS_ENABLED: document.getElementById('tts-enabled').checked ? 'true' : 'false',
+      TTS_MESSAGE: document.getElementById('tts-message').checked ? 'true' : 'false',
+      TTS_FILE_START: document.getElementById('tts-file-start').checked ? 'true' : 'false',
+      TTS_FILE_DONE: document.getElementById('tts-file-done').checked ? 'true' : 'false'
     };
     fetch(base + '/config', {
       method: 'POST',

@@ -2,7 +2,7 @@
   "name": "mesh-chat",
   "label": "MESHCOM",
   "version": "1.0.0",
-  "description": "Mesh-wide text chat over multicast",
+  "description": "MESHCOM — mesh-wide text chat over multicast",
   "author": "Frost Technologies",
   "type": "go",
   "backend": {

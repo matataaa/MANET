@@ -412,7 +412,7 @@ public class EudActivity extends AppCompatActivity {
         executor.execute(() -> {
             try {
                 String base = nodeUrl.replaceAll("/$", "");
-                String body = "{\"action\":\"configure\",\"mic_volume\":\"" + mic + "\",\"speaker_volume\":\"" + spk + "\"}";
+                String body = "{\"action\":\"volume\",\"mic_volume\":\"" + mic + "\",\"speaker_volume\":\"" + spk + "\"}";
                 postJson(base + "/api/voice", body);
             } catch (Exception ignored) {}
         });

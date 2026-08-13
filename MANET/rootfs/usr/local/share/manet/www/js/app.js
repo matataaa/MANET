@@ -231,7 +231,7 @@ function pollAppletBadges() {
       if (typeof notifyBadge === 'function') notifyBadge('mesh-chat', count);
       var prev = _lastBadgeCounts['mesh-chat'] || 0;
       if (count > prev && typeof notify === 'function') {
-        notify('Mesh Chat', count + ' unread message(s)', {
+        notify('MESHCOM', count + ' unread message(s)', {
           type: 'info',
           onClick: function() { window.location.hash = '#applets/mesh-chat'; }
         });
