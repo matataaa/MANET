@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MESHCOM Config</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--text:#e4e4e7;--muted:#6b7280;--accent:#3b82f6}
+body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text);padding:24px}
+h2{font-size:16px;margin-bottom:16px}
+.form-group{margin-bottom:16px}
+label{display:block;font-size:13px;font-weight:600;margin-bottom:6px;color:var(--muted)}
+input{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:14px}
+input:focus{outline:none;border-color:var(--accent)}
+.hint{font-size:11px;color:var(--muted);margin-top:4px}
+.actions{margin-top:24px;display:flex;gap:8px}
+button{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;border:none}
+.btn-save{background:var(--accent);color:#fff}
+.btn-save:disabled{opacity:.4}
+.msg{margin-top:12px;font-size:13px;padding:8px 12px;border-radius:6px}
+.msg.ok{background:#064e3b;color:#6ee7b7}
+.msg.err{background:#7f1d1d;color:#fca5a5}
+</style>
+</head>
+<body>
+<h2>MESHCOM Configuration</h2>
+<div class="form-group">
+  <label>Multicast Address</label>
+  <input id="mcast" type="text" placeholder="239.255.50.50:9800">
+  <div class="hint">Must match on all nodes to communicate</div>
+</div>
+<div class="form-group">
+  <label>Interface</label>
+  <input id="iface" type="text" placeholder="br0">
+  <div class="hint">Network interface for multicast group</div>
+</div>
+<div class="form-group">
+  <label>Port</label>
+  <input id="port" type="number" placeholder="9800" min="1024" max="65535">
+  <div class="hint">Local WebSocket port (restart required after change)</div>
+</div>
+<h2 style="margin-top:24px">Text-to-Speech</h2>
+<div class="hint" style="margin-bottom:12px">Requires espeak-ng installed on the node</div>
+<div class="form-group">
+  <label><input type="checkbox" id="tts-enabled"> Enable TTS notifications</label>
+</div>
+<div class="form-group">
+  <label><input type="checkbox" id="tts-message" checked> Announce incoming messages</label>
+</div>
+<div class="form-group">
+  <label><input type="checkbox" id="tts-file-start" checked> Announce attachment download start</label>
+</div>
+<div class="form-group">
+  <label><input type="checkbox" id="tts-file-done" checked> Announce attachment download complete</label>
+</div>
+<div class="actions">
+  <button class="btn-save" id="save-btn">Save &amp; Restart</button>
+</div>
+<div id="status-msg"></div>
+<script>
+(function() {
+  var appletName = 'mesh-chat';
+  var base = '/api/applets/' + appletName;
+
+  function load() {
+    fetch(base + '/config').then(function(r){return r.json()}).then(function(d) {
+      document.getElementById('mcast').value = d.multicast_addr || '';
+      document.getElementById('iface').value = d.interface || '';
+      document.getElementById('port').value = d.port || '';
+      document.getElementById('tts-enabled').checked = !!d.tts_enabled;
+      document.getElementById('tts-message').checked = d.tts_message !== false;
+      document.getElementById('tts-file-start').checked = d.tts_file_start !== false;
+      document.getElementById('tts-file-done').checked = d.tts_file_done !== false;
+    }).catch(function(){});
+  }
+
+  document.getElementById('save-btn').onclick = function() {
+    var btn = this;
+    btn.disabled = true;
+    var body = {
+      MULTICAST_ADDR: document.getElementById('mcast').value.trim(),
+      INTERFACE: document.getElementById('iface').value.trim(),
+      PORT: document.getElementById('port').value.trim(),
+      TTS_ENABLED: document.getElementById('tts-enabled').checked ? 'true' : 'false',
+      TTS_MESSAGE: document.getElementById('tts-message').checked ? 'true' : 'false',
+      TTS_FILE_START: document.getElementById('tts-file-start').checked ? 'true' : 'false',
+      TTS_FILE_DONE: document.getElementById('tts-file-done').checked ? 'true' : 'false'
+    };
+    fetch(base + '/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    }).then(function(r){return r.json()}).then(function(d) {
+      var el = document.getElementById('status-msg');
+      if (d.ok) {
+        el.className = 'msg ok';
+        el.textContent = 'Saved. Restarting applet...';
+        fetch(base + '/action', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({action: 'restart'})
+        }).then(function() {
+          setTimeout(function(){ el.textContent = 'Restarted.'; btn.disabled = false; }, 2000);
+        });
+      } else {
+        el.className = 'msg err';
+        el.textContent = d.error || 'Save failed';
+        btn.disabled = false;
+      }
+    }).catch(function(e) {
+      document.getElementById('status-msg').className = 'msg err';
+      document.getElementById('status-msg').textContent = 'Error: ' + e;
+      btn.disabled = false;
+    });
+  };
+
+  load();
+})();
+</script>
+</body>
+</html>

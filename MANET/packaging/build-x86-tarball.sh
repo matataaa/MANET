@@ -79,6 +79,14 @@ if [ -f "$SRC/mesh-voice/bin/mesh-voice-linux-amd64" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+#  Applets — copy mesh-chat binary into its applet dir
+# ---------------------------------------------------------------------------
+APPLET_CHAT="$STAGE/usr/local/share/manet/applets/mesh-chat"
+if [ -d "$APPLET_CHAT" ]; then
+    install -m 0755 "$SRC/mesh-chat/mesh-chat" "$APPLET_CHAT/mesh-chat"
+fi
+
+# ---------------------------------------------------------------------------
 #  Networkd configs (bat0, br0 bridge) — x86 nodes don't get these from
 #  firstrun.sh.template, so we bundle them here.
 # ---------------------------------------------------------------------------
@@ -173,6 +181,7 @@ for unit in \
     ebtables-restore.service \
     gateway-manager.service \
     manet-ctrl.service \
+    mesh-chat.service \
     mesh-registry.service \
     node-manager.service \
     sae-watchdog.service

@@ -84,6 +84,14 @@ done
 install_file 0755 "$SRC/mesh-voice/bin/mesh-voice-linux-arm64" "$STAGE/usr/local/bin/mesh-voice"
 
 # ---------------------------------------------------------------------------
+#  Applets — copy mesh-chat binary into its applet dir
+# ---------------------------------------------------------------------------
+APPLET_CHAT="$STAGE/usr/local/share/manet/applets/mesh-chat"
+if [ -d "$APPLET_CHAT" ]; then
+    install -m 0755 "$SRC/mesh-chat/mesh-chat" "$APPLET_CHAT/mesh-chat"
+fi
+
+# ---------------------------------------------------------------------------
 #  Android APK
 # ---------------------------------------------------------------------------
 ANDROID_DIR="$SRC/mesh-ctrl-android"

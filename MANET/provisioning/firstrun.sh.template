@@ -188,7 +188,7 @@ apt install -y ipcalc nmap lshw tcpdump net-tools nftables wireless-tools iperf3
         radvd bridge-utils firmware-mediatek libnss-mdns networkd-dispatcher\
         libgps-dev libcap-dev screen arping bc jq git libssl-dev hostapd dnsmasq pulseaudio\
         python3-protobuf unzip chrony systemd-resolved dhcping mpg123\
-        libnl-3-dev libnl-genl-3-dev libnl-route-3-dev ebtables libdbus-1-dev gpsd pulseaudio-utils libopusfile0 espeak-ng \
+        libnl-3-dev libnl-genl-3-dev libnl-route-3-dev ebtables libdbus-1-dev gpsd pulseaudio-utils libopusfile0 espeak-ng mbrola mbrola-us2 \
     || echo "WARNING: apt install failed (offline re-run?) — continuing with packages already present"
 
 

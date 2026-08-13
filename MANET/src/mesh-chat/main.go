@@ -73,14 +73,33 @@ type Config struct {
 	TTSFileDone   bool
 }
 
+var speakCh = make(chan string, 32)
+var speakVoice = "en-gb"
+
+func init() {
+	if err := exec.Command("espeak-ng", "-v", "mb-us2", "--version").Run(); err == nil {
+		speakVoice = "mb-us2"
+	}
+	go func() {
+		for text := range speakCh {
+			exec.Command("espeak-ng", "-v", speakVoice, "-s", "130", "-p", "30", text).Run()
+		}
+	}()
+}
+
 func speak(text string) {
 	if !cfg.TTSEnabled {
 		return
 	}
-	go func() {
-		cmd := exec.Command("espeak-ng", "-v", "en", "-s", "160", text)
-		cmd.Run()
-	}()
+	select {
+	case speakCh <- text:
+	default:
+	}
+}
+
+func speakableName(hostname string) string {
+	parts := strings.SplitN(hostname, "-", 2)
+	return parts[0]
 }
 
 var (
@@ -536,7 +555,7 @@ func handleIncomingMessage(data []byte) {
 	wsEvent("unread", map[string]int{"count": unreadCount()})
 	log.Printf("rx %s from %s", msg.Type, msg.From)
 	if cfg.TTSMessage {
-		speak("Message from " + msg.From)
+		speak("Message from " + speakableName(msg.From))
 	}
 	go sendReceipt(msg.ID, msg.FromIP)
 	if msg.File != nil {
@@ -567,7 +586,7 @@ func autoFetchFile(msg Message) {
 		"total": msg.File.Size, "received": 0,
 	})
 	if cfg.TTSFileStart {
-		speak("Downloading attachment " + msg.File.Name)
+		speak("Downloading attachment")
 	}
 
 	ok := false
@@ -600,7 +619,7 @@ func autoFetchFile(msg Message) {
 	if ok {
 		wsEvent("file_ready", map[string]string{"file_id": msg.File.ID, "name": msg.File.Name})
 		if cfg.TTSFileDone {
-			speak("Attachment " + msg.File.Name + " downloaded")
+			speak("Attachment downloaded")
 		}
 	} else {
 		reason := "all sources failed"
@@ -994,7 +1013,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	msg := Message{
 		ID: genID(), From: hostname, FromIP: meshIP,
 		To: to, Type: "file",
-		File: &FileMeta{Name: hdr.Filename, Size: hdr.Size, ID: fileID},
+		File: &FileMeta{Name: hdr.Filename, Size: hdr.Size, ID: fileID, Local: true},
 		TS: time.Now().Unix(), Read: true,
 	}
 
@@ -1190,7 +1209,7 @@ func handleDeliver(w http.ResponseWriter, r *http.Request) {
 	wsEvent("unread", map[string]int{"count": unreadCount()})
 	log.Printf("delivered %s from %s", msg.Type, msg.From)
 	if cfg.TTSMessage {
-		speak("Message from " + msg.From)
+		speak("Message from " + speakableName(msg.From))
 	}
 	go sendReceipt(msg.ID, msg.FromIP)
 	go autoFetchFile(msg)
