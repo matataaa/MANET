@@ -7,6 +7,86 @@ let pollTimer = null;
 let booted = false;
 let _lastBadgeCounts = {};
 
+// --- Auth ---
+let _authRequired = false;
+let _authenticated = false;
+let _authLoginVisible = false;
+
+function authCheckStatus() {
+  return fetch('/api/auth/status').then(function(r) { return r.json(); }).then(function(d) {
+    _authRequired = d.required;
+    _authenticated = d.authenticated;
+  }).catch(function() {});
+}
+
+function authShowLogin(onSuccess) {
+  if (_authLoginVisible) return;
+  _authLoginVisible = true;
+  var overlay = document.createElement('div');
+  overlay.id = 'auth-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center';
+  var box = document.createElement('div');
+  box.style.cssText = 'background:var(--surface);border-radius:10px;padding:28px 24px;min-width:300px;max-width:360px;box-shadow:0 12px 40px rgba(0,0,0,.3)';
+  box.innerHTML =
+    '<div style="font-size:15px;font-weight:700;margin-bottom:4px;color:var(--text)">Authentication Required</div>' +
+    '<div style="font-size:12px;color:var(--muted);margin-bottom:16px">Enter the admin password to continue.</div>' +
+    '<input type="password" id="auth-pw" placeholder="Admin password" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:13px;outline:none;margin-bottom:6px">' +
+    '<div id="auth-err" style="color:var(--bad);font-size:12px;min-height:18px;margin-bottom:10px"></div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end">' +
+    '<button id="auth-cancel" style="padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);cursor:pointer;font-size:13px">Cancel</button>' +
+    '<button id="auth-submit" style="padding:6px 14px;border:none;border-radius:6px;background:var(--accent2);color:#fff;cursor:pointer;font-size:13px;font-weight:600">Login</button>' +
+    '</div>';
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  var pw = document.getElementById('auth-pw');
+  var err = document.getElementById('auth-err');
+  pw.focus();
+
+  function doLogin() {
+    var val = pw.value;
+    if (!val) { err.textContent = 'Password required'; return; }
+    err.textContent = '';
+    fetch('/api/perf-auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: val })
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.ok) {
+        _authenticated = true;
+        overlay.remove();
+        _authLoginVisible = false;
+        if (onSuccess) onSuccess();
+      } else {
+        err.textContent = d.error || 'Invalid password';
+        pw.value = '';
+        pw.focus();
+      }
+    }).catch(function() { err.textContent = 'Connection error'; });
+  }
+
+  document.getElementById('auth-submit').onclick = doLogin;
+  pw.onkeydown = function(e) { if (e.key === 'Enter') doLogin(); };
+  document.getElementById('auth-cancel').onclick = function() {
+    overlay.remove();
+    _authLoginVisible = false;
+  };
+}
+
+function authFetch(url, opts) {
+  opts = opts || {};
+  return fetch(url, opts).then(function(resp) {
+    if (resp.status === 401) {
+      return new Promise(function(resolve) {
+        authShowLogin(function() {
+          fetch(url, opts).then(resolve);
+        });
+      });
+    }
+    return resp;
+  });
+}
+
 // Tab routing
 function switchTab(tab) {
   if (activeTab === 'voice' && tab !== 'voice' && typeof voiceDeactivate === 'function') voiceDeactivate();
@@ -44,6 +124,9 @@ function routeFromHash() {
   let tab = parts[0];
   const sub = parts.slice(1).join('/');
   const valid = ['dashboard', 'mesh', 'nodes', 'config', 'hardware', 'voice', 'perf', 'services', 'terminal', 'applets', 'fleet', 'docs', 'registry'];
+  if (tab === 'docs' && sub) {
+    docsActiveTab = sub;
+  }
   switchTab(valid.includes(tab) ? tab : 'dashboard');
   if (tab === 'applets' && sub && !document.querySelector('.applet-iframe-overlay')) {
     var subParts = sub.split('/');
@@ -54,9 +137,8 @@ function routeFromHash() {
       else openApplet(appletName);
     }, 100);
   }
-  if (tab === 'docs' && sub) {
-    docsActiveTab = sub;
-    if (docsInitialized) docsSwitchTab(sub);
+  if (tab === 'docs' && sub && docsInitialized) {
+    docsSwitchTab(sub);
   }
 }
 

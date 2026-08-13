@@ -181,6 +181,9 @@ func peerProxyRequest(w http.ResponseWriter, r *http.Request, peerIP, path strin
 
 func apiVoice(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
+		if !checkAuth(w, r) {
+			return
+		}
 		apiVoiceConfig(w, r)
 		return
 	}
@@ -1369,6 +1372,46 @@ func apiTerminalReboot(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Auth ---
+
+func checkAuth(w http.ResponseWriter, r *http.Request) bool {
+	conf := loadKVFile(MeshConfFile)
+	pw := getProvisionedPassword(conf)
+	if pw == "" {
+		return true
+	}
+	cookie, err := r.Cookie(PerfAuthCookie)
+	if err != nil || cookie.Value != getPerfAuthToken() {
+		writeJSON(w, 401, map[string]interface{}{"ok": false, "error": "Authentication required"})
+		return false
+	}
+	return true
+}
+
+func requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !checkAuth(w, r) {
+			return
+		}
+		next(w, r)
+	}
+}
+
+func apiAuthStatus(w http.ResponseWriter, r *http.Request) {
+	conf := loadKVFile(MeshConfFile)
+	pw := getProvisionedPassword(conf)
+	required := pw != ""
+	authenticated := !required
+	if required {
+		cookie, err := r.Cookie(PerfAuthCookie)
+		if err == nil && cookie.Value == getPerfAuthToken() {
+			authenticated = true
+		}
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"required":      required,
+		"authenticated": authenticated,
+	})
+}
 
 func apiPerfAuth(w http.ResponseWriter, r *http.Request) {
 	body := readBody(r)
