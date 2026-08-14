@@ -35,5 +35,9 @@ MANET/src/mesh-cli/mesh-cli
 MANET/src/manet-ctrl/bin/
 MANET/src/gateway-manager/bin/
 
+# Android build artifacts
+MANET/src/mesh-ctrl-android/.gradle/
+MANET/src/mesh-ctrl-android/app/build/
+
 # Provisioning scratch
 MANET/provisioning/.image-cache/
