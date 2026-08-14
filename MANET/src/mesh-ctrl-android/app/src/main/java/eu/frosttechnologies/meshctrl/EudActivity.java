@@ -18,8 +18,11 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import androidx.appcompat.app.ActionBar;
@@ -56,7 +59,7 @@ public class EudActivity extends AppCompatActivity {
     private static final int VOL_STEP = 10;
     private static final long HOLD_MS = 7000;
     private static final long DEBOUNCE_MS = 4000;
-    private static final String[] PAGES = {"RADIO", "MESH", "COMMS", "STATUS"};
+    private static final String[] PAGES = {"RADIO", "MESH", "COMMS", "STATUS", "CHAT"};
 
     private int page = 0;
     private String nodeUrl;
@@ -67,6 +70,9 @@ public class EudActivity extends AppCompatActivity {
     private JSONObject apiVoice;
     private JSONObject apiChannels;
     private int chatUnread = 0;
+    private boolean chatAvailable = false;
+    private JSONArray chatMessages;
+    private String chatHostname = "";
     private boolean connected = false;
 
     private int txChannel = 1;
@@ -77,7 +83,9 @@ public class EudActivity extends AppCompatActivity {
     private long lastUserAction = 0;
 
     private TextView tvTitle, tvConn, tvDisplay, tvPages, tvTime;
-    private LinearLayout voiceRow, channelGrid;
+    private LinearLayout voiceRow, channelGrid, chatInputRow;
+    private EditText chatInput;
+    private Button chatSendBtn;
     private Button[] navButtons;
     private Button[] chanTxButtons;
     private Button[] chanRxButtons;
@@ -138,6 +146,16 @@ public class EudActivity extends AppCompatActivity {
         tvTime = findViewById(R.id.eud_time);
         voiceRow = findViewById(R.id.eud_voice_row);
         channelGrid = findViewById(R.id.eud_channel_grid);
+        chatInputRow = findViewById(R.id.eud_chat_input_row);
+        chatInput = findViewById(R.id.eud_chat_input);
+        chatSendBtn = findViewById(R.id.eud_chat_send);
+        chatSendBtn.setBackgroundTintList(null);
+        chatSendBtn.setStateListAnimator(null);
+        chatSendBtn.setOnClickListener(v -> sendChatMessage());
+        chatInput.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEND) { sendChatMessage(); return true; }
+            return false;
+        });
 
         // Voice control buttons — radio hardware volume via API
         int[] voiceBtnIds = {R.id.eud_btn_mic_up, R.id.eud_btn_mic_down, R.id.eud_btn_vol_up, R.id.eud_btn_vol_down};
@@ -156,13 +174,15 @@ public class EudActivity extends AppCompatActivity {
                 findViewById(R.id.eud_nav_radio),
                 findViewById(R.id.eud_nav_mesh),
                 findViewById(R.id.eud_nav_comms),
-                findViewById(R.id.eud_nav_stat)
+                findViewById(R.id.eud_nav_stat),
+                findViewById(R.id.eud_nav_chat)
         };
         for (Button b : navButtons) { b.setBackgroundTintList(null); b.setStateListAnimator(null); }
         navButtons[0].setOnClickListener(v -> goToPage(0));
         navButtons[1].setOnClickListener(v -> goToPage(1));
         navButtons[2].setOnClickListener(v -> goToPage(2));
         navButtons[3].setOnClickListener(v -> goToPage(3));
+        navButtons[4].setOnClickListener(v -> goToPage(4));
 
         // HOME button — tap = Android home, hold 7s = management
         homeBtn = findViewById(R.id.eud_nav_exit);
@@ -479,17 +499,34 @@ public class EudActivity extends AppCompatActivity {
                 try { channelsJson = fetchJson(base + "/api/voice/channels"); } catch (Exception ignored) {}
 
                 int unread = 0;
+                boolean chatOk = false;
+                JSONArray msgs = null;
+                String chatHost = "";
                 try {
                     String chatJson = fetchJson(base + "/api/applets/mesh-chat/proxy/unread");
                     JSONObject chat = new JSONObject(chatJson);
                     unread = chat.optInt("count", 0);
+                    chatOk = true;
                 } catch (Exception ignored) {}
+
+                if (chatOk && page == 4) {
+                    try {
+                        String msgsJson = fetchJson(base + "/api/applets/mesh-chat/proxy/messages");
+                        msgs = new JSONArray(msgsJson);
+                        String healthJson = fetchJson(base + "/api/applets/mesh-chat/proxy/health");
+                        JSONObject health = new JSONObject(healthJson);
+                        chatHost = health.optString("hostname", "");
+                    } catch (Exception ignored) {}
+                }
 
                 JSONObject dObj = new JSONObject(dataJson);
                 JSONObject lObj = new JSONObject(localJson);
                 JSONObject vObj = voiceJson != null ? new JSONObject(voiceJson) : null;
                 JSONObject cObj = channelsJson != null ? new JSONObject(channelsJson) : null;
                 int ur = unread;
+                boolean chatOkFinal = chatOk;
+                JSONArray msgsFinal = msgs;
+                String chatHostFinal = chatHost;
 
                 runOnUiThread(() -> {
                     apiData = dObj;
@@ -497,6 +534,9 @@ public class EudActivity extends AppCompatActivity {
                     apiVoice = vObj;
                     apiChannels = cObj;
                     chatUnread = ur;
+                    chatAvailable = chatOkFinal;
+                    if (msgsFinal != null) chatMessages = msgsFinal;
+                    if (!chatHostFinal.isEmpty()) chatHostname = chatHostFinal;
                     connected = true;
 
                     boolean debounced = System.currentTimeMillis() - lastUserAction < DEBOUNCE_MS;
@@ -553,8 +593,10 @@ public class EudActivity extends AppCompatActivity {
         }
 
         boolean comms = page == 2;
+        boolean chat = page == 4;
         channelGrid.setVisibility(comms ? View.VISIBLE : View.GONE);
         voiceRow.setVisibility(comms ? View.VISIBLE : View.GONE);
+        chatInputRow.setVisibility(chat && chatAvailable ? View.VISIBLE : View.GONE);
 
         if (comms) updateChannelButtons();
 
@@ -566,11 +608,18 @@ public class EudActivity extends AppCompatActivity {
             return;
         }
 
+        if (chatUnread > 0 && page != 4) {
+            navButtons[4].setText("CHAT(" + chatUnread + ")");
+        } else {
+            navButtons[4].setText("CHAT");
+        }
+
         switch (page) {
             case 0: tvDisplay.setText(formatRadio()); break;
             case 1: tvDisplay.setText(formatMesh()); break;
             case 2: tvDisplay.setText(formatComms()); break;
             case 3: tvDisplay.setText(formatStatus()); break;
+            case 4: tvDisplay.setText(formatChat()); break;
         }
     }
 
@@ -717,6 +766,65 @@ public class EudActivity extends AppCompatActivity {
         sb.append(row("USB", usbTether ? "TETHERED ▲" : "---"));
         sb.append(row("GPS", gps));
         return sb.toString();
+    }
+
+    private String formatChat() {
+        if (!chatAvailable) {
+            return " MESH CHAT\n\n" +
+                   " Applet not installed.\n" +
+                   " Install mesh-chat from\n" +
+                   " the Applets tab.\n";
+        }
+        if (chatMessages == null || chatMessages.length() == 0) {
+            return " MESH CHAT\n\n" +
+                   " No messages.\n";
+        }
+        StringBuilder sb = new StringBuilder();
+        int start = Math.max(0, chatMessages.length() - 12);
+        for (int i = start; i < chatMessages.length(); i++) {
+            JSONObject msg = chatMessages.optJSONObject(i);
+            if (msg == null) continue;
+            String type = msg.optString("type", "text");
+            if (!"text".equals(type) && !"file".equals(type)) continue;
+
+            String from = msg.optString("from", "?");
+            boolean isMe = from.equals(chatHostname);
+            long ts = msg.optLong("ts", 0);
+            String time = "";
+            if (ts > 0) {
+                SimpleDateFormat tf = new SimpleDateFormat("HH:mm", Locale.US);
+                time = tf.format(new Date(ts * 1000));
+            }
+
+            String body;
+            if ("file".equals(type)) {
+                JSONObject file = msg.optJSONObject("file");
+                body = "[FILE] " + (file != null ? file.optString("name", "?") : "?");
+            } else {
+                body = msg.optString("body", "");
+            }
+
+            String prefix = isMe ? " > " : " " + truncate(from, 8) + ": ";
+            String line = time + prefix + body;
+            if (line.length() > 38) line = line.substring(0, 38);
+            sb.append(line).append("\n");
+        }
+        return sb.toString();
+    }
+
+    private void sendChatMessage() {
+        String text = chatInput.getText().toString().trim();
+        if (text.isEmpty()) return;
+        chatInput.setText("");
+
+        executor.execute(() -> {
+            try {
+                String base = nodeUrl.replaceAll("/$", "");
+                String escaped = text.replace("\\", "\\\\").replace("\"", "\\\"");
+                postJson(base + "/api/applets/mesh-chat/proxy/send",
+                        "{\"body\":\"" + escaped + "\"}");
+            } catch (Exception ignored) {}
+        });
     }
 
     private String row(String label, String value) {
