@@ -50,9 +50,33 @@ func isBatmanV() bool {
 	return batmanV
 }
 
+// HalowBWMaxMbps is the realistic max link throughput per S1G channel width,
+// used as the 100% reference when converting BATMAN_V throughput to TQ. A
+// fixed 35 Mbps reference made a full-rate 1 MHz link (~3.3 Mbps) read TQ 23.
+var HalowBWMaxMbps = map[string]float64{
+	"1MHz": 3.3, "2MHz": 7.2, "4MHz": 16, "8MHz": 32,
+}
+
+var (
+	meshRefOnce sync.Once
+	meshRefMbps = 35.0
+)
+
+func meshRefThroughput() float64 {
+	meshRefOnce.Do(func() {
+		info := getHalowDriverInfo("wlan2")
+		if bw, ok := info["halow_bw"]; ok {
+			if max, ok := HalowBWMaxMbps[bw]; ok {
+				meshRefMbps = max
+			}
+		}
+	})
+	return meshRefMbps
+}
+
 func normTQ(raw float64) int {
 	if isBatmanV() {
-		return int(math.Min(raw*255/35, 255))
+		return int(math.Min(raw*255/meshRefThroughput(), 255))
 	}
 	if raw > 255 {
 		return int(math.Min(raw/1000*255, 255))
