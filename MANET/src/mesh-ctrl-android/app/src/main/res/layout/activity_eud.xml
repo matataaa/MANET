@@ -111,6 +111,15 @@
 
     </LinearLayout>
 
+    <!-- Topology (MESH page only) -->
+    <FrameLayout
+        android:id="@+id/eud_topo_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="4dp"
+        android:visibility="gone"/>
+
     <!-- Chat input (CHAT page only) -->
     <LinearLayout
         android:id="@+id/eud_chat_input_row"

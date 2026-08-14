@@ -8,20 +8,16 @@
         "source": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-main-34:/layout/activity_eud.xml"
     },
     {
-        "merged": "eu.frosttechnologies.meshctrl.app-merged_res-32:/xml_file_paths.xml.flat",
-        "source": "eu.frosttechnologies.meshctrl.app-main-34:/xml/file_paths.xml"
-    },
-    {
         "merged": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-merged_res-32:/layout_activity_node_picker.xml.flat",
         "source": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-main-34:/layout/activity_node_picker.xml"
     },
     {
-        "merged": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-merged_res-32:/mipmap-xxhdpi_ic_launcher.xml.flat",
-        "source": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-main-34:/mipmap-xxhdpi/ic_launcher.xml"
-    },
-    {
         "merged": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-merged_res-32:/mipmap-hdpi_ic_launcher.xml.flat",
         "source": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-main-34:/mipmap-hdpi/ic_launcher.xml"
+    },
+    {
+        "merged": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-merged_res-32:/mipmap-xxhdpi_ic_launcher.xml.flat",
+        "source": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-main-34:/mipmap-xxhdpi/ic_launcher.xml"
     },
     {
         "merged": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-merged_res-32:/drawable_input_bg.xml.flat",
@@ -40,6 +36,10 @@
         "source": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-main-34:/layout/activity_main.xml"
     },
     {
+        "merged": "eu.frosttechnologies.meshctrl.app-merged_res-32:/layout_activity_eud.xml.flat",
+        "source": "eu.frosttechnologies.meshctrl.app-main-34:/layout/activity_eud.xml"
+    },
+    {
         "merged": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-merged_res-32:/drawable_eud_lcd_bg.xml.flat",
         "source": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-main-34:/drawable/eud_lcd_bg.xml"
     },
@@ -52,12 +52,12 @@
         "source": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-main-34:/drawable/launch_card_kdu.xml"
     },
     {
-        "merged": "eu.frosttechnologies.meshctrl.app-merged_res-32:/layout-land_activity_eud.xml.flat",
-        "source": "eu.frosttechnologies.meshctrl.app-main-34:/layout-land/activity_eud.xml"
-    },
-    {
         "merged": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-merged_res-32:/layout-land_activity_eud.xml.flat",
         "source": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-main-34:/layout-land/activity_eud.xml"
+    },
+    {
+        "merged": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-merged_res-32:/xml_file_paths.xml.flat",
+        "source": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-main-34:/xml/file_paths.xml"
     },
     {
         "merged": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-merged_res-32:/drawable_ic_mesh.xml.flat",

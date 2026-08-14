@@ -19,14 +19,17 @@ public class MeshTopoView extends View {
 
     private final Paint dotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint selfDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint gwDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint dimTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint linkTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private JSONArray nodes;
     private JSONArray edges;
     private long timestamp;
+    private int eudCount;
 
     public MeshTopoView(Context context) {
         super(context);
@@ -37,29 +40,41 @@ public class MeshTopoView extends View {
         selfDotPaint.setStyle(Paint.Style.FILL);
         selfDotPaint.setShadowLayer(12, 0, 0, 0xFF33FF33);
 
+        gwDotPaint.setColor(0xFF33CCFF);
+        gwDotPaint.setStyle(Paint.Style.FILL);
+        gwDotPaint.setShadowLayer(10, 0, 0, 0xFF33CCFF);
+
         linePaint.setColor(0xFF1a5a1a);
         linePaint.setStyle(Paint.Style.STROKE);
         linePaint.setStrokeWidth(2f);
 
         textPaint.setColor(0xFF33FF33);
-        textPaint.setTextSize(24f);
-        textPaint.setTypeface(Typeface.MONOSPACE);
-        textPaint.setShadowLayer(3, 0, 0, 0xFF33FF33);
+        textPaint.setTextSize(28f);
+        textPaint.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
+        textPaint.setFakeBoldText(true);
+        textPaint.setShadowLayer(4, 0, 0, 0xFF33FF33);
 
-        dimTextPaint.setColor(0xFF1a5a1a);
-        dimTextPaint.setTextSize(20f);
+        dimTextPaint.setColor(0xFF33AA33);
+        dimTextPaint.setTextSize(24f);
         dimTextPaint.setTypeface(Typeface.MONOSPACE);
 
-        glowPaint.setColor(0x1A33FF33);
+        glowPaint.setColor(0x2A33FF33);
         glowPaint.setStyle(Paint.Style.FILL);
+
+        linkTextPaint.setColor(0xFF66FF66);
+        linkTextPaint.setTextSize(22f);
+        linkTextPaint.setTypeface(Typeface.MONOSPACE);
+        linkTextPaint.setTextAlign(Paint.Align.CENTER);
+        linkTextPaint.setShadowLayer(3, 0, 0, 0xFF33FF33);
 
         setLayerType(LAYER_TYPE_SOFTWARE, null);
     }
 
-    public void setData(JSONArray nodes, JSONArray edges, long timestamp) {
+    public void setData(JSONArray nodes, JSONArray edges, long timestamp, int eudCount) {
         this.nodes = nodes;
         this.edges = edges;
         this.timestamp = timestamp;
+        this.eudCount = eudCount;
         invalidate();
     }
 
@@ -78,23 +93,25 @@ public class MeshTopoView extends View {
         int pad = 40;
         int count = nodes.length();
 
-        List<String> macs = new ArrayList<>();
+        List<String> ids = new ArrayList<>();
         List<String> labels = new ArrayList<>();
         List<Boolean> online = new ArrayList<>();
         List<Boolean> isMe = new ArrayList<>();
-        Map<String, Integer> macIndex = new HashMap<>();
+        List<Boolean> isGw = new ArrayList<>();
+        Map<String, Integer> idIndex = new HashMap<>();
 
         for (int i = 0; i < count; i++) {
-            JSONObject n = nodes.optJSONObject(i);
-            if (n == null) continue;
-            String mac = n.optString("mac", "");
-            String hostname = n.optString("hostname", "?");
+            JSONObject nd = nodes.optJSONObject(i);
+            if (nd == null) continue;
+            String id = nd.optString("id", nd.optString("mac", ""));
+            String hostname = nd.optString("hostname", "?");
             String label = hostname.length() > 10 ? hostname.substring(0, 10) : hostname;
-            boolean me = n.optBoolean("is_me", false);
+            boolean me = nd.optBoolean("is_me", false);
+            boolean gw = nd.optBoolean("is_gateway", false);
 
             boolean on = me;
             if (!me) {
-                String ls = n.optString("last_seen", "");
+                String ls = nd.optString("last_seen", "");
                 if (!ls.isEmpty() && timestamp > 0) {
                     try {
                         on = (timestamp - Long.parseLong(ls)) <= 300;
@@ -102,14 +119,17 @@ public class MeshTopoView extends View {
                 }
             }
 
-            macIndex.put(mac, macs.size());
-            macs.add(mac);
-            labels.add(label);
+            idIndex.put(id, ids.size());
+            String mac = nd.optString("mac", "");
+            if (!mac.isEmpty()) idIndex.put(mac, ids.size());
+            ids.add(id);
+            labels.add(gw ? label + " GW" : label);
             online.add(on);
             isMe.add(me);
+            isGw.add(gw);
         }
 
-        int n = macs.size();
+        int n = ids.size();
         if (n == 0) return;
 
         float cx = w / 2f;
@@ -134,22 +154,29 @@ public class MeshTopoView extends View {
             for (int i = 0; i < edges.length(); i++) {
                 JSONObject e = edges.optJSONObject(i);
                 if (e == null) continue;
-                String from = e.optString("from", "");
-                String to = e.optString("to", "");
-                Integer fi = macIndex.get(from);
-                Integer ti = macIndex.get(to);
+                String src = e.optString("source", e.optString("from", ""));
+                String tgt = e.optString("target", e.optString("to", ""));
+                Integer fi = idIndex.get(src);
+                Integer ti = idIndex.get(tgt);
                 if (fi == null || ti == null) continue;
 
                 double tp = e.optDouble("throughput", 0);
                 if (tp > 0) {
-                    int alpha = Math.min(255, (int) (tp * 25) + 60);
+                    int alpha = Math.min(255, (int) (tp * 25) + 80);
                     linePaint.setColor((alpha << 24) | 0x33FF33);
-                    linePaint.setStrokeWidth(Math.min(4f, (float) tp / 2f + 1f));
+                    linePaint.setStrokeWidth(Math.min(6f, (float) tp / 2f + 2f));
                 } else {
-                    linePaint.setColor(0x401a5a1a);
-                    linePaint.setStrokeWidth(1f);
+                    linePaint.setColor(0x801a5a1a);
+                    linePaint.setStrokeWidth(2f);
                 }
                 canvas.drawLine(px[fi], py[fi], px[ti], py[ti], linePaint);
+
+                if (tp > 0) {
+                    float mx = (px[fi] + px[ti]) / 2f;
+                    float my = (py[fi] + py[ti]) / 2f;
+                    String tpStr = String.format(Locale.US, "%.1f Mb", tp);
+                    canvas.drawText(tpStr, mx, my - 6, linkTextPaint);
+                }
             }
         }
 
@@ -159,6 +186,8 @@ public class MeshTopoView extends View {
                 canvas.drawCircle(px[i], py[i], dotR + 6, glowPaint);
                 if (isMe.get(i)) {
                     canvas.drawCircle(px[i], py[i], dotR + 2, selfDotPaint);
+                } else if (isGw.get(i)) {
+                    canvas.drawCircle(px[i], py[i], dotR + 1, gwDotPaint);
                 } else {
                     canvas.drawCircle(px[i], py[i], dotR, dotPaint);
                 }
@@ -177,7 +206,9 @@ public class MeshTopoView extends View {
             canvas.drawText(labels.get(i), tx, ty, lp);
         }
 
-        String countStr = String.format(Locale.US, "%d/%d", (int) online.stream().filter(b -> b).count(), n);
+        int onCount = (int) online.stream().filter(b -> b).count();
+        String countStr = String.format(Locale.US, "%d/%d NODES", onCount, n);
+        if (eudCount > 0) countStr += String.format(Locale.US, "  %d EUD", eudCount);
         canvas.drawText(countStr, 8, h - 8, dimTextPaint);
     }
 }

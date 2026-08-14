@@ -1,20 +1,20 @@
 -- Merging decision tree log ---
 provider#androidx.core.content.FileProvider
-INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:47:9-55:20
+INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:46:9-54:20
 	android:grantUriPermissions
-		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:51:13-47
+		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:50:13-47
 	android:authorities
 		INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml
-		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:49:13-64
+		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:48:13-64
 	android:exported
-		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:50:13-37
+		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:49:13-37
 	android:name
-		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:48:13-62
+		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:47:13-62
 manifest
-ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:2:1-58:12
-INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:2:1-58:12
-INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:2:1-58:12
-INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:2:1-58:12
+ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:2:1-57:12
+INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:2:1-57:12
+INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:2:1-57:12
+INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:2:1-57:12
 MERGED from [com.google.android.material:material:1.11.0] /Users/matthew/.gradle/caches/transforms-3/6fe221ef3627acc9045c8968b4817037/transformed/material-1.11.0/AndroidManifest.xml:17:1-24:12
 MERGED from [androidx.appcompat:appcompat-resources:1.6.1] /Users/matthew/.gradle/caches/transforms-3/9c6804c3479162785d18099be549470a/transformed/appcompat-resources-1.6.1/AndroidManifest.xml:17:1-22:12
 MERGED from [androidx.constraintlayout:constraintlayout:2.0.1] /Users/matthew/.gradle/caches/transforms-3/8a126c3bf9126b13e7a6a5dc38b947e5/transformed/constraintlayout-2.0.1/AndroidManifest.xml:2:1-11:12
@@ -100,8 +100,8 @@ ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/
 	android:name
 		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:12:19-57
 application
-ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:14:5-57:19
-INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:14:5-57:19
+ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:14:5-56:19
+INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:14:5-56:19
 MERGED from [com.google.android.material:material:1.11.0] /Users/matthew/.gradle/caches/transforms-3/6fe221ef3627acc9045c8968b4817037/transformed/material-1.11.0/AndroidManifest.xml:22:5-20
 MERGED from [com.google.android.material:material:1.11.0] /Users/matthew/.gradle/caches/transforms-3/6fe221ef3627acc9045c8968b4817037/transformed/material-1.11.0/AndroidManifest.xml:22:5-20
 MERGED from [androidx.constraintlayout:constraintlayout:2.0.1] /Users/matthew/.gradle/caches/transforms-3/8a126c3bf9126b13e7a6a5dc38b947e5/transformed/constraintlayout-2.0.1/AndroidManifest.xml:9:5-20
@@ -169,19 +169,17 @@ ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/
 	android:name
 		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:39:13-47
 activity#eu.frosttechnologies.meshctrl.EudActivity
-ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:42:9-45:76
-	android:configChanges
-		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:45:13-74
+ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:42:9-44:50
 	android:theme
 		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:44:13-48
 	android:name
 		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:43:13-40
 meta-data#android.support.FILE_PROVIDER_PATHS
-ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:52:13-54:53
+ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:51:13-53:53
 	android:resource
-		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:54:17-51
+		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:53:17-51
 	android:name
-		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:53:17-67
+		ADDED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:52:17-67
 uses-sdk
 INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml reason: use-sdk injection requested
 INJECTED from /Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml

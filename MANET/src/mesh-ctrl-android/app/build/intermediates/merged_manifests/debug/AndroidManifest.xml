@@ -56,7 +56,6 @@
             android:theme="@style/AppTheme" />
         <activity
             android:name="eu.frosttechnologies.meshctrl.EudActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@style/AppTheme.Eud" />
 
         <provider

@@ -2,14 +2,17 @@ package eu.frosttechnologies.meshctrl;
 
 import android.annotation.SuppressLint;
 import android.content.Intent;
+import android.database.Cursor;
 import android.graphics.Typeface;
 import android.graphics.drawable.ClipDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.OpenableColumns;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -26,21 +29,29 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.ActionBar;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.FileProvider;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.TimeZone;
@@ -58,7 +69,7 @@ public class EudActivity extends AppCompatActivity {
     private static final int POLL_MS = 3000;
     private static final int MAX_CHANNELS = 21;
     private static final int VOL_STEP = 10;
-    private static final long HOLD_MS = 7000;
+    private static final long HOLD_MS = 3000;
     private static final long DEBOUNCE_MS = 4000;
     private static final String[] PAGES = {"RADIO", "MESH", "COMMS", "STATUS", "CHAT"};
 
@@ -75,6 +86,7 @@ public class EudActivity extends AppCompatActivity {
     private JSONArray chatMessages;
     private String chatHostname = "";
     private boolean connected = false;
+    private boolean pttConnected = false;
 
     private int txChannel = 1;
     private Set<Integer> rxChannels = new HashSet<>();
@@ -82,27 +94,49 @@ public class EudActivity extends AppCompatActivity {
     private int spkVolume = 80;
 
     private long lastUserAction = 0;
+    private long lastPollMs = 0;
+    private String nodeHostname = "";
+    private List<String> chatPeers = new ArrayList<>();
+    private int dmTargetIdx = -1;
+    private Uri cameraImageUri;
 
     private TextView tvTitle, tvConn, tvDisplay, tvPages, tvTime;
     private LinearLayout voiceRow, channelGrid, chatInputRow;
     private LinearLayout sidePanel;
+    private LinearLayout chatActionRow;
+    private ScrollView channelScroll;
+    private Button dmTargetBtn;
     private FrameLayout topoContainer;
     private MeshTopoView topoView;
     private EditText chatInput;
-    private long lastPollMs = 0;
     private Button chatSendBtn;
+    private Button pttBtn;
     private Button[] navButtons;
     private Button[] chanTxButtons;
     private Button[] chanRxButtons;
     private Button homeBtn;
 
-    // HOME hold state
     private long homeDownTime = 0;
     private ClipDrawable homeClip;
     private GradientDrawable homeBaseBg;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+
+    private final ActivityResultLauncher<String> filePickerLauncher =
+            registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
+                if (uri != null) uploadFileFromUri(uri);
+            });
+
+    private final ActivityResultLauncher<Uri> cameraLauncher =
+            registerForActivityResult(new ActivityResultContracts.TakePicture(), success -> {
+                if (success && cameraImageUri != null) uploadFileFromUri(cameraImageUri);
+            });
+
+    private final ActivityResultLauncher<String> cameraPermLauncher =
+            registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
+                if (granted) doLaunchCamera();
+            });
 
     private final Runnable pollRunnable = new Runnable() {
         @Override
@@ -136,6 +170,10 @@ public class EudActivity extends AppCompatActivity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setContentView(R.layout.activity_eud);
 
+        if (savedInstanceState != null) {
+            page = savedInstanceState.getInt("page", 0);
+        }
+
         hideSystemUI();
 
         ActionBar ab = getSupportActionBar();
@@ -151,6 +189,9 @@ public class EudActivity extends AppCompatActivity {
         tvTime = findViewById(R.id.eud_time);
         voiceRow = findViewById(R.id.eud_voice_row);
         channelGrid = findViewById(R.id.eud_channel_grid);
+        if (channelGrid.getParent() instanceof ScrollView) {
+            channelScroll = (ScrollView) channelGrid.getParent();
+        }
         chatInputRow = findViewById(R.id.eud_chat_input_row);
         sidePanel = findViewById(R.id.eud_side_panel);
         topoContainer = findViewById(R.id.eud_topo_container);
@@ -168,7 +209,9 @@ public class EudActivity extends AppCompatActivity {
             return false;
         });
 
-        // Voice control buttons — radio hardware volume via API
+        buildChatActionRow();
+        buildPttButton();
+
         int[] voiceBtnIds = {R.id.eud_btn_mic_up, R.id.eud_btn_mic_down, R.id.eud_btn_vol_up, R.id.eud_btn_vol_down};
         for (int id : voiceBtnIds) {
             Button b = findViewById(id);
@@ -180,7 +223,6 @@ public class EudActivity extends AppCompatActivity {
         findViewById(R.id.eud_btn_vol_up).setOnClickListener(v -> adjustRadioVolume("spk", VOL_STEP));
         findViewById(R.id.eud_btn_vol_down).setOnClickListener(v -> adjustRadioVolume("spk", -VOL_STEP));
 
-        // Page nav buttons
         navButtons = new Button[]{
                 findViewById(R.id.eud_nav_radio),
                 findViewById(R.id.eud_nav_mesh),
@@ -195,7 +237,6 @@ public class EudActivity extends AppCompatActivity {
         navButtons[3].setOnClickListener(v -> goToPage(3));
         navButtons[4].setOnClickListener(v -> goToPage(4));
 
-        // HOME button — tap = Android home, hold 7s = management
         homeBtn = findViewById(R.id.eud_nav_exit);
         homeBtn.setBackgroundTintList(null);
         homeBtn.setStateListAnimator(null);
@@ -203,6 +244,239 @@ public class EudActivity extends AppCompatActivity {
 
         buildChannelGrid();
         updateDisplay();
+    }
+
+    private void buildChatActionRow() {
+        chatActionRow = new LinearLayout(this);
+        chatActionRow.setOrientation(LinearLayout.HORIZONTAL);
+        chatActionRow.setGravity(Gravity.CENTER);
+        chatActionRow.setVisibility(View.GONE);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dpToPx(4);
+        chatActionRow.setLayoutParams(lp);
+
+        dmTargetBtn = makeActionButton("ALL");
+        dmTargetBtn.setOnClickListener(v -> cycleDmTarget());
+        chatActionRow.addView(dmTargetBtn);
+
+        Button fileBtn = makeActionButton("FILE");
+        fileBtn.setOnClickListener(v -> { flashButton(fileBtn); filePickerLauncher.launch("*/*"); });
+        chatActionRow.addView(fileBtn);
+
+        Button camBtn = makeActionButton("CAM");
+        camBtn.setOnClickListener(v -> { flashButton(camBtn); launchCamera(); });
+        chatActionRow.addView(camBtn);
+
+        Button syncBtn = makeActionButton("SYNC");
+        syncBtn.setOnClickListener(v -> { flashButton(syncBtn); doSync(); });
+        chatActionRow.addView(syncBtn);
+
+        if (sidePanel != null) {
+            sidePanel.addView(chatActionRow);
+        } else {
+            LinearLayout root = (LinearLayout) chatInputRow.getParent();
+            int idx = root.indexOfChild(chatInputRow);
+            root.addView(chatActionRow, idx);
+        }
+    }
+
+    private void launchCamera() {
+        if (checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            cameraPermLauncher.launch(android.Manifest.permission.CAMERA);
+            return;
+        }
+        doLaunchCamera();
+    }
+
+    private void doLaunchCamera() {
+        File photoDir = new File(getExternalFilesDir(null), "Pictures");
+        photoDir.mkdirs();
+        File photoFile = new File(photoDir, "cam_" + System.currentTimeMillis() + ".jpg");
+        cameraImageUri = FileProvider.getUriForFile(this,
+                getPackageName() + ".fileprovider", photoFile);
+        cameraLauncher.launch(cameraImageUri);
+    }
+
+    private void cycleDmTarget() {
+        if (chatPeers.isEmpty()) {
+            dmTargetIdx = -1;
+        } else {
+            dmTargetIdx++;
+            if (dmTargetIdx >= chatPeers.size()) dmTargetIdx = -1;
+        }
+        String label = dmTargetIdx < 0 ? "ALL" : truncate(chatPeers.get(dmTargetIdx), 8);
+        dmTargetBtn.setText(label);
+        flashButton(dmTargetBtn);
+    }
+
+    private String getDmTarget() {
+        if (dmTargetIdx >= 0 && dmTargetIdx < chatPeers.size()) {
+            return chatPeers.get(dmTargetIdx);
+        }
+        return null;
+    }
+
+    private void flashButton(Button btn) {
+        GradientDrawable flash = new GradientDrawable();
+        flash.setCornerRadius(dpToPx(3));
+        flash.setColor(0xFF33FF33);
+        flash.setStroke(dpToPx(1), 0xFF33FF33);
+        btn.setBackground(flash);
+        btn.setTextColor(0xFF000000);
+        handler.postDelayed(() -> {
+            GradientDrawable bg = new GradientDrawable();
+            bg.setCornerRadius(dpToPx(3));
+            bg.setColor(0xFF0a1a0a);
+            bg.setStroke(dpToPx(1), 0xFF1a5a1a);
+            btn.setBackground(bg);
+            btn.setTextColor(0xFF33FF33);
+        }, 150);
+    }
+
+    private Button makeActionButton(String text) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setTextColor(0xFF33FF33);
+        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+        btn.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        btn.setAllCaps(false);
+        btn.setPadding(0, 0, 0, 0);
+        btn.setMinimumWidth(0);
+        btn.setMinWidth(0);
+        btn.setMinimumHeight(0);
+        btn.setMinHeight(0);
+        btn.setBackgroundTintList(null);
+        btn.setStateListAnimator(null);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dpToPx(32), 1f);
+        lp.setMargins(dpToPx(2), 0, dpToPx(2), 0);
+        btn.setLayoutParams(lp);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dpToPx(3));
+        bg.setColor(0xFF0a1a0a);
+        bg.setStroke(dpToPx(1), 0xFF1a5a1a);
+        btn.setBackground(bg);
+        return btn;
+    }
+
+    private void buildPttButton() {
+        pttBtn = new Button(this);
+        pttBtn.setText("PTT");
+        pttBtn.setTextColor(0xFF33FF33);
+        pttBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+        pttBtn.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        pttBtn.setAllCaps(false);
+        pttBtn.setPadding(0, 0, 0, 0);
+        pttBtn.setMinimumWidth(0);
+        pttBtn.setMinWidth(0);
+        pttBtn.setMinimumHeight(0);
+        pttBtn.setMinHeight(0);
+        pttBtn.setBackgroundTintList(null);
+        pttBtn.setStateListAnimator(null);
+        pttBtn.setVisibility(View.GONE);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dpToPx(36), 1f);
+        lp.setMargins(dpToPx(3), 0, 0, 0);
+        pttBtn.setLayoutParams(lp);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dpToPx(4));
+        bg.setColor(0xFF0a1a0a);
+        bg.setStroke(dpToPx(2), 0xFF33FF33);
+        pttBtn.setBackground(bg);
+
+        pttBtn.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    setPttState(true);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    setPttState(false);
+                    return true;
+            }
+            return false;
+        });
+
+        voiceRow.addView(pttBtn);
+    }
+
+    private void setPttState(boolean active) {
+        if (active) {
+            GradientDrawable bg = new GradientDrawable();
+            bg.setCornerRadius(dpToPx(4));
+            bg.setColor(0xFFFF3333);
+            bg.setStroke(dpToPx(2), 0xFFFF3333);
+            pttBtn.setBackground(bg);
+            pttBtn.setTextColor(0xFF000000);
+            pttBtn.setText("TX!");
+        } else {
+            GradientDrawable bg = new GradientDrawable();
+            bg.setCornerRadius(dpToPx(4));
+            bg.setColor(0xFF0a1a0a);
+            bg.setStroke(dpToPx(2), 0xFF33FF33);
+            pttBtn.setBackground(bg);
+            pttBtn.setTextColor(0xFF33FF33);
+            pttBtn.setText("PTT");
+        }
+        executor.execute(() -> {
+            try {
+                String base = nodeUrl.replaceAll("/$", "");
+                postJson(base + "/api/voice", "{\"action\":\"" + (active ? "ptt_on" : "ptt_off") + "\"}");
+            } catch (Exception ignored) {}
+        });
+    }
+
+    private void doSync() {
+        executor.execute(() -> {
+            try {
+                String base = nodeUrl.replaceAll("/$", "");
+                postJson(base + "/api/applets/mesh-chat/proxy/sync", "{}");
+            } catch (Exception ignored) {}
+        });
+    }
+
+    private void uploadFileFromUri(Uri uri) {
+        executor.execute(() -> {
+            try {
+                String fileName = "file";
+                Cursor cursor = getContentResolver().query(uri, null, null, null, null);
+                if (cursor != null) {
+                    if (cursor.moveToFirst()) {
+                        int idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                        if (idx >= 0) fileName = cursor.getString(idx);
+                    }
+                    cursor.close();
+                }
+
+                InputStream is = getContentResolver().openInputStream(uri);
+                if (is == null) return;
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
+                is.close();
+                byte[] fileData = baos.toByteArray();
+
+                String boundary = "----EudUpload" + System.nanoTime();
+                String base = nodeUrl.replaceAll("/$", "");
+                HttpURLConnection conn = openConnection(base + "/api/applets/mesh-chat/proxy/upload");
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(15000);
+
+                OutputStream os = conn.getOutputStream();
+                String header = "--" + boundary + "\r\n" +
+                        "Content-Disposition: form-data; name=\"file\"; filename=\"" + fileName + "\"\r\n" +
+                        "Content-Type: application/octet-stream\r\n\r\n";
+                os.write(header.getBytes(StandardCharsets.UTF_8));
+                os.write(fileData);
+                os.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+                os.close();
+                conn.getResponseCode();
+                conn.disconnect();
+            } catch (Exception ignored) {}
+        });
     }
 
     private void setupHomeButton() {
@@ -214,7 +488,7 @@ public class EudActivity extends AppCompatActivity {
         GradientDrawable fillShape = new GradientDrawable();
         fillShape.setCornerRadius(dpToPx(4));
         fillShape.setColor(0xFF33FF33);
-        homeClip = new ClipDrawable(fillShape, Gravity.LEFT, ClipDrawable.HORIZONTAL);
+        homeClip = new ClipDrawable(fillShape, Gravity.END, ClipDrawable.HORIZONTAL);
         homeClip.setLevel(0);
 
         LayerDrawable layers = new LayerDrawable(new android.graphics.drawable.Drawable[]{homeBaseBg, homeClip});
@@ -224,16 +498,20 @@ public class EudActivity extends AppCompatActivity {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
                     homeDownTime = System.currentTimeMillis();
-                    homeBtn.setText("  MGMT");
+                    homeBtn.setText("MGMT");
                     homeBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-                    homeBtn.setTextColor(0xFF33FF33);
+                    homeBtn.setPadding(dpToPx(4), 0, 0, 0);
+                    homeBtn.setTextColor(0xFF000000);
                     handler.post(homeTickRunnable);
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     long held = System.currentTimeMillis() - homeDownTime;
                     resetHomeButton();
-                    if (held < 500) {
+                    if (held >= HOLD_MS) {
+                        startActivity(new Intent(EudActivity.this, MainActivity.class));
+                        finish();
+                    } else if (held < 500) {
                         Intent home = new Intent(Intent.ACTION_MAIN);
                         home.addCategory(Intent.CATEGORY_HOME);
                         home.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -251,6 +529,7 @@ public class EudActivity extends AppCompatActivity {
         homeClip.setLevel(0);
         homeBtn.setText("HOME");
         homeBtn.setGravity(Gravity.CENTER);
+        homeBtn.setPadding(0, 0, 0, 0);
         homeBtn.setTextColor(0xFF33FF33);
     }
 
@@ -406,6 +685,12 @@ public class EudActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putInt("page", page);
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
         executor.shutdownNow();
@@ -520,6 +805,7 @@ public class EudActivity extends AppCompatActivity {
                     chatOk = true;
                 } catch (Exception ignored) {}
 
+                List<String> peerNames = new ArrayList<>();
                 if (chatOk && page == 4) {
                     try {
                         String msgsJson = fetchJson(base + "/api/applets/mesh-chat/proxy/messages");
@@ -527,6 +813,14 @@ public class EudActivity extends AppCompatActivity {
                         String healthJson = fetchJson(base + "/api/applets/mesh-chat/proxy/health");
                         JSONObject health = new JSONObject(healthJson);
                         chatHost = health.optString("hostname", "");
+                    } catch (Exception ignored) {}
+                    try {
+                        String peersJson = fetchJson(base + "/api/applets/mesh-chat/proxy/peers");
+                        JSONArray peersArr = new JSONArray(peersJson);
+                        for (int i = 0; i < peersArr.length(); i++) {
+                            JSONObject p = peersArr.optJSONObject(i);
+                            if (p != null) peerNames.add(p.optString("hostname", ""));
+                        }
                     } catch (Exception ignored) {}
                 }
 
@@ -538,6 +832,7 @@ public class EudActivity extends AppCompatActivity {
                 boolean chatOkFinal = chatOk;
                 JSONArray msgsFinal = msgs;
                 String chatHostFinal = chatHost;
+                List<String> peersFinal = peerNames;
 
                 runOnUiThread(() -> {
                     apiData = dObj;
@@ -548,8 +843,23 @@ public class EudActivity extends AppCompatActivity {
                     chatAvailable = chatOkFinal;
                     if (msgsFinal != null) chatMessages = msgsFinal;
                     if (!chatHostFinal.isEmpty()) chatHostname = chatHostFinal;
+                    if (!peersFinal.isEmpty()) {
+                        peersFinal.remove(chatHostname);
+                        chatPeers = peersFinal;
+                        if (dmTargetIdx >= chatPeers.size()) {
+                            dmTargetIdx = -1;
+                            if (dmTargetBtn != null) dmTargetBtn.setText("ALL");
+                        }
+                    }
                     connected = true;
                     lastPollMs = System.currentTimeMillis();
+
+                    if (apiLocal != null) {
+                        nodeHostname = apiLocal.optString("hostname", "");
+                    }
+                    if (vObj != null) {
+                        pttConnected = vObj.optBoolean("ptt_connected", false);
+                    }
 
                     boolean debounced = System.currentTimeMillis() - lastUserAction < DEBOUNCE_MS;
                     if (!debounced) {
@@ -573,8 +883,15 @@ public class EudActivity extends AppCompatActivity {
         });
     }
 
+    private String lastUpdateTime() {
+        if (lastPollMs <= 0) return "--";
+        SimpleDateFormat sdf = new SimpleDateFormat("dd/MM HH:mm:ss", Locale.US);
+        return sdf.format(new Date(lastPollMs));
+    }
+
     private void updateDisplay() {
-        tvTitle.setText("── " + PAGES[page] + " ──");
+        String titleHost = nodeHostname.isEmpty() ? "" : " " + truncate(nodeHostname, 16);
+        tvTitle.setText("── " + PAGES[page] + " ──" + titleHost);
         tvConn.setText(connected ? "■" : "□");
         tvConn.setTextColor(connected ? 0xFF33FF33 : 0xFF994444);
 
@@ -608,20 +925,32 @@ public class EudActivity extends AppCompatActivity {
         boolean mesh = page == 1;
         boolean chat = page == 4;
         channelGrid.setVisibility(comms ? View.VISIBLE : View.GONE);
+        if (channelScroll != null) {
+            channelScroll.setVisibility(comms ? View.VISIBLE : View.GONE);
+        }
         voiceRow.setVisibility(comms ? View.VISIBLE : View.GONE);
         chatInputRow.setVisibility(chat && chatAvailable ? View.VISIBLE : View.GONE);
+        chatActionRow.setVisibility(chat && chatAvailable ? View.VISIBLE : View.GONE);
         if (topoContainer != null) {
             topoContainer.setVisibility(mesh ? View.VISIBLE : View.GONE);
         }
         if (sidePanel != null) {
             sidePanel.setVisibility((comms || mesh || (chat && chatAvailable)) ? View.VISIBLE : View.GONE);
         }
+        int eudCount = 0;
+        if (apiLocal != null) {
+            JSONArray euds = apiLocal.optJSONArray("euds");
+            if (euds != null) eudCount = euds.length();
+        }
         if (mesh && topoView != null && apiData != null) {
             topoView.setData(
                     apiData.optJSONArray("nodes"),
                     apiData.optJSONArray("edges"),
-                    apiData.optLong("timestamp", 0));
+                    apiData.optLong("timestamp", 0),
+                    eudCount);
         }
+
+        pttBtn.setVisibility(comms && pttConnected ? View.VISIBLE : View.GONE);
 
         if (comms) updateChannelButtons();
 
@@ -675,9 +1004,7 @@ public class EudActivity extends AppCompatActivity {
         sb.append(row("BW", bw));
         sb.append(row("TX", tx.equals("--") ? "--" : tx + " dBm"));
         sb.append(row("LINK", ifname + " " + state));
-        if (lastPollMs > 0) {
-            sb.append(row("UPD", agoStr(System.currentTimeMillis(), lastPollMs)));
-        }
+        sb.append(row("UPD", lastUpdateTime()));
         return sb.toString();
     }
 
@@ -729,9 +1056,7 @@ public class EudActivity extends AppCompatActivity {
         sb.append(row("BEST", bestTp));
         sb.append(row("GWs", apiData != null ? "" + apiData.optInt("gateway_count", 0) : "--"));
         sb.append(row("PROTO", "BATMAN_V"));
-        if (lastPollMs > 0) {
-            sb.append(row("UPD", agoStr(System.currentTimeMillis(), lastPollMs)));
-        }
+        sb.append(row("UPD", lastUpdateTime()));
         return sb.toString();
     }
 
@@ -777,6 +1102,7 @@ public class EudActivity extends AppCompatActivity {
             sb.append(row("LSTRX", lastRx > 0 ? "CH" + lastRx + " " + agoStr(now, lastRxAt) : "--"));
         }
 
+        sb.append(row("PTT", pttConnected ? "CONNECTED" : "---"));
         sb.append(row("CHAT", chatUnread > 0 ? chatUnread + " UNREAD" : "0 UNREAD"));
         return sb.toString();
     }
@@ -813,6 +1139,7 @@ public class EudActivity extends AppCompatActivity {
         sb.append(row("GW", isGw ? "YES" : "NO"));
         sb.append(row("USB", usbTether ? "TETHERED ▲" : "---"));
         sb.append(row("GPS", gps));
+        sb.append(row("UPD", lastUpdateTime()));
         return sb.toString();
     }
 
@@ -864,13 +1191,20 @@ public class EudActivity extends AppCompatActivity {
         String text = chatInput.getText().toString().trim();
         if (text.isEmpty()) return;
         chatInput.setText("");
+        String target = getDmTarget();
 
         executor.execute(() -> {
             try {
                 String base = nodeUrl.replaceAll("/$", "");
                 String escaped = text.replace("\\", "\\\\").replace("\"", "\\\"");
-                postJson(base + "/api/applets/mesh-chat/proxy/send",
-                        "{\"body\":\"" + escaped + "\"}");
+                String body;
+                if (target != null) {
+                    String tEsc = target.replace("\\", "\\\\").replace("\"", "\\\"");
+                    body = "{\"body\":\"" + escaped + "\",\"to\":[\"" + tEsc + "\"]}";
+                } else {
+                    body = "{\"body\":\"" + escaped + "\"}";
+                }
+                postJson(base + "/api/applets/mesh-chat/proxy/send", body);
             } catch (Exception ignored) {}
         });
     }

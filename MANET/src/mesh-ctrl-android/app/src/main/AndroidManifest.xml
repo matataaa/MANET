@@ -41,8 +41,7 @@
 
         <activity
             android:name=".EudActivity"
-            android:theme="@style/AppTheme.Eud"
-            android:configChanges="orientation|screenSize|keyboardHidden"/>
+            android:theme="@style/AppTheme.Eud"/>
 
         <provider
             android:name="androidx.core.content.FileProvider"
