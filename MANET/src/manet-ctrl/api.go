@@ -199,6 +199,19 @@ func apiVoice(w http.ResponseWriter, r *http.Request) {
 func apiVoiceConfig(w http.ResponseWriter, r *http.Request, body map[string]interface{}) {
 	action := jsonStr(body, "action", "")
 
+	if action == "ptt_on" || action == "ptt_off" {
+		val := "0"
+		if action == "ptt_on" {
+			val = "1"
+		}
+		if err := os.WriteFile("/run/mesh-voice-ptt-remote", []byte(val), 0644); err != nil {
+			writeJSON(w, 500, map[string]interface{}{"ok": false, "error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]interface{}{"ok": true})
+		return
+	}
+
 	if action == "start" || action == "stop" || action == "restart" {
 		ok, errMsg := serviceAction("mesh-voice", action)
 		writeJSON(w, 200, map[string]interface{}{"ok": ok, "error": errMsg})

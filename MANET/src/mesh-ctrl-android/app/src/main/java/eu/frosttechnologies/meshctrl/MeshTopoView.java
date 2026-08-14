@@ -20,6 +20,9 @@ public class MeshTopoView extends View {
     private final Paint dotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint selfDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint gwDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint offDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint offGlowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint offTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint dimTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -43,6 +46,17 @@ public class MeshTopoView extends View {
         gwDotPaint.setColor(0xFF33CCFF);
         gwDotPaint.setStyle(Paint.Style.FILL);
         gwDotPaint.setShadowLayer(10, 0, 0, 0xFF33CCFF);
+
+        offDotPaint.setColor(0xFFCC3333);
+        offDotPaint.setStyle(Paint.Style.STROKE);
+        offDotPaint.setStrokeWidth(2f);
+
+        offGlowPaint.setColor(0x30CC3333);
+        offGlowPaint.setStyle(Paint.Style.FILL);
+
+        offTextPaint.setColor(0xFF993333);
+        offTextPaint.setTextSize(24f);
+        offTextPaint.setTypeface(Typeface.MONOSPACE);
 
         linePaint.setColor(0xFF1a5a1a);
         linePaint.setStyle(Paint.Style.STROKE);
@@ -123,7 +137,7 @@ public class MeshTopoView extends View {
             String mac = nd.optString("mac", "");
             if (!mac.isEmpty()) idIndex.put(mac, ids.size());
             ids.add(id);
-            labels.add(gw ? label + " GW" : label);
+            labels.add(gw ? label + " (GW)" : label);
             online.add(on);
             isMe.add(me);
             isGw.add(gw);
@@ -192,17 +206,21 @@ public class MeshTopoView extends View {
                     canvas.drawCircle(px[i], py[i], dotR, dotPaint);
                 }
             } else {
-                Paint offPaint = new Paint(dotPaint);
-                offPaint.setColor(0xFF994444);
-                canvas.drawCircle(px[i], py[i], dotR - 1, offPaint);
+                canvas.drawCircle(px[i], py[i], dotR + 4, offGlowPaint);
+                canvas.drawCircle(px[i], py[i], dotR, offDotPaint);
             }
 
             float tx = px[i] + dotR + 4;
             float ty = py[i] + 5;
-            if (px[i] > cx) {
-                tx = px[i] - textPaint.measureText(labels.get(i)) - dotR - 4;
+            Paint lp;
+            if (online.get(i)) {
+                lp = textPaint;
+            } else {
+                lp = offTextPaint;
             }
-            Paint lp = online.get(i) ? textPaint : dimTextPaint;
+            if (px[i] > cx) {
+                tx = px[i] - lp.measureText(labels.get(i)) - dotR - 4;
+            }
             canvas.drawText(labels.get(i), tx, ty, lp);
         }
 

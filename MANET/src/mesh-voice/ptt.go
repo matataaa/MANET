@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	evdev "github.com/gvalkov/golang-evdev"
 	hid "github.com/sstallion/go-hid"
@@ -148,6 +149,7 @@ func openvlmPTTLoop(ctx context.Context, ch chan<- bool, devCh chan<- bool) {
 func openvlmReadLoop(ctx context.Context, dev *hid.Device, ch chan<- bool) {
 	buf := make([]byte, openvlmReportSize)
 	prevGPIO3 := false
+	var lastChange int64
 
 	for {
 		if ctx.Err() != nil {
@@ -177,6 +179,12 @@ func openvlmReadLoop(ctx context.Context, dev *hid.Device, ch chan<- bool) {
 		if gpio3 == prevGPIO3 {
 			continue
 		}
+
+		now := timeNowMs()
+		if now-lastChange < 150 {
+			continue
+		}
+		lastChange = now
 		prevGPIO3 = gpio3
 
 		if gpio3 {
@@ -184,6 +192,44 @@ func openvlmReadLoop(ctx context.Context, dev *hid.Device, ch chan<- bool) {
 			ch <- true
 		} else {
 			log.Println("OpenVLM PTT: GPIO3 LOW → TX stop")
+			ch <- false
+		}
+	}
+}
+
+func timeNowMs() int64 {
+	return time.Now().UnixMilli()
+}
+
+const remotePTTFile = "/run/mesh-voice-ptt-remote"
+
+func remotePTTLoop(ctx context.Context, ch chan<- bool) {
+	var lastState string
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timerChan(100):
+		}
+
+		data, err := os.ReadFile(remotePTTFile)
+		if err != nil {
+			if lastState != "" {
+				lastState = ""
+			}
+			continue
+		}
+		state := strings.TrimSpace(string(data))
+		if state == lastState {
+			continue
+		}
+		lastState = state
+		switch state {
+		case "1":
+			log.Println("Remote PTT: ON")
+			ch <- true
+		case "0":
+			log.Println("Remote PTT: OFF")
 			ch <- false
 		}
 	}

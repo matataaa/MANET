@@ -23,7 +23,7 @@ const (
 	sampleRate = 48000
 	channels   = 1
 	frameSize  = 960 // 20ms at 48kHz
-	bitrate    = 10000
+	bitrate    = 24000
 	encBufSize = 1450
 )
 
@@ -114,6 +114,7 @@ type Config struct {
 	GPIOKey   string // evdev key code or "any"
 	DeviceIn  string // ALSA device hint for capture
 	DeviceOut string // ALSA device hint for playback
+	MicGain   float64
 }
 
 func main() {
@@ -126,6 +127,7 @@ func main() {
 	flag.StringVar(&cfg.GPIOKey, "gpio-key", "any", "evdev key code or 'any'")
 	flag.StringVar(&cfg.DeviceIn, "input", "", "ALSA capture device")
 	flag.StringVar(&cfg.DeviceOut, "output", "", "ALSA playback device")
+	flag.Float64Var(&cfg.MicGain, "gain", 3.0, "software mic gain multiplier")
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -235,6 +237,9 @@ func run(ctx context.Context, cfg Config) error {
 	default:
 		return fmt.Errorf("unknown PTT source: %s", cfg.PTTSource)
 	}
+
+	// Remote PTT — manet-ctrl writes "1" or "0" to this file to trigger PTT
+	go remotePTTLoop(ctx, pttCh)
 
 	// Audio device management — handles hot-plug of USB audio (VLM)
 	var audioMu sync.Mutex
@@ -410,7 +415,14 @@ func run(ctx context.Context, cfg Config) error {
 			nSamples := len(inputSamples) / 2
 			samples := make([]int16, nSamples)
 			for i := 0; i < nSamples; i++ {
-				samples[i] = int16(inputSamples[i*2]) | int16(inputSamples[i*2+1])<<8
+				s := int32(int16(inputSamples[i*2]) | int16(inputSamples[i*2+1])<<8)
+				s = int32(float64(s) * cfg.MicGain)
+				if s > 32767 {
+					s = 32767
+				} else if s < -32768 {
+					s = -32768
+				}
+				samples[i] = int16(s)
 			}
 			select {
 			case captureCh <- samples:
