@@ -38,6 +38,7 @@ id eud_pages
 id eud_side_panel
 id eud_time
 id eud_title
+id eud_topo_container
 id eud_voice_row
 id launch_kdu
 id launch_mgmt
@@ -54,4 +55,5 @@ mipmap ic_launcher
 string app_name
 style AppTheme
 style AppTheme.Eud
+xml file_paths
 xml network_security_config

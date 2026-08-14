@@ -8,9 +8,12 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.view.View;
 import android.webkit.*;
 import android.widget.ProgressBar;
@@ -18,6 +21,13 @@ import android.widget.TextView;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.core.content.FileProvider;
+
+import java.io.File;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
@@ -35,9 +45,30 @@ public class MainActivity extends AppCompatActivity {
     private ProgressBar progress;
     private TextView errorView;
     private int notifId = 1000;
+    private ValueCallback<Uri[]> fileUploadCallback;
+    private Uri cameraImageUri;
 
     private final ActivityResultLauncher<String> notifPermission =
             registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {});
+
+    private final ActivityResultLauncher<String> cameraPermission =
+            registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {});
+
+    private final ActivityResultLauncher<Intent> fileChooserLauncher =
+            registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+                if (fileUploadCallback == null) return;
+                Uri[] results = null;
+                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                    String dataString = result.getData().getDataString();
+                    if (dataString != null) {
+                        results = new Uri[]{Uri.parse(dataString)};
+                    }
+                } else if (result.getResultCode() == RESULT_OK && cameraImageUri != null) {
+                    results = new Uri[]{cameraImageUri};
+                }
+                fileUploadCallback.onReceiveValue(results);
+                fileUploadCallback = null;
+            });
 
     private final ActivityResultLauncher<Intent> nodePickerLauncher =
             registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
@@ -61,6 +92,7 @@ public class MainActivity extends AppCompatActivity {
 
         createNotificationChannels();
         requestNotificationPermission();
+        requestCameraPermission();
         setupWebView();
 
         findViewById(R.id.btn_settings).setOnClickListener(v -> showLaunchModeDialog());
@@ -95,6 +127,25 @@ public class MainActivity extends AppCompatActivity {
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                         != PackageManager.PERMISSION_GRANTED) {
             notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
+        }
+    }
+
+    private void requestCameraPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            cameraPermission.launch(Manifest.permission.CAMERA);
+        }
+    }
+
+    private Uri createImageUri() {
+        try {
+            String ts = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+            File dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+            File img = File.createTempFile("MESH_" + ts + "_", ".jpg", dir);
+            return FileProvider.getUriForFile(this,
+                    getPackageName() + ".fileprovider", img);
+        } catch (IOException e) {
+            return null;
         }
     }
 
@@ -139,6 +190,37 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onPermissionRequest(PermissionRequest request) {
                 request.grant(request.getResources());
+            }
+
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
+                                             FileChooserParams params) {
+                if (fileUploadCallback != null) {
+                    fileUploadCallback.onReceiveValue(null);
+                }
+                fileUploadCallback = callback;
+
+                Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+                cameraImageUri = createImageUri();
+                if (cameraImageUri != null) {
+                    cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraImageUri);
+                }
+
+                Intent fileIntent = new Intent(Intent.ACTION_GET_CONTENT);
+                fileIntent.addCategory(Intent.CATEGORY_OPENABLE);
+                String[] accept = params.getAcceptTypes();
+                if (accept != null && accept.length > 0 && accept[0] != null && !accept[0].isEmpty()) {
+                    fileIntent.setType(accept[0]);
+                } else {
+                    fileIntent.setType("*/*");
+                }
+
+                Intent chooser = Intent.createChooser(fileIntent, "Pick file");
+                if (cameraImageUri != null) {
+                    chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{cameraIntent});
+                }
+                fileChooserLauncher.launch(chooser);
+                return true;
             }
         });
     }

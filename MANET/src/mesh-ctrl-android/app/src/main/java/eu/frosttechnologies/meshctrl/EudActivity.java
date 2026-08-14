@@ -21,6 +21,7 @@ import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -85,7 +86,10 @@ public class EudActivity extends AppCompatActivity {
     private TextView tvTitle, tvConn, tvDisplay, tvPages, tvTime;
     private LinearLayout voiceRow, channelGrid, chatInputRow;
     private LinearLayout sidePanel;
+    private FrameLayout topoContainer;
+    private MeshTopoView topoView;
     private EditText chatInput;
+    private long lastPollMs = 0;
     private Button chatSendBtn;
     private Button[] navButtons;
     private Button[] chanTxButtons;
@@ -149,6 +153,11 @@ public class EudActivity extends AppCompatActivity {
         channelGrid = findViewById(R.id.eud_channel_grid);
         chatInputRow = findViewById(R.id.eud_chat_input_row);
         sidePanel = findViewById(R.id.eud_side_panel);
+        topoContainer = findViewById(R.id.eud_topo_container);
+        if (topoContainer != null) {
+            topoView = new MeshTopoView(this);
+            topoContainer.addView(topoView);
+        }
         chatInput = findViewById(R.id.eud_chat_input);
         chatSendBtn = findViewById(R.id.eud_chat_send);
         chatSendBtn.setBackgroundTintList(null);
@@ -540,6 +549,7 @@ public class EudActivity extends AppCompatActivity {
                     if (msgsFinal != null) chatMessages = msgsFinal;
                     if (!chatHostFinal.isEmpty()) chatHostname = chatHostFinal;
                     connected = true;
+                    lastPollMs = System.currentTimeMillis();
 
                     boolean debounced = System.currentTimeMillis() - lastUserAction < DEBOUNCE_MS;
                     if (!debounced) {
@@ -595,12 +605,22 @@ public class EudActivity extends AppCompatActivity {
         }
 
         boolean comms = page == 2;
+        boolean mesh = page == 1;
         boolean chat = page == 4;
         channelGrid.setVisibility(comms ? View.VISIBLE : View.GONE);
         voiceRow.setVisibility(comms ? View.VISIBLE : View.GONE);
         chatInputRow.setVisibility(chat && chatAvailable ? View.VISIBLE : View.GONE);
+        if (topoContainer != null) {
+            topoContainer.setVisibility(mesh ? View.VISIBLE : View.GONE);
+        }
         if (sidePanel != null) {
-            sidePanel.setVisibility(comms ? View.VISIBLE : View.GONE);
+            sidePanel.setVisibility((comms || mesh || (chat && chatAvailable)) ? View.VISIBLE : View.GONE);
+        }
+        if (mesh && topoView != null && apiData != null) {
+            topoView.setData(
+                    apiData.optJSONArray("nodes"),
+                    apiData.optJSONArray("edges"),
+                    apiData.optLong("timestamp", 0));
         }
 
         if (comms) updateChannelButtons();
@@ -655,6 +675,9 @@ public class EudActivity extends AppCompatActivity {
         sb.append(row("BW", bw));
         sb.append(row("TX", tx.equals("--") ? "--" : tx + " dBm"));
         sb.append(row("LINK", ifname + " " + state));
+        if (lastPollMs > 0) {
+            sb.append(row("UPD", agoStr(System.currentTimeMillis(), lastPollMs)));
+        }
         return sb.toString();
     }
 
@@ -706,6 +729,9 @@ public class EudActivity extends AppCompatActivity {
         sb.append(row("BEST", bestTp));
         sb.append(row("GWs", apiData != null ? "" + apiData.optInt("gateway_count", 0) : "--"));
         sb.append(row("PROTO", "BATMAN_V"));
+        if (lastPollMs > 0) {
+            sb.append(row("UPD", agoStr(System.currentTimeMillis(), lastPollMs)));
+        }
         return sb.toString();
     }
 
@@ -741,10 +767,27 @@ public class EudActivity extends AppCompatActivity {
                 }
                 sb.append(row("ACTV", active.length() > 0 ? active.toString() : "NONE"));
             }
+
+            int lastTx = apiChannels.optInt("last_tx_channel", 0);
+            long lastTxAt = apiChannels.optLong("last_tx_at", 0);
+            int lastRx = apiChannels.optInt("last_rx_channel", 0);
+            long lastRxAt = apiChannels.optLong("last_rx_at", 0);
+            long now = System.currentTimeMillis();
+            sb.append(row("LSTTX", lastTx > 0 ? "CH" + lastTx + " " + agoStr(now, lastTxAt) : "--"));
+            sb.append(row("LSTRX", lastRx > 0 ? "CH" + lastRx + " " + agoStr(now, lastRxAt) : "--"));
         }
 
         sb.append(row("CHAT", chatUnread > 0 ? chatUnread + " UNREAD" : "0 UNREAD"));
         return sb.toString();
+    }
+
+    private String agoStr(long nowMs, long atMs) {
+        if (atMs <= 0) return "";
+        long sec = (nowMs - atMs) / 1000;
+        if (sec < 5) return "NOW";
+        if (sec < 60) return sec + "s ago";
+        if (sec < 3600) return (sec / 60) + "m ago";
+        return (sec / 3600) + "h ago";
     }
 
     private String formatStatus() {

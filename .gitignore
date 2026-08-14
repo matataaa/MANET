@@ -32,6 +32,8 @@ MANET/src/node-manager/node-manager
 # Local dev builds (host-native, never shipped)
 MANET/src/manet-ctrl/manet-term
 MANET/src/mesh-cli/mesh-cli
+MANET/src/manet-ctrl/bin/
+MANET/src/gateway-manager/bin/
 
 # Provisioning scratch
 MANET/provisioning/.image-cache/

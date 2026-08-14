@@ -26,145 +26,171 @@
 16    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 16-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:9:5-79
 16-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:9:22-77
-17
-18    <permission
-18-->[androidx.core:core:1.12.0] /Users/matthew/.gradle/caches/transforms-3/740ae0ea3c31e6cd8edc9f94e7ba0f7e/transformed/core-1.12.0/AndroidManifest.xml:22:5-24:47
-19        android:name="eu.frosttechnologies.meshctrl.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
-19-->[androidx.core:core:1.12.0] /Users/matthew/.gradle/caches/transforms-3/740ae0ea3c31e6cd8edc9f94e7ba0f7e/transformed/core-1.12.0/AndroidManifest.xml:23:9-81
-20        android:protectionLevel="signature" />
-20-->[androidx.core:core:1.12.0] /Users/matthew/.gradle/caches/transforms-3/740ae0ea3c31e6cd8edc9f94e7ba0f7e/transformed/core-1.12.0/AndroidManifest.xml:24:9-44
-21
-22    <uses-permission android:name="eu.frosttechnologies.meshctrl.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
-22-->[androidx.core:core:1.12.0] /Users/matthew/.gradle/caches/transforms-3/740ae0ea3c31e6cd8edc9f94e7ba0f7e/transformed/core-1.12.0/AndroidManifest.xml:26:5-97
-22-->[androidx.core:core:1.12.0] /Users/matthew/.gradle/caches/transforms-3/740ae0ea3c31e6cd8edc9f94e7ba0f7e/transformed/core-1.12.0/AndroidManifest.xml:26:22-94
-23
-24    <application
-24-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:11:5-44:19
-25        android:allowBackup="false"
-25-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:12:9-36
-26        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
-26-->[androidx.core:core:1.12.0] /Users/matthew/.gradle/caches/transforms-3/740ae0ea3c31e6cd8edc9f94e7ba0f7e/transformed/core-1.12.0/AndroidManifest.xml:28:18-86
-27        android:debuggable="true"
-28        android:extractNativeLibs="false"
-29        android:icon="@mipmap/ic_launcher"
-29-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:13:9-43
-30        android:label="@string/app_name"
-30-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:14:9-41
-31        android:networkSecurityConfig="@xml/network_security_config"
-31-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:17:9-69
-32        android:theme="@style/AppTheme"
-32-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:15:9-40
-33        android:usesCleartextTraffic="true" >
-33-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:16:9-44
-34        <activity
-34-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:19:9-27:20
-35            android:name="eu.frosttechnologies.meshctrl.LauncherActivity"
-35-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:20:13-45
-36            android:exported="true"
-36-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:21:13-36
-37            android:theme="@style/AppTheme" >
-37-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:22:13-44
-38            <intent-filter>
-38-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:23:13-26:29
-39                <action android:name="android.intent.action.MAIN" />
-39-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:24:17-68
-39-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:24:25-66
-40
-41                <category android:name="android.intent.category.LAUNCHER" />
-41-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:25:17-76
-41-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:25:27-74
-42            </intent-filter>
-43        </activity>
-44        <activity
-44-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:29:9-33:46
-45            android:name="eu.frosttechnologies.meshctrl.MainActivity"
-45-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:30:13-41
-46            android:configChanges="orientation|screenSize|keyboardHidden"
-46-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:32:13-74
-47            android:exported="false"
-47-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:31:13-37
-48            android:launchMode="singleTask" />
-48-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:33:13-44
+17    <uses-permission android:name="android.permission.CAMERA" />
+17-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:10:5-64
+17-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:10:22-62
+18
+19    <uses-feature
+19-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:12:5-84
+20        android:name="android.hardware.camera"
+20-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:12:19-57
+21        android:required="false" />
+21-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:12:58-82
+22
+23    <permission
+23-->[androidx.core:core:1.12.0] /Users/matthew/.gradle/caches/transforms-3/740ae0ea3c31e6cd8edc9f94e7ba0f7e/transformed/core-1.12.0/AndroidManifest.xml:22:5-24:47
+24        android:name="eu.frosttechnologies.meshctrl.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+24-->[androidx.core:core:1.12.0] /Users/matthew/.gradle/caches/transforms-3/740ae0ea3c31e6cd8edc9f94e7ba0f7e/transformed/core-1.12.0/AndroidManifest.xml:23:9-81
+25        android:protectionLevel="signature" />
+25-->[androidx.core:core:1.12.0] /Users/matthew/.gradle/caches/transforms-3/740ae0ea3c31e6cd8edc9f94e7ba0f7e/transformed/core-1.12.0/AndroidManifest.xml:24:9-44
+26
+27    <uses-permission android:name="eu.frosttechnologies.meshctrl.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+27-->[androidx.core:core:1.12.0] /Users/matthew/.gradle/caches/transforms-3/740ae0ea3c31e6cd8edc9f94e7ba0f7e/transformed/core-1.12.0/AndroidManifest.xml:26:5-97
+27-->[androidx.core:core:1.12.0] /Users/matthew/.gradle/caches/transforms-3/740ae0ea3c31e6cd8edc9f94e7ba0f7e/transformed/core-1.12.0/AndroidManifest.xml:26:22-94
+28
+29    <application
+29-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:14:5-57:19
+30        android:allowBackup="false"
+30-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:15:9-36
+31        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+31-->[androidx.core:core:1.12.0] /Users/matthew/.gradle/caches/transforms-3/740ae0ea3c31e6cd8edc9f94e7ba0f7e/transformed/core-1.12.0/AndroidManifest.xml:28:18-86
+32        android:debuggable="true"
+33        android:extractNativeLibs="false"
+34        android:icon="@mipmap/ic_launcher"
+34-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:16:9-43
+35        android:label="@string/app_name"
+35-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:17:9-41
+36        android:networkSecurityConfig="@xml/network_security_config"
+36-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:20:9-69
+37        android:theme="@style/AppTheme"
+37-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:18:9-40
+38        android:usesCleartextTraffic="true" >
+38-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:19:9-44
+39        <activity
+39-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:22:9-30:20
+40            android:name="eu.frosttechnologies.meshctrl.LauncherActivity"
+40-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:23:13-45
+41            android:exported="true"
+41-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:24:13-36
+42            android:theme="@style/AppTheme" >
+42-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:25:13-44
+43            <intent-filter>
+43-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:26:13-29:29
+44                <action android:name="android.intent.action.MAIN" />
+44-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:27:17-68
+44-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:27:25-66
+45
+46                <category android:name="android.intent.category.LAUNCHER" />
+46-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:28:17-76
+46-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:28:27-74
+47            </intent-filter>
+48        </activity>
 49        <activity
-49-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:35:9-37:46
-50            android:name="eu.frosttechnologies.meshctrl.NodePickerActivity"
-50-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:36:13-47
-51            android:theme="@style/AppTheme" />
-51-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:37:13-44
-52        <activity
-52-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:39:9-42:76
-53            android:name="eu.frosttechnologies.meshctrl.EudActivity"
-53-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:40:13-40
-54            android:configChanges="orientation|screenSize|keyboardHidden"
-54-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:42:13-74
-55            android:theme="@style/AppTheme.Eud" />
-55-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:41:13-48
-56
-57        <provider
-57-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:24:9-32:20
-58            android:name="androidx.startup.InitializationProvider"
-58-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:25:13-67
-59            android:authorities="eu.frosttechnologies.meshctrl.androidx-startup"
-59-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:26:13-68
-60            android:exported="false" >
-60-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:27:13-37
-61            <meta-data
-61-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:29:13-31:52
-62                android:name="androidx.emoji2.text.EmojiCompatInitializer"
-62-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:30:17-75
-63                android:value="androidx.startup" />
-63-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:31:17-49
-64            <meta-data
-64-->[androidx.lifecycle:lifecycle-process:2.6.1] /Users/matthew/.gradle/caches/transforms-3/6e8a5b813c4f665d15cd61be7df27f51/transformed/lifecycle-process-2.6.1/AndroidManifest.xml:29:13-31:52
-65                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
-65-->[androidx.lifecycle:lifecycle-process:2.6.1] /Users/matthew/.gradle/caches/transforms-3/6e8a5b813c4f665d15cd61be7df27f51/transformed/lifecycle-process-2.6.1/AndroidManifest.xml:30:17-78
-66                android:value="androidx.startup" />
-66-->[androidx.lifecycle:lifecycle-process:2.6.1] /Users/matthew/.gradle/caches/transforms-3/6e8a5b813c4f665d15cd61be7df27f51/transformed/lifecycle-process-2.6.1/AndroidManifest.xml:31:17-49
+49-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:32:9-36:46
+50            android:name="eu.frosttechnologies.meshctrl.MainActivity"
+50-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:33:13-41
+51            android:configChanges="orientation|screenSize|keyboardHidden"
+51-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:35:13-74
+52            android:exported="false"
+52-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:34:13-37
+53            android:launchMode="singleTask" />
+53-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:36:13-44
+54        <activity
+54-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:38:9-40:46
+55            android:name="eu.frosttechnologies.meshctrl.NodePickerActivity"
+55-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:39:13-47
+56            android:theme="@style/AppTheme" />
+56-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:40:13-44
+57        <activity
+57-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:42:9-45:76
+58            android:name="eu.frosttechnologies.meshctrl.EudActivity"
+58-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:43:13-40
+59            android:configChanges="orientation|screenSize|keyboardHidden"
+59-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:45:13-74
+60            android:theme="@style/AppTheme.Eud" />
+60-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:44:13-48
+61
+62        <provider
+63            android:name="androidx.core.content.FileProvider"
+63-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:48:13-62
+64            android:authorities="eu.frosttechnologies.meshctrl.fileprovider"
+64-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:49:13-64
+65            android:exported="false"
+65-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:50:13-37
+66            android:grantUriPermissions="true" >
+66-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:51:13-47
 67            <meta-data
-67-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:29:13-31:52
-68                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
-68-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:30:17-85
-69                android:value="androidx.startup" />
-69-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:31:17-49
+67-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:52:13-54:53
+68                android:name="android.support.FILE_PROVIDER_PATHS"
+68-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:53:17-67
+69                android:resource="@xml/file_paths" />
+69-->/Users/matthew/projects/A-STSC/MANET/MANET/src/mesh-ctrl-android/app/src/main/AndroidManifest.xml:54:17-51
 70        </provider>
-71
-72        <receiver
-72-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:34:9-52:20
-73            android:name="androidx.profileinstaller.ProfileInstallReceiver"
-73-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:35:13-76
-74            android:directBootAware="false"
-74-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:36:13-44
-75            android:enabled="true"
-75-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:37:13-35
-76            android:exported="true"
-76-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:38:13-36
-77            android:permission="android.permission.DUMP" >
-77-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:39:13-57
-78            <intent-filter>
-78-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:40:13-42:29
-79                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
-79-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:17-91
-79-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:25-88
-80            </intent-filter>
-81            <intent-filter>
-81-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:43:13-45:29
-82                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
-82-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:17-85
-82-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:25-82
-83            </intent-filter>
-84            <intent-filter>
-84-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:46:13-48:29
-85                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
-85-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:17-88
-85-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:25-85
-86            </intent-filter>
-87            <intent-filter>
-87-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:49:13-51:29
-88                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
-88-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:17-95
-88-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:25-92
-89            </intent-filter>
-90        </receiver>
-91    </application>
-92
-93</manifest>
+71        <provider
+71-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:24:9-32:20
+72            android:name="androidx.startup.InitializationProvider"
+72-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:25:13-67
+73            android:authorities="eu.frosttechnologies.meshctrl.androidx-startup"
+73-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:26:13-68
+74            android:exported="false" >
+74-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:27:13-37
+75            <meta-data
+75-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:29:13-31:52
+76                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+76-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:30:17-75
+77                android:value="androidx.startup" />
+77-->[androidx.emoji2:emoji2:1.2.0] /Users/matthew/.gradle/caches/transforms-3/986cb90b811bf58fb8e8ff4e6584552d/transformed/emoji2-1.2.0/AndroidManifest.xml:31:17-49
+78            <meta-data
+78-->[androidx.lifecycle:lifecycle-process:2.6.1] /Users/matthew/.gradle/caches/transforms-3/6e8a5b813c4f665d15cd61be7df27f51/transformed/lifecycle-process-2.6.1/AndroidManifest.xml:29:13-31:52
+79                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+79-->[androidx.lifecycle:lifecycle-process:2.6.1] /Users/matthew/.gradle/caches/transforms-3/6e8a5b813c4f665d15cd61be7df27f51/transformed/lifecycle-process-2.6.1/AndroidManifest.xml:30:17-78
+80                android:value="androidx.startup" />
+80-->[androidx.lifecycle:lifecycle-process:2.6.1] /Users/matthew/.gradle/caches/transforms-3/6e8a5b813c4f665d15cd61be7df27f51/transformed/lifecycle-process-2.6.1/AndroidManifest.xml:31:17-49
+81            <meta-data
+81-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:29:13-31:52
+82                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+82-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:30:17-85
+83                android:value="androidx.startup" />
+83-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:31:17-49
+84        </provider>
+85
+86        <receiver
+86-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:34:9-52:20
+87            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+87-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:35:13-76
+88            android:directBootAware="false"
+88-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:36:13-44
+89            android:enabled="true"
+89-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:37:13-35
+90            android:exported="true"
+90-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:38:13-36
+91            android:permission="android.permission.DUMP" >
+91-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:39:13-57
+92            <intent-filter>
+92-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:40:13-42:29
+93                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+93-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:17-91
+93-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:25-88
+94            </intent-filter>
+95            <intent-filter>
+95-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:43:13-45:29
+96                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+96-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:17-85
+96-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:25-82
+97            </intent-filter>
+98            <intent-filter>
+98-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:46:13-48:29
+99                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+99-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:17-88
+99-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:25-85
+100            </intent-filter>
+101            <intent-filter>
+101-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:49:13-51:29
+102                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+102-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:17-95
+102-->[androidx.profileinstaller:profileinstaller:1.3.0] /Users/matthew/.gradle/caches/transforms-3/92e8251532aef0a688bfdf15bbedba07/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:25-92
+103            </intent-filter>
+104        </receiver>
+105    </application>
+106
+107</manifest>

@@ -8,6 +8,10 @@
         "source": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-main-34:/layout/activity_eud.xml"
     },
     {
+        "merged": "eu.frosttechnologies.meshctrl.app-merged_res-32:/xml_file_paths.xml.flat",
+        "source": "eu.frosttechnologies.meshctrl.app-main-34:/xml/file_paths.xml"
+    },
+    {
         "merged": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-merged_res-32:/layout_activity_node_picker.xml.flat",
         "source": "/Users/matthew/.gradle/daemon/8.5/eu.frosttechnologies.meshctrl.app-main-34:/layout/activity_node_picker.xml"
     },
