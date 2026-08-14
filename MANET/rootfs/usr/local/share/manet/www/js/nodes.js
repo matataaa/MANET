@@ -131,10 +131,13 @@ function nodesRender() {
       '<td>' + escHtml(n.uptime || '--') + '</td>' +
       '<td>' + lastSeen + '</td>' +
       '<td class="col-actions">' +
-        '<button class="node-act-btn" onclick="openNodeConfig(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\')">' + (n.is_me ? 'Config' : 'Config') + '</button>' +
+        (n.ip ? '<button class="node-act-btn" onclick="window.open(\'https://\' + \'' + escHtml(n.ip) + '\' + \'/\', \'_blank\')">Portal</button>' : '') +
+        '<button class="node-act-btn" onclick="openNodeConfig(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\')">Config</button>' +
         (n.is_me ? '' :
         '<button class="node-act-btn" onclick="openNodeTerminal(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\',\'terminal\')">Shell</button>' +
-        '<button class="node-act-btn" onclick="openNodeTerminal(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\',\'logs\')">Logs</button>') +
+        '<button class="node-act-btn" onclick="openNodeTerminal(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\',\'logs\')">Logs</button>' +
+        '<button class="node-act-btn" onclick="openNodeStream(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\',\'ping\')">Ping</button>' +
+        '<button class="node-act-btn" onclick="openNodeStream(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\',\'traceroute\')">Trace</button>') +
       '</td>' +
       '</tr>';
   }).join('');

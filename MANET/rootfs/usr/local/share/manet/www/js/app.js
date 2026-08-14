@@ -298,6 +298,49 @@ function openNodeTerminal(ip, hostname, mode) {
   window.location.hash = 'terminal';
 }
 
+var _nodeStreamAbort = null;
+function openNodeStream(ip, hostname, type) {
+  if (_nodeStreamAbort) { _nodeStreamAbort.abort(); _nodeStreamAbort = null; }
+  var old = document.querySelector('.node-stream-overlay');
+  if (old) old.remove();
+  var title = type === 'ping' ? 'Ping ' + (hostname || ip) + ' (' + ip + ')' : 'Trace Route to ' + (hostname || ip);
+  var overlay = document.createElement('div');
+  overlay.className = 'node-stream-overlay';
+  overlay.innerHTML =
+    '<div class="node-stream-modal">' +
+    '<div class="node-stream-hdr"><span>' + escHtml(title) + '</span>' +
+    '<div class="node-stream-btns">' +
+    '<button class="node-stream-stop">Stop</button>' +
+    '<button class="node-stream-close">&times;</button>' +
+    '</div></div>' +
+    '<pre class="node-stream-pre"></pre></div>';
+  document.body.appendChild(overlay);
+  var pre = overlay.querySelector('pre');
+  var stopBtn = overlay.querySelector('.node-stream-stop');
+  overlay.querySelector('.node-stream-close').onclick = function() {
+    if (_nodeStreamAbort) { _nodeStreamAbort.abort(); _nodeStreamAbort = null; }
+    overlay.remove();
+  };
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.querySelector('.node-stream-close').click(); });
+  stopBtn.onclick = function() { if (_nodeStreamAbort) { _nodeStreamAbort.abort(); _nodeStreamAbort = null; } };
+  var controller = new AbortController();
+  _nodeStreamAbort = controller;
+  var url = type === 'ping' ? '/api/ping/stream' : '/api/traceroute/stream';
+  var body = type === 'ping' ? JSON.stringify({target: ip, count: 10}) : JSON.stringify({target: ip});
+  authFetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:body, signal:controller.signal})
+    .then(function(resp) {
+      var reader = resp.body.getReader(), decoder = new TextDecoder();
+      (function read() {
+        reader.read().then(function(r) {
+          if (r.done) { stopBtn.textContent = 'Done'; stopBtn.classList.add('done'); return; }
+          pre.textContent += decoder.decode(r.value, {stream:true});
+          pre.scrollTop = pre.scrollHeight;
+          read();
+        }).catch(function(){});
+      })();
+    }).catch(function(){});
+}
+
 // Open config tab targeting a specific node (local or remote)
 function openNodeConfig(ip, hostname) {
   if (LOCAL_DATA && LOCAL_DATA.ip === ip) {
