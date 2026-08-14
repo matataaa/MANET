@@ -106,6 +106,7 @@ var (
 	upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	hostname string
 	meshIP   string
+	meshIPMu sync.RWMutex
 	cfg      Config
 
 	mu         sync.Mutex
@@ -203,6 +204,28 @@ func getMeshIP(ifaceName string) string {
 		}
 	}
 	return ""
+}
+
+func currentMeshIP() string {
+	meshIPMu.RLock()
+	defer meshIPMu.RUnlock()
+	return meshIP
+}
+
+// refreshMeshIP re-resolves the interface address. The service can start
+// before br0 has an IP, which left meshIP empty forever and made every
+// beacon advertise an unroutable peer.
+func refreshMeshIP() {
+	ip := getMeshIP(cfg.Iface)
+	if ip == "" {
+		return
+	}
+	meshIPMu.Lock()
+	if ip != meshIP {
+		log.Printf("mesh IP resolved: %s", ip)
+		meshIP = ip
+	}
+	meshIPMu.Unlock()
 }
 
 // --- Persistence ---
@@ -364,7 +387,7 @@ func addReceipt(msgID, peer string) {
 }
 
 func sendReceipt(msgID, senderIP string) {
-	if senderIP == "" || senderIP == meshIP {
+	if senderIP == "" || senderIP == currentMeshIP() {
 		return
 	}
 	data, _ := json.Marshal(map[string]string{
@@ -463,9 +486,15 @@ func multicastListener() {
 
 	buf := make([]byte, maxMsgBytes)
 	for {
-		n, _, err := conn.ReadFromUDP(buf)
+		n, src, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			continue
+		}
+		// Fallback identity: senders that started before br0 had an IP
+		// advertise from_ip="", but the packet source is always routable.
+		srcIP := ""
+		if src != nil {
+			srcIP = src.IP.String()
 		}
 		var raw map[string]json.RawMessage
 		if json.Unmarshal(buf[:n], &raw) != nil {
@@ -478,24 +507,27 @@ func multicastListener() {
 
 		switch msgType {
 		case "presence":
-			handlePresence(buf[:n])
+			handlePresence(buf[:n], srcIP)
 		case "sync":
-			handleSyncBeacon(buf[:n])
+			handleSyncBeacon(buf[:n], srcIP)
 		case "text", "file":
-			handleIncomingMessage(buf[:n])
+			handleIncomingMessage(buf[:n], srcIP)
 		case "remote-delete":
 			handleRemoteDeleteMulticast(buf[:n])
 		}
 	}
 }
 
-func handlePresence(data []byte) {
+func handlePresence(data []byte, srcIP string) {
 	var p struct {
 		From   string `json:"from"`
 		FromIP string `json:"from_ip"`
 	}
 	if json.Unmarshal(data, &p) != nil || p.From == hostname {
 		return
+	}
+	if p.FromIP == "" {
+		p.FromIP = srcIP
 	}
 	mu.Lock()
 	_, existed := peers[p.From]
@@ -509,9 +541,15 @@ func handlePresence(data []byte) {
 	}
 }
 
-func handleSyncBeacon(data []byte) {
+func handleSyncBeacon(data []byte, srcIP string) {
 	var sb syncBeacon
-	if json.Unmarshal(data, &sb) != nil || sb.From == hostname || sb.FromIP == "" {
+	if json.Unmarshal(data, &sb) != nil || sb.From == hostname {
+		return
+	}
+	if sb.FromIP == "" {
+		sb.FromIP = srcIP
+	}
+	if sb.FromIP == "" {
 		return
 	}
 	mu.Lock()
@@ -531,10 +569,13 @@ func handleSyncBeacon(data []byte) {
 	}
 }
 
-func handleIncomingMessage(data []byte) {
+func handleIncomingMessage(data []byte, srcIP string) {
 	msg := migrateMessage(data)
 	if msg.ID == "" || msg.From == hostname {
 		return
+	}
+	if msg.FromIP == "" {
+		msg.FromIP = srcIP
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -640,7 +681,7 @@ func fileSources(msg Message) []string {
 	var direct []string
 	var other []string
 	for _, p := range peers {
-		if p.IP == msg.FromIP {
+		if p.IP == "" || p.IP == msg.FromIP {
 			continue
 		}
 		if hasFileCandidate(p, msg) {
@@ -698,7 +739,7 @@ func deliverMessages(peerIP string, msgs []Message) {
 }
 
 func peerList() []Peer {
-	list := []Peer{{Hostname: hostname, IP: meshIP, LastSeen: time.Now().Unix()}}
+	list := []Peer{{Hostname: hostname, IP: currentMeshIP(), LastSeen: time.Now().Unix()}}
 	for _, p := range peers {
 		list = append(list, *p)
 	}
@@ -746,6 +787,7 @@ func resyncPendingFiles() {
 
 func presenceLoop() {
 	time.Sleep(2 * time.Second)
+	refreshMeshIP()
 	sendPresence()
 	sendSync()
 
@@ -754,6 +796,7 @@ func presenceLoop() {
 	for {
 		select {
 		case <-presenceTick.C:
+			refreshMeshIP()
 			sendPresence()
 			mu.Lock()
 			now := time.Now().Unix()
@@ -776,7 +819,7 @@ func presenceLoop() {
 
 func sendPresence() {
 	data, _ := json.Marshal(map[string]string{
-		"type": "presence", "from": hostname, "from_ip": meshIP,
+		"type": "presence", "from": hostname, "from_ip": currentMeshIP(),
 	})
 	multicastSend(data)
 }
@@ -792,7 +835,7 @@ func sendSync() {
 	}
 	mu.Unlock()
 	data, _ := json.Marshal(syncBeacon{
-		Type: "sync", From: hostname, FromIP: meshIP, Since: since,
+		Type: "sync", From: hostname, FromIP: currentMeshIP(), Since: since,
 	})
 	multicastSend(data)
 }
@@ -949,7 +992,7 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg := Message{
-		ID: genID(), From: hostname, FromIP: meshIP,
+		ID: genID(), From: hostname, FromIP: currentMeshIP(),
 		To: req.To, Type: "text", Body: req.Body,
 		TS: time.Now().Unix(), Read: true,
 	}
@@ -1011,7 +1054,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg := Message{
-		ID: genID(), From: hostname, FromIP: meshIP,
+		ID: genID(), From: hostname, FromIP: currentMeshIP(),
 		To: to, Type: "file",
 		File: &FileMeta{Name: hdr.Filename, Size: hdr.Size, ID: fileID, Local: true},
 		TS: time.Now().Unix(), Read: true,
