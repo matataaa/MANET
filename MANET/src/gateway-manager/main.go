@@ -20,7 +20,12 @@ const (
 	uplinkStateFile   = "/run/manet-uplink.env"
 	gatewayStateFile  = "/var/run/mesh-gateway.state"
 	upstreamIfaceFile = "/var/run/upstream_iface"
+
+	probeFailThreshold = 3
 )
+
+var probeTargets = []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}
+var consecutiveProbeFailures int
 
 type Config struct {
 	Enabled      bool
@@ -126,7 +131,29 @@ func poll(cfg Config) {
 func pollGateway(cfg Config) {
 	iface := upstreamIface()
 	if iface == "" {
+		demoteGateway("no upstream interface")
 		return
+	}
+
+	if !ifaceHasCarrier(iface) {
+		demoteGateway(fmt.Sprintf("%s lost carrier", iface))
+		return
+	}
+
+	if ifaceBridgedToBr0(iface) {
+		demoteGateway(fmt.Sprintf("%s bridged to br0 (EUD mode)", iface))
+		return
+	}
+
+	if internetProbe(iface) {
+		consecutiveProbeFailures = 0
+	} else {
+		consecutiveProbeFailures++
+		if consecutiveProbeFailures >= probeFailThreshold {
+			demoteGateway(fmt.Sprintf("internet unreachable via %s (%d consecutive failures)", iface, consecutiveProbeFailures))
+			return
+		}
+		log.Printf("internet probe failed on %s (%d/%d)", iface, consecutiveProbeFailures, probeFailThreshold)
 	}
 
 	if cfg.Bandwidth != "" {
@@ -319,6 +346,39 @@ func br0IPv4() string {
 func pingReachable(ip string) bool {
 	err := exec.Command("ping", "-c", "1", "-W", "1", ip).Run()
 	return err == nil
+}
+
+func internetProbe(iface string) bool {
+	hits := 0
+	for _, target := range probeTargets {
+		if exec.Command("ping", "-c", "1", "-W", "2", "-I", iface, target).Run() == nil {
+			hits++
+		}
+	}
+	return hits >= 1
+}
+
+func ifaceHasCarrier(iface string) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/carrier", iface))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(data)) == "1"
+}
+
+func ifaceBridgedToBr0(iface string) bool {
+	out := runOut("ip", "link", "show", iface)
+	return strings.Contains(out, "master br0")
+}
+
+func demoteGateway(reason string) {
+	log.Printf("demoting gateway: %s", reason)
+	consecutiveProbeFailures = 0
+	os.Remove(gatewayStateFile)
+	os.Remove(uplinkStateFile)
+	run("batctl", "gw_mode", "client")
+	clearNAT()
+	exec.Command("/usr/local/bin/manet-uplink-dispatch.sh", "reconcile").Run()
 }
 
 // --- Config file loading ---
