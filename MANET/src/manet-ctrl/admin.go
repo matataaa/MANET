@@ -127,6 +127,7 @@ func assembleAdminStatus() AdminStatus {
 		"battery_monitor":      confGet(conf, "battery_monitor", "y"),
 		"voice_beep_tx_start":  confGet(conf, "voice_beep_tx_start", "y"),
 		"voice_beep_rx_end":    confGet(conf, "voice_beep_rx_end", "y"),
+		"voice_gain":           confGet(conf, "voice_gain", "3.0"),
 	}
 
 	if currentConfig["halow_bw"] == "" {

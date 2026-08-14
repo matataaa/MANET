@@ -1,0 +1,21 @@
+{
+  "name": "voice-echo",
+  "label": "Voice Echo",
+  "version": "1.0.0",
+  "description": "Radio check — echoes received voice back over multicast with a short delay",
+  "author": "Frost Technologies",
+  "type": "go",
+  "backend": {
+    "binary": "voice-echo",
+    "args": ["-iface", "br0", "-addr", "239.69.0.1", "-port", "4370", "-delay", "300"],
+    "service": "voice-echo.service"
+  },
+  "config": {
+    "page": "",
+    "file": ""
+  },
+  "hooks": {
+    "pre_install": "pre-install.sh",
+    "post_remove": "post-remove.sh"
+  }
+}

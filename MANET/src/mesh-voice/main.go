@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,7 @@ const meshConfFile = "/etc/mesh.conf"
 type BeepConfig struct {
 	TXStart bool
 	RXEnd   bool
+	Gain    float64
 }
 
 type voicePeer struct {
@@ -40,7 +42,7 @@ type voicePeer struct {
 }
 
 func loadBeepConfig() BeepConfig {
-	bc := BeepConfig{TXStart: true, RXEnd: true}
+	bc := BeepConfig{TXStart: true, RXEnd: true, Gain: 3.0}
 	data, err := os.ReadFile(meshConfFile)
 	if err != nil {
 		return bc
@@ -56,6 +58,10 @@ func loadBeepConfig() BeepConfig {
 				bc.TXStart = strings.TrimSpace(v) != "n"
 			case "voice_beep_rx_end":
 				bc.RXEnd = strings.TrimSpace(v) != "n"
+			case "voice_gain":
+				if g, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && g >= 0.5 && g <= 10.0 {
+					bc.Gain = g
+				}
 			}
 		}
 	}
@@ -114,7 +120,6 @@ type Config struct {
 	GPIOKey   string // evdev key code or "any"
 	DeviceIn  string // ALSA device hint for capture
 	DeviceOut string // ALSA device hint for playback
-	MicGain   float64
 }
 
 func main() {
@@ -127,7 +132,6 @@ func main() {
 	flag.StringVar(&cfg.GPIOKey, "gpio-key", "any", "evdev key code or 'any'")
 	flag.StringVar(&cfg.DeviceIn, "input", "", "ALSA capture device")
 	flag.StringVar(&cfg.DeviceOut, "output", "", "ALSA playback device")
-	flag.Float64Var(&cfg.MicGain, "gain", 3.0, "software mic gain multiplier")
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -353,7 +357,7 @@ func run(ctx context.Context, cfg Config) error {
 
 	// Beep tones for hardware PTT
 	beepCfg := loadBeepConfig()
-	log.Printf("beep config: tx_start=%v rx_end=%v", beepCfg.TXStart, beepCfg.RXEnd)
+	log.Printf("voice config: tx_beep=%v rx_beep=%v gain=%.1fx", beepCfg.TXStart, beepCfg.RXEnd, beepCfg.Gain)
 
 	playBeep := func(beepType string) {
 		samples := generateBeep(beepType)
@@ -416,7 +420,7 @@ func run(ctx context.Context, cfg Config) error {
 			samples := make([]int16, nSamples)
 			for i := 0; i < nSamples; i++ {
 				s := int32(int16(inputSamples[i*2]) | int16(inputSamples[i*2+1])<<8)
-				s = int32(float64(s) * cfg.MicGain)
+				s = int32(float64(s) * beepCfg.Gain)
 				if s > 32767 {
 					s = 32767
 				} else if s < -32768 {

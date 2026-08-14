@@ -1,0 +1,13 @@
+[Unit]
+Description=Voice Echo — radio check over multicast
+After=network-online.target mesh-voice.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/share/manet/applets/voice-echo/voice-echo -iface br0 -addr 239.69.0.1 -port 4370 -delay 300
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
