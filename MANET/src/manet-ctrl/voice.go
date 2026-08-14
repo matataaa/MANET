@@ -45,6 +45,11 @@ var (
 	voiceTxPool sync.Map // int -> *net.UDPConn
 
 	voiceChActivity sync.Map // int -> *atomic.Int64 (unix ms)
+
+	voiceLastTxCh atomic.Int32
+	voiceLastTxAt atomic.Int64
+	voiceLastRxCh atomic.Int32
+	voiceLastRxAt atomic.Int64
 )
 
 func voiceChannelAddr(ch int) string {
@@ -183,9 +188,12 @@ func voiceRxLoop(ctx context.Context, channel int) {
 			continue
 		}
 
+		now := time.Now().UnixMilli()
 		val := &atomic.Int64{}
 		actual, _ := voiceChActivity.LoadOrStore(channel, val)
-		actual.(*atomic.Int64).Store(time.Now().UnixMilli())
+		actual.(*atomic.Int64).Store(now)
+		voiceLastRxCh.Store(int32(channel))
+		voiceLastRxAt.Store(now)
 
 		pktSSRC := binary.BigEndian.Uint32(buf[8:12])
 
@@ -276,6 +284,8 @@ func handleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		ch := int(voiceTxCh.Load())
 		if txConn := voiceGetTxConn(ch); txConn != nil {
 			txConn.Write(rtp)
+			voiceLastTxCh.Store(int32(ch))
+			voiceLastTxAt.Store(time.Now().UnixMilli())
 		}
 
 		voiceClientsMu.RLock()
@@ -342,11 +352,20 @@ func voiceGetChannels(w http.ResponseWriter) {
 			"port":    voiceChannelPort(ch),
 		}
 	}
-	writeJSON(w, 200, map[string]interface{}{
+	resp := map[string]interface{}{
 		"tx_channel":  txCh,
 		"rx_channels": rxList,
 		"channels":    channels,
-	})
+	}
+	if ltx := voiceLastTxCh.Load(); ltx > 0 {
+		resp["last_tx_channel"] = ltx
+		resp["last_tx_at"] = voiceLastTxAt.Load()
+	}
+	if lrx := voiceLastRxCh.Load(); lrx > 0 {
+		resp["last_rx_channel"] = lrx
+		resp["last_rx_at"] = voiceLastRxAt.Load()
+	}
+	writeJSON(w, 200, resp)
 }
 
 func voiceSetChannels(w http.ResponseWriter, r *http.Request) {
