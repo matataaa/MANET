@@ -23,7 +23,7 @@ const (
 	sampleRate = 48000
 	channels   = 1
 	frameSize  = 960 // 20ms at 48kHz
-	bitrate    = 32000
+	bitrate    = 10000
 	encBufSize = 1450
 )
 
@@ -32,6 +32,11 @@ const meshConfFile = "/etc/mesh.conf"
 type BeepConfig struct {
 	TXStart bool
 	RXEnd   bool
+}
+
+type voicePeer struct {
+	addr     *net.UDPAddr
+	lastSeen time.Time
 }
 
 func loadBeepConfig() BeepConfig {
@@ -173,6 +178,23 @@ func run(ctx context.Context, cfg Config) error {
 		})
 	}
 
+	// Unicast TX socket — 802.11 retries make this far more reliable than multicast
+	ucastSock, err := net.ListenPacket("udp4", ":0")
+	if err != nil {
+		return fmt.Errorf("unicast socket: %w", err)
+	}
+	defer ucastSock.Close()
+	if uc, ok := ucastSock.(*net.UDPConn); ok {
+		if rc, err := uc.SyscallConn(); err == nil {
+			rc.Control(func(fd uintptr) {
+				syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_TOS, 0xB8)
+			})
+		}
+	}
+
+	var peersMu sync.RWMutex
+	voicePeers := make(map[uint32]*voicePeer)
+
 	// Multicast RX socket
 	rxConn, err := net.ListenMulticastUDP("udp4", iface, &net.UDPAddr{IP: mcastIP, Port: cfg.McastPort})
 	if err != nil {
@@ -283,6 +305,7 @@ func run(ctx context.Context, cfg Config) error {
 		defer wg.Done()
 		pcmBuf := make([]int16, 0, frameSize*4)
 		encBuf := make([]byte, encBufSize)
+		var prevFrame []byte
 		for {
 			select {
 			case samples, ok := <-captureCh:
@@ -299,9 +322,17 @@ func run(ctx context.Context, cfg Config) error {
 						log.Printf("encode error: %v", err)
 						continue
 					}
-					pkt := buildRTPPacket(seqNum, ssrc, encBuf[:n])
+					cur := make([]byte, n)
+					copy(cur, encBuf[:n])
+					pkt := buildRedundantRTPPacket(seqNum, ssrc, cur, prevFrame)
 					seqNum++
 					txConn.Write(pkt)
+					peersMu.RLock()
+					for _, p := range voicePeers {
+						ucastSock.WriteTo(pkt, p.addr)
+					}
+					peersMu.RUnlock()
+					prevFrame = cur
 				}
 			case <-ctx.Done():
 				return
@@ -310,7 +341,7 @@ func run(ctx context.Context, cfg Config) error {
 	}()
 
 	// Jitter buffer (shared across playback device lifecycles)
-	const jitterFrames = 3
+	const jitterFrames = 6
 	var jbMu sync.Mutex
 	jitterBuf := make([][]int16, 0, 32)
 	var jbPlaying atomic.Bool
@@ -591,6 +622,29 @@ func run(ctx context.Context, cfg Config) error {
 		<-ctx.Done()
 		rxConn.Close()
 		txConn.Close()
+		ucastSock.Close()
+	}()
+
+	// Peer expiry — remove peers that stopped transmitting
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				peersMu.Lock()
+				for k, p := range voicePeers {
+					if time.Since(p.lastSeen) > 30*time.Second {
+						delete(voicePeers, k)
+					}
+				}
+				peersMu.Unlock()
+			}
+		}
 	}()
 
 	// RX loop
@@ -599,9 +653,21 @@ func run(ctx context.Context, cfg Config) error {
 		defer wg.Done()
 		rxBuf := make([]byte, 2048)
 		pcmOut := make([]int16, frameSize)
+		var lastRxSeqNum uint16
+		var rxSeqInit bool
+
+		addToJB := func(pcm []int16) {
+			frame := make([]int16, len(pcm))
+			copy(frame, pcm)
+			jbMu.Lock()
+			if len(jitterBuf) < 32 {
+				jitterBuf = append(jitterBuf, frame)
+			}
+			jbMu.Unlock()
+		}
 
 		for {
-			n, _, err := rxConn.ReadFromUDP(rxBuf)
+			n, src, err := rxConn.ReadFromUDP(rxBuf)
 			if err != nil {
 				return
 			}
@@ -615,27 +681,82 @@ func run(ctx context.Context, cfg Config) error {
 				continue
 			}
 
-			payload := rxBuf[12:n]
+			pktSeq := uint16(rxBuf[2])<<8 | uint16(rxBuf[3])
+
+			// Dedup: multicast and unicast copies of the same packet both arrive
+			if rxSeqInit {
+				diff := pktSeq - lastRxSeqNum
+				if diff == 0 || diff > 0x8000 {
+					continue
+				}
+			}
+
+			// Learn peer IP for unicast TX
+			if src != nil {
+				peersMu.Lock()
+				voicePeers[pktSSRC] = &voicePeer{
+					addr:     &net.UDPAddr{IP: src.IP, Port: cfg.McastPort},
+					lastSeen: time.Now(),
+				}
+				peersMu.Unlock()
+			}
 
 			remoteActive.Store(true)
 			pttState.setRX(true)
 			lastRxTime.Store(time.Now().UnixMilli())
 			ensurePlayback()
 
-			samples, err := decoder.Decode(payload, pcmOut)
+			// Parse redundant format: [uint16 curLen][curFrame][prevFrame]
+			payload := rxBuf[12:n]
+			var curFrame, redFrame []byte
+			if len(payload) >= 3 {
+				curLen := int(payload[0])<<8 | int(payload[1])
+				if curLen >= 1 && curLen <= 500 && curLen <= len(payload)-2 {
+					curFrame = payload[2 : 2+curLen]
+					if 2+curLen < len(payload) {
+						redFrame = payload[2+curLen:]
+					}
+				}
+			}
+			if curFrame == nil {
+				curFrame = payload
+			}
+
+			// Gap recovery: PLC for unrecoverable frames, redundant copy for the last
+			if rxSeqInit {
+				gap := int(pktSeq-lastRxSeqNum) - 1
+				if gap > 0 {
+					plcCount := gap
+					if len(redFrame) > 0 {
+						plcCount--
+					}
+					if plcCount > 3 {
+						plcCount = 3
+					}
+					for i := 0; i < plcCount; i++ {
+						if err := decoder.DecodePLC(pcmOut); err == nil {
+							addToJB(pcmOut[:frameSize])
+						}
+					}
+					if len(redFrame) > 0 {
+						if s, err := decoder.Decode(redFrame, pcmOut); err == nil && s > 0 {
+							addToJB(pcmOut[:s])
+						}
+					}
+				}
+			}
+
+			samples, err := decoder.Decode(curFrame, pcmOut)
 			if err != nil {
 				log.Printf("decode error: %v", err)
+				lastRxSeqNum = pktSeq
+				rxSeqInit = true
 				continue
 			}
 
-			frame := make([]int16, samples)
-			copy(frame, pcmOut[:samples])
-
-			jbMu.Lock()
-			if len(jitterBuf) < 32 {
-				jitterBuf = append(jitterBuf, frame)
-			}
-			jbMu.Unlock()
+			addToJB(pcmOut[:samples])
+			lastRxSeqNum = pktSeq
+			rxSeqInit = true
 		}
 	}()
 
@@ -690,5 +811,33 @@ func buildRTPPacket(seq uint16, ssrc uint32, payload []byte) []byte {
 	pkt[10] = byte(ssrc >> 8)
 	pkt[11] = byte(ssrc)
 	copy(pkt[12:], payload)
+	return pkt
+}
+
+// buildRedundantRTPPacket packs the current frame plus the previous frame into
+// one RTP packet. Format after the 12-byte header: [uint16 curLen][cur][prev].
+// The receiver uses prev to recover a lost packet without waiting for PLC.
+func buildRedundantRTPPacket(seq uint16, ssrc uint32, current, prev []byte) []byte {
+	pkt := make([]byte, 14+len(current)+len(prev))
+	pkt[0] = 0x80
+	pkt[1] = 111
+	pkt[2] = byte(seq >> 8)
+	pkt[3] = byte(seq)
+	ts := uint32(seq) * uint32(frameSize)
+	pkt[4] = byte(ts >> 24)
+	pkt[5] = byte(ts >> 16)
+	pkt[6] = byte(ts >> 8)
+	pkt[7] = byte(ts)
+	pkt[8] = byte(ssrc >> 24)
+	pkt[9] = byte(ssrc >> 16)
+	pkt[10] = byte(ssrc >> 8)
+	pkt[11] = byte(ssrc)
+	curLen := len(current)
+	pkt[12] = byte(curLen >> 8)
+	pkt[13] = byte(curLen)
+	copy(pkt[14:], current)
+	if len(prev) > 0 {
+		copy(pkt[14+curLen:], prev)
+	}
 	return pkt
 }
