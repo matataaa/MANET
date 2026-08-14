@@ -86,6 +86,7 @@ public class EudActivity extends AppCompatActivity {
     private JSONArray chatMessages;
     private String chatHostname = "";
     private boolean connected = false;
+    private boolean wasConnected = false;
     private boolean pttConnected = false;
 
     private int txChannel = 1;
@@ -111,6 +112,8 @@ public class EudActivity extends AppCompatActivity {
     private EditText chatInput;
     private Button chatSendBtn;
     private Button pttBtn;
+    private FrameLayout offlineOverlay;
+    private TextView offlineSubText;
     private Button[] navButtons;
     private Button[] chanTxButtons;
     private Button[] chanRxButtons;
@@ -243,6 +246,7 @@ public class EudActivity extends AppCompatActivity {
         setupHomeButton();
 
         buildChannelGrid();
+        buildOfflineOverlay();
         updateDisplay();
     }
 
@@ -531,6 +535,68 @@ public class EudActivity extends AppCompatActivity {
         homeBtn.setGravity(Gravity.CENTER);
         homeBtn.setPadding(0, 0, 0, 0);
         homeBtn.setTextColor(0xFF33FF33);
+    }
+
+    private void buildOfflineOverlay() {
+        offlineOverlay = new FrameLayout(this);
+        offlineOverlay.setLayoutParams(new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        offlineOverlay.setBackgroundColor(0xCC0a0f0a);
+        offlineOverlay.setClickable(true);
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setPadding(dpToPx(24), dpToPx(16), dpToPx(24), dpToPx(16));
+
+        GradientDrawable boxBg = new GradientDrawable();
+        boxBg.setCornerRadius(dpToPx(6));
+        boxBg.setColor(0xFF1a0808);
+        boxBg.setStroke(dpToPx(2), 0xFFCC3333);
+        box.setBackground(boxBg);
+
+        FrameLayout.LayoutParams boxLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        boxLp.gravity = Gravity.CENTER;
+        box.setLayoutParams(boxLp);
+
+        View line = new View(this);
+        line.setBackgroundColor(0xFFCC3333);
+        LinearLayout.LayoutParams lineLp = new LinearLayout.LayoutParams(dpToPx(120), dpToPx(2));
+        lineLp.bottomMargin = dpToPx(8);
+        line.setLayoutParams(lineLp);
+        box.addView(line);
+
+        TextView title = new TextView(this);
+        title.setText("OFFLINE");
+        title.setTextColor(0xFFCC3333);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        title.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER);
+        box.addView(title);
+
+        View line2 = new View(this);
+        line2.setBackgroundColor(0xFFCC3333);
+        LinearLayout.LayoutParams line2Lp = new LinearLayout.LayoutParams(dpToPx(120), dpToPx(2));
+        line2Lp.topMargin = dpToPx(8);
+        line2.setLayoutParams(line2Lp);
+        box.addView(line2);
+
+        offlineSubText = new TextView(this);
+        offlineSubText.setText("RECONNECTING");
+        offlineSubText.setTextColor(0xFF993333);
+        offlineSubText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        offlineSubText.setTypeface(Typeface.MONOSPACE);
+        offlineSubText.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        subLp.topMargin = dpToPx(6);
+        offlineSubText.setLayoutParams(subLp);
+        offlineSubText.setVisibility(View.GONE);
+        box.addView(offlineSubText);
+
+        offlineOverlay.addView(box);
+        ((FrameLayout) findViewById(android.R.id.content)).addView(offlineOverlay);
     }
 
     private void buildChannelGrid() {
@@ -852,6 +918,7 @@ public class EudActivity extends AppCompatActivity {
                         }
                     }
                     connected = true;
+                    wasConnected = true;
                     lastPollMs = System.currentTimeMillis();
 
                     if (apiLocal != null) {
@@ -894,6 +961,11 @@ public class EudActivity extends AppCompatActivity {
         tvTitle.setText("── " + PAGES[page] + " ──" + titleHost);
         tvConn.setText(connected ? "■" : "□");
         tvConn.setTextColor(connected ? 0xFF33FF33 : 0xFF994444);
+
+        if (offlineOverlay != null) {
+            offlineOverlay.setVisibility(connected ? View.GONE : View.VISIBLE);
+            offlineSubText.setVisibility(wasConnected ? View.VISIBLE : View.GONE);
+        }
 
         StringBuilder dots = new StringBuilder();
         for (int i = 0; i < PAGES.length; i++) {
