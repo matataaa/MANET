@@ -58,19 +58,28 @@ var HalowBWMaxMbps = map[string]float64{
 }
 
 var (
-	meshRefOnce sync.Once
+	meshRefMu   sync.Mutex
 	meshRefMbps = 35.0
+	meshRefAt   time.Time
 )
 
+// meshRefThroughput re-resolves at most once a minute so a live bandwidth
+// change (halow_bw apply does not restart manet-ctrl) re-grades TQ without
+// paying a driver query per originator line.
 func meshRefThroughput() float64 {
-	meshRefOnce.Do(func() {
-		info := getHalowDriverInfo("wlan2")
-		if bw, ok := info["halow_bw"]; ok {
-			if max, ok := HalowBWMaxMbps[bw]; ok {
-				meshRefMbps = max
-			}
+	meshRefMu.Lock()
+	defer meshRefMu.Unlock()
+	if !meshRefAt.IsZero() && time.Since(meshRefAt) < time.Minute {
+		return meshRefMbps
+	}
+	meshRefAt = time.Now()
+	meshRefMbps = 35.0
+	info := getHalowDriverInfo("wlan2")
+	if bw, ok := info["halow_bw"]; ok {
+		if max, ok := HalowBWMaxMbps[bw]; ok {
+			meshRefMbps = max
 		}
-	})
+	}
 	return meshRefMbps
 }
 
