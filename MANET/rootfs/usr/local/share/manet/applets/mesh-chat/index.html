@@ -147,6 +147,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
         </div>
       </div>
       <input type="file" id="file-input" hidden>
+      <input type="file" id="camera-input" accept="image/*" capture="environment" hidden>
+      <button class="compose-btn" id="camera-btn" title="Take photo">&#128247;</button>
       <button class="compose-btn" id="attach-btn" title="Attach file">&#128206;</button>
       <button class="send-btn" id="send-btn" disabled>Send</button>
     </div>
@@ -173,6 +175,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
   var syncBtn = document.getElementById('sync-btn');
   var attachBtn = document.getElementById('attach-btn');
   var fileInput = document.getElementById('file-input');
+  var cameraBtn = document.getElementById('camera-btn');
+  var cameraInput = document.getElementById('camera-input');
   var clearBtn = document.getElementById('clear-btn');
   var readAllBtn = document.getElementById('read-all-btn');
 
@@ -801,10 +805,14 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
   toDropdown.addEventListener('click', function(e) { e.stopPropagation(); });
   syncBtn.onclick = doSync;
   attachBtn.onclick = function() { fileInput.click(); };
+  cameraBtn.onclick = function() { cameraInput.click(); };
   clearBtn.onclick = doClear;
   readAllBtn.onclick = doReadAll;
   fileInput.onchange = function() {
     if (fileInput.files.length > 0) { uploadFile(fileInput.files[0]); fileInput.value = ''; }
+  };
+  cameraInput.onchange = function() {
+    if (cameraInput.files.length > 0) { uploadFile(cameraInput.files[0]); cameraInput.value = ''; }
   };
 
   inboxEl.addEventListener('dragover', function(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
