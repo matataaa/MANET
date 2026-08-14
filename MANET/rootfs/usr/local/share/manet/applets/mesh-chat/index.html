@@ -493,7 +493,53 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
     }).catch(function() {});
   }
 
-  function uploadFile(file) {
+  // Recompress large photos before they hit the mesh: a 1.4 MB camera JPEG
+  // costs ~40 s of airtime on a 1 MHz HaLow channel. Non-images, GIFs and
+  // small files pass through untouched; any failure falls back to the original.
+  var IMG_COMPRESS_THRESHOLD = 300 * 1024;
+  var IMG_COMPRESS_TARGET = 250 * 1024;
+  var IMG_MAX_DIM = 1280;
+
+  function compressImage(file, cb) {
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size <= IMG_COMPRESS_THRESHOLD) {
+      cb(file); return;
+    }
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onerror = function() { URL.revokeObjectURL(url); cb(file); };
+    img.onload = function() {
+      URL.revokeObjectURL(url);
+      var w = img.naturalWidth, h = img.naturalHeight;
+      if (!w || !h) { cb(file); return; }
+      var scale = Math.min(1, IMG_MAX_DIM / Math.max(w, h));
+      var canvas = document.createElement('canvas');
+      canvas.width = Math.round(w * scale);
+      canvas.height = Math.round(h * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      var quality = 0.8;
+      var attempt = function() {
+        canvas.toBlob(function(blob) {
+          if (!blob) { cb(file); return; }
+          if (blob.size > IMG_COMPRESS_TARGET && quality > 0.5) {
+            quality -= 0.15;
+            attempt();
+            return;
+          }
+          if (blob.size >= file.size) { cb(file); return; }
+          var name = file.name.replace(/\.(png|webp|jpeg|jpg)$/i, '') + '.jpg';
+          cb(new File([blob], name, {type: 'image/jpeg'}));
+        }, 'image/jpeg', quality);
+      };
+      attempt();
+    };
+    img.src = url;
+  }
+
+  function uploadFile(origFile) {
+    compressImage(origFile, function(file) { uploadPrepared(file); });
+  }
+
+  function uploadPrepared(file) {
     var form = new FormData();
     form.append('file', file);
     var to = getRecipients();
