@@ -179,6 +179,29 @@ func unescapeAlfred(s string) string {
 var knownNodes = make(map[string]NodeInfo)
 var prevLive = make(map[string]bool)
 
+// Offline entries older than this are dropped from the registry entirely.
+const offlineMaxAge = 7 * 24 * time.Hour
+
+func normMAC(mac string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(mac), "-", ":"))
+}
+
+// macSet returns every MAC identifying a node (bat0 + physical interfaces),
+// normalized. Physical MACs are burned-in, so they identify the same box even
+// after the bat0 MAC changes across a reboot or reflash.
+func macSet(n NodeInfo) map[string]bool {
+	set := make(map[string]bool)
+	if m := normMAC(n.MAC); m != "" {
+		set[m] = true
+	}
+	for _, m := range strings.Split(n.MACAddresses, ",") {
+		if m = normMAC(m); m != "" {
+			set[m] = true
+		}
+	}
+	return set
+}
+
 func loadKnownNodes() {
 	data, err := os.ReadFile(nodesFile)
 	if err != nil {
@@ -186,8 +209,12 @@ func loadKnownNodes() {
 	}
 	var nodes map[string]NodeInfo
 	if json.Unmarshal(data, &nodes) == nil {
-		knownNodes = nodes
-		log.Printf("loaded %d known nodes from disk", len(nodes))
+		// Normalize keys so entries written by older builds (mixed case /
+		// dash-separated MACs) can't coexist with their normalized twin.
+		for mac, n := range nodes {
+			knownNodes[normMAC(mac)] = n
+		}
+		log.Printf("loaded %d known nodes from disk", len(knownNodes))
 	}
 }
 
@@ -208,34 +235,60 @@ func saveKnownNodes() {
 
 func writeRegistry(self NodeInfo, peers map[string]NodeInfo) {
 	// Build set of live MACs from current alfred data
+	selfMAC := normMAC(self.MAC)
 	liveMACs := make(map[string]bool)
-	liveMACs[self.MAC] = true
+	liveMACs[selfMAC] = true
 	for _, p := range peers {
-		liveMACs[p.MAC] = true
-	}
-
-	// Merge current peers into known nodes, always keyed by NodeInfo.MAC.
-	// Dedup by IP: if a live node has the same IP as a stale entry under
-	// a different MAC (e.g. bat0 MAC changed after reboot), drop the stale one.
-	knownNodes[self.MAC] = self
-	for _, p := range peers {
-		if p.MAC != self.MAC {
-			knownNodes[p.MAC] = p
+		if m := normMAC(p.MAC); m != "" {
+			liveMACs[m] = true
 		}
 	}
-	for mac := range knownNodes {
+
+	// Merge current peers into known nodes, keyed by normalized NodeInfo.MAC.
+	knownNodes[selfMAC] = self
+	for _, p := range peers {
+		if m := normMAC(p.MAC); m != "" && m != selfMAC {
+			knownNodes[m] = p
+		}
+	}
+
+	// Purge stale entries that are old identities of a live node: same box
+	// after a bat0 MAC change (any shared physical MAC) or same claimed IP.
+	// Also expire offline entries not seen for offlineMaxAge.
+	now := time.Now().Unix()
+	for mac, stale := range knownNodes {
 		if liveMACs[mac] {
 			continue
 		}
-		stale := knownNodes[mac]
-		if stale.IPv4 == "" {
-			continue
-		}
+		staleMACs := macSet(stale)
+		drop := false
 		for liveMac := range liveMACs {
-			if live, ok := knownNodes[liveMac]; ok && live.IPv4 == stale.IPv4 && liveMac != mac {
-				delete(knownNodes, mac)
+			live, ok := knownNodes[liveMac]
+			if !ok || liveMac == mac {
+				continue
+			}
+			if stale.IPv4 != "" && live.IPv4 == stale.IPv4 {
+				drop = true
 				break
 			}
+			for m := range macSet(live) {
+				if staleMACs[m] {
+					drop = true
+					break
+				}
+			}
+			if drop {
+				break
+			}
+		}
+		if !drop {
+			if ts, err := strconv.ParseInt(stale.Timestamp, 10, 64); err == nil && now-ts > int64(offlineMaxAge.Seconds()) {
+				drop = true
+			}
+		}
+		if drop {
+			log.Printf("purging stale node %s (%s / %s)", mac, stale.Hostname, stale.IPv4)
+			delete(knownNodes, mac)
 		}
 	}
 
@@ -262,7 +315,7 @@ func writeRegistry(self NodeInfo, peers map[string]NodeInfo) {
 
 	// Emit peer-join / peer-leave events
 	for mac := range liveMACs {
-		if mac == self.MAC {
+		if mac == selfMAC {
 			continue
 		}
 		if !prevLive[mac] {
@@ -278,7 +331,7 @@ func writeRegistry(self NodeInfo, peers map[string]NodeInfo) {
 	}
 	prevLive = make(map[string]bool)
 	for mac := range liveMACs {
-		if mac != self.MAC {
+		if mac != selfMAC {
 			prevLive[mac] = true
 		}
 	}

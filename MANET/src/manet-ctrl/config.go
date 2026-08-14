@@ -350,24 +350,30 @@ var (
 	registryCache   = make(map[string]RegistryNode)
 )
 
+// updateRegistryCache mirrors the current registry contents. It must not
+// merge into the old cache: append-only behavior kept resurrecting nodes
+// that mesh-registry had already purged, showing ghost duplicates in the UI
+// until manet-ctrl restarted.
 func updateRegistryCache(nodes map[string]RegistryNode) {
-	registryCacheMu.Lock()
-	defer registryCacheMu.Unlock()
+	fresh := make(map[string]RegistryNode)
 	for _, rn := range nodes {
 		if rn["HOSTNAME"] == "" || rn["IPV4_ADDRESS"] == "" {
 			continue
 		}
 		mac := normMAC(rn["MAC_ADDRESS"])
 		if mac != "" {
-			registryCache[mac] = rn
+			fresh[mac] = rn
 		}
 		for _, m := range strings.Split(rn["MAC_ADDRESSES"], ",") {
 			m = normMAC(m)
 			if m != "" {
-				registryCache[m] = rn
+				fresh[m] = rn
 			}
 		}
 	}
+	registryCacheMu.Lock()
+	registryCache = fresh
+	registryCacheMu.Unlock()
 }
 
 func getCachedRegistryNode(mac string) (RegistryNode, bool) {

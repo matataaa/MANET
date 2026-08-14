@@ -52,6 +52,32 @@ func fleetCheckActivation() {
 	log.Printf("fleet: config applied and pending cleared")
 }
 
+// expandNodeTemplates replaces {{hostname}} in staged config values with this
+// node's current hostname prefix, so one fleet profile can be deployed to
+// every node. The fleet UI has advertised this placeholder since the start,
+// but nothing expanded it — the literal braces landed in mesh.conf and the
+// hostname-apply path fell back to the "node" default.
+func expandNodeTemplates(updates map[string]string, conf map[string]string) {
+	prefix := conf["node_hostname"]
+	if prefix == "" {
+		// Derive the prefix from the OS hostname by stripping the
+		// generated -<ssid>-<mac> suffix.
+		host, _ := os.Hostname()
+		if suffix := getMACsuffix(); suffix != "" {
+			host = strings.TrimSuffix(host, "-"+suffix)
+		}
+		if ssid := conf["mesh_ssid"]; ssid != "" {
+			host = strings.TrimSuffix(host, "-"+ssid)
+		}
+		prefix = host
+	}
+	for k, v := range updates {
+		if strings.Contains(v, "{{hostname}}") {
+			updates[k] = strings.ReplaceAll(v, "{{hostname}}", prefix)
+		}
+	}
+}
+
 func fleetApplyConfig(pkg map[string]interface{}) {
 	configRaw, ok := pkg["config"].(map[string]interface{})
 	if !ok {
@@ -66,6 +92,7 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	if len(updates) == 0 {
 		return
 	}
+	expandNodeTemplates(updates, loadKVFile(MeshConfFile))
 	if err := saveKVFile(MeshConfFile, updates); err != nil {
 		log.Printf("fleet: apply save error: %v", err)
 		return
@@ -73,8 +100,10 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 
 	conf := loadKVFile(MeshConfFile)
 
-	if updates["node_hostname"] != "" || updates["mesh_ssid"] != "" {
-		prefix := confGet(conf, "node_hostname", "node")
+	// Skip when no prefix is configured — the "node" default fallback is
+	// how fleet deploys renamed nodes to node-<mac>.
+	if (updates["node_hostname"] != "" || updates["mesh_ssid"] != "") && conf["node_hostname"] != "" {
+		prefix := conf["node_hostname"]
 		meshSSID := conf["mesh_ssid"]
 		macSuffix := getMACsuffix()
 		full := prefix

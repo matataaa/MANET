@@ -384,17 +384,6 @@ func meshMACLookup() map[string]map[string]string {
 			}
 		}
 	}
-	registryCacheMu.Lock()
-	for mac, cached := range registryCache {
-		if _, ok := lookup[mac]; !ok && cached["HOSTNAME"] != "" && cached["IPV4_ADDRESS"] != "" {
-			lookup[mac] = map[string]string{
-				"hostname":  cached["HOSTNAME"],
-				"ip":        cached["IPV4_ADDRESS"],
-				"last_seen": cached["LAST_SEEN_TIMESTAMP"],
-			}
-		}
-	}
-	registryCacheMu.Unlock()
 	return lookup
 }
 
@@ -760,7 +749,8 @@ var saveableKeys = map[string]bool{
 	"multicast_mode": true,
 	"voice_mic_volume": true, "voice_speaker_volume": true,
 	"voice_channel": true, "voice_rx_channels": true,
-	"voice_ptt_mode": true,
+	"voice_ptt_mode": true, "voice_gain": true,
+	"voice_beep_tx_start": true, "voice_beep_rx_end": true,
 	"dns_servers": true,
 	"eud_bandwidth": true,
 	"qos_enabled": true, "qos_voice_band": true, "qos_cot_band": true, "qos_chat_band": true,
@@ -798,6 +788,7 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	expandNodeTemplates(updates, loadKVFile(MeshConfFile))
 	if err := saveKVFile(MeshConfFile, updates); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": err.Error()})
 		return
@@ -806,9 +797,10 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	applied := make(map[string]interface{})
 	conf := loadKVFile(MeshConfFile)
 
-	// Apply hostname
-	if updates["node_hostname"] != "" || updates["mesh_ssid"] != "" {
-		prefix := confGet(conf, "node_hostname", "node")
+	// Apply hostname. Skip when no prefix is configured — falling back to
+	// the "node" default here is how nodes ended up renamed to node-<mac>.
+	if (updates["node_hostname"] != "" || updates["mesh_ssid"] != "") && conf["node_hostname"] != "" {
+		prefix := conf["node_hostname"]
 		meshSSID := conf["mesh_ssid"]
 		macSuffix := getMACsuffix()
 		full := prefix
@@ -886,7 +878,8 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply voice PTT mode / channel changes
-	if updates["voice_ptt_mode"] != "" || updates["voice_channel"] != "" {
+	if updates["voice_ptt_mode"] != "" || updates["voice_channel"] != "" || updates["voice_gain"] != "" ||
+		updates["voice_beep_tx_start"] != "" || updates["voice_beep_rx_end"] != "" {
 		txCh := int(voiceTxCh.Load())
 		if txCh <= 0 {
 			txCh = 1
