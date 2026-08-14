@@ -106,7 +106,7 @@ function meshRender() {
     d.gateways.forEach(function(gw) {
       var sel = gw.selected ? '<span style="color:var(--teal);font-weight:700">Active</span>' : '<span style="color:var(--muted)">Standby</span>';
       html += '<tr><td>' + meshNodeLabel(gw) + meshNodeSub(gw) + '</td>';
-      html += '<td><span class="badge ' + tqClass(gw.tq) + '">' + (gw.tq != null ? gw.tq : '?') + '</span></td>';
+      html += '<td>' + (gw.tq ? '<span class="badge ' + tqClass(gw.tq) + '">' + gw.tq + '</span>' : '--') + '</td>';
       html += '<td>' + sel + '</td></tr>';
     });
     html += '</tbody></table>';
