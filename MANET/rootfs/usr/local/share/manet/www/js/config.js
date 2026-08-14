@@ -112,7 +112,7 @@ function configRenderView(panel, cfg) {
       { label: 'AP Channel', key: 'lan_ap_channel' },
       { label: 'AP Bandwidth', key: 'lan_ap_bw', fmt: function(v) { return v ? v + ' MHz' : '—'; } },
       { label: 'Max EUDs/Node', key: 'max_euds_per_node' },
-      { label: 'EUD Bandwidth Cap', key: 'eud_bandwidth', fmt: function(v) { return (!v || v === '0') ? 'Unlimited' : v + ' Mbit'; } },
+      { label: 'EUD Bandwidth Cap', key: 'eud_bandwidth', fmt: function(v) { return (!v || v === '0') ? 'Unlimited' : v + ' Mbit (symmetric)'; } },
     ]},
     { title: 'Gateway', fields: [
       { label: 'Gateway Enabled', key: 'gateway', yesno: true },
@@ -188,7 +188,7 @@ function configRenderEdit(panel, cfg) {
     { label: 'Regulatory Domain', key: 'regulatory_domain', type: 'select', options: ['US', 'EU', 'JP', 'AU'] },
     { label: 'HaLow Bandwidth', key: 'halow_bw', type: 'select', options: [
       {v:'1MHz',l:'1 MHz'},{v:'2MHz',l:'2 MHz'},{v:'4MHz',l:'4 MHz'},{v:'8MHz',l:'8 MHz'}
-    ], hint: 'Primary channel width for 802.11ah mesh' },
+    ], hint: 'Primary channel width for 802.11ah mesh. EU supports 1-2 MHz only. Narrower = longer range.' },
     { label: 'Multicast Mode', key: 'multicast_mode', type: 'select', options: [
       {v:'flood',l:'Flood (recommended ≤10 nodes)'},
       {v:'optimized',l:'Optimized IGMP (10+ nodes)'}
@@ -208,9 +208,9 @@ function configRenderEdit(panel, cfg) {
     ] },
     { label: 'Max EUDs/Node', key: 'max_euds_per_node', type: 'text' },
     { label: 'EUD Bandwidth Cap', key: 'eud_bandwidth', type: 'select', options: [
-      {v:'0',l:'Unlimited'},{v:'1',l:'1 Mbit'},{v:'2',l:'2 Mbit'},{v:'5',l:'5 Mbit'},
+      {v:'0',l:'Unlimited'},{v:'0.25',l:'0.25 Mbit'},{v:'0.5',l:'0.5 Mbit'},{v:'1',l:'1 Mbit'},{v:'2',l:'2 Mbit'},{v:'5',l:'5 Mbit'},
       {v:'10',l:'10 Mbit'},{v:'20',l:'20 Mbit'},{v:'50',l:'50 Mbit'},{v:'100',l:'100 Mbit'}
-    ], hint: 'Per-device download limit for connected EUDs' },
+    ], hint: 'Per-device symmetric bandwidth limit for connected EUDs' },
     { section: 'Services' },
     { label: 'Battery Monitor', key: 'battery_monitor', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Trigger update check when internet is detected' },
@@ -246,7 +246,7 @@ function configRenderEdit(panel, cfg) {
   let html = (configTarget ? '<div class="cfg-target-label">Editing: ' + escHtml(configTarget) + '</div>' : '') + '<div class="card">';
   fields.forEach(f => {
     if (f.section) {
-      html += '</div><div class="card"><div class="cfg-section-title">' + f.section + '</div>';
+      html += '</div><div class="card cfg-section"><div class="cfg-section-title">' + f.section + '</div>';
       return;
     }
     const curVal = f.voiceKey ? ((configVoiceData && configVoiceData[f.voiceKey]) || f.fallback || '') : (cfg[f.key] || '');

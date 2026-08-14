@@ -246,6 +246,7 @@ func applyNAT(iface string, mssClamp bool) {
 	}
 
 	log.Printf("NAT masquerade active on %s (mss_clamp=%v)", iface, mssClamp)
+	go meshHook("gateway-up", "IFACE="+iface)
 }
 
 func clearNAT() {
@@ -253,6 +254,7 @@ func clearNAT() {
 	run("nft", "flush", "chain", "ip", "nat", "postrouting")
 	run("nft", "flush", "chain", "ip", "mangle", "forward")
 	log.Println("NAT/firewall rules cleared")
+	go meshHook("gateway-down")
 }
 
 // --- Batman gateway discovery ---
@@ -363,10 +365,14 @@ var lastEUDBwState string
 
 func enforceEUDBandwidth(capMbit string) {
 	iface := "br0"
+	ifbDev := "ifb0"
 
 	if capMbit == "" {
 		if lastEUDBwState != "" {
 			run("tc", "qdisc", "del", "dev", iface, "root")
+			run("tc", "qdisc", "del", "dev", iface, "ingress")
+			run("tc", "qdisc", "del", "dev", ifbDev, "root")
+			run("ip", "link", "set", ifbDev, "down")
 			lastEUDBwState = ""
 			log.Println("EUD bandwidth caps removed")
 		}
@@ -381,12 +387,15 @@ func enforceEUDBandwidth(capMbit string) {
 
 	rate := capMbit + "mbit"
 	run("tc", "qdisc", "del", "dev", iface, "root")
+	run("tc", "qdisc", "del", "dev", iface, "ingress")
+	run("tc", "qdisc", "del", "dev", ifbDev, "root")
 
 	if len(leaseIPs) == 0 {
 		lastEUDBwState = stateKey
 		return
 	}
 
+	// Download shaping (br0 egress)
 	run("tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "htb", "default", "99")
 	run("tc", "class", "add", "dev", iface, "parent", "1:", "classid", "1:99", "htb", "rate", "1000mbit")
 
@@ -398,8 +407,27 @@ func enforceEUDBandwidth(capMbit string) {
 		run("tc", "filter", "add", "dev", iface, "parent", "1:", "protocol", "ip", "prio", "1", "u32", "match", "ip", "dst", ip+"/32", "flowid", classID)
 	}
 
+	// Upload shaping (br0 ingress via IFB redirect)
+	run("modprobe", "ifb")
+	run("ip", "link", "add", ifbDev, "type", "ifb")
+	run("ip", "link", "set", ifbDev, "up")
+	run("tc", "qdisc", "add", "dev", iface, "handle", "ffff:", "ingress")
+	run("tc", "filter", "add", "dev", iface, "parent", "ffff:", "protocol", "ip", "u32",
+		"match", "u32", "0", "0", "action", "mirred", "egress", "redirect", "dev", ifbDev)
+
+	run("tc", "qdisc", "add", "dev", ifbDev, "root", "handle", "1:", "htb", "default", "99")
+	run("tc", "class", "add", "dev", ifbDev, "parent", "1:", "classid", "1:99", "htb", "rate", "1000mbit")
+
+	for i, ip := range leaseIPs {
+		classID := fmt.Sprintf("1:%d", 10+i)
+		handleID := fmt.Sprintf("%d:", 10+i)
+		run("tc", "class", "add", "dev", ifbDev, "parent", "1:", "classid", classID, "htb", "rate", rate, "ceil", rate)
+		run("tc", "qdisc", "add", "dev", ifbDev, "parent", classID, "handle", handleID, "sfq", "perturb", "10")
+		run("tc", "filter", "add", "dev", ifbDev, "parent", "1:", "protocol", "ip", "prio", "1", "u32", "match", "ip", "src", ip+"/32", "flowid", classID)
+	}
+
 	lastEUDBwState = stateKey
-	log.Printf("EUD bandwidth caps applied: %s mbit for %d devices", capMbit, len(leaseIPs))
+	log.Printf("EUD bandwidth caps applied: %s mbit symmetric for %d devices", capMbit, len(leaseIPs))
 }
 
 func readLeaseIPs() []string {
@@ -425,4 +453,9 @@ func readLeaseIPs() []string {
 		return ips
 	}
 	return nil
+}
+
+func meshHook(event string, args ...string) {
+	cmdArgs := append([]string{event}, args...)
+	exec.Command("/usr/local/bin/mesh-hook", cmdArgs...).Run()
 }

@@ -196,6 +196,42 @@ start() {
     # Create bat0 interface if it doesn't exist
     ip link show bat0 &>/dev/null || ip link add name bat0 type batadv
 
+    # Set persistent bat0 MAC derived from HaLow hardware MAC
+    # Without this, batman-adv generates a random MAC each boot,
+    # causing duplicate entries in the node registry.
+    local bat0_mac=""
+    for WLAN in $HALOW_INTERFACES; do
+        local hw_mac
+        hw_mac=$(cat "/sys/class/net/${WLAN}/address" 2>/dev/null || true)
+        if [ -n "$hw_mac" ]; then
+            # Set locally-administered + unicast bits on first octet
+            local first_octet
+            first_octet=$(echo "$hw_mac" | cut -d: -f1)
+            first_octet=$(printf '%02x' $(( 0x$first_octet | 0x02 & 0xfe )))
+            bat0_mac="${first_octet}:$(echo "$hw_mac" | cut -d: -f2-)"
+            break
+        fi
+    done
+    if [ -z "$bat0_mac" ]; then
+        for WLAN in $STANDARD_MESH_INTERFACES; do
+            local hw_mac
+            hw_mac=$(cat "/sys/class/net/${WLAN}/address" 2>/dev/null || true)
+            if [ -n "$hw_mac" ]; then
+                local first_octet
+                first_octet=$(echo "$hw_mac" | cut -d: -f1)
+                first_octet=$(printf '%02x' $(( 0x$first_octet | 0x02 & 0xfe )))
+                bat0_mac="${first_octet}:$(echo "$hw_mac" | cut -d: -f2-)"
+                break
+            fi
+        done
+    fi
+    if [ -n "$bat0_mac" ]; then
+        ip link set bat0 down 2>/dev/null || true
+        ip link set bat0 address "$bat0_mac" 2>/dev/null || true
+        ip link set bat0 up 2>/dev/null || true
+        echo "Set persistent bat0 MAC: $bat0_mac"
+    fi
+
     # Set gateway mode based on state
     if [ -f /var/run/mesh-gateway.state ]; then
         batctl gw_mode server

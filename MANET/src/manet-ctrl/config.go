@@ -31,7 +31,7 @@ const (
 var (
 	HalowEUChannels      = []int{863500, 864500, 865500, 866500, 867500}
 	HalowUIToS1GChannel  = map[int]int{1: 1, 2: 3, 3: 5, 4: 7, 5: 9}
-	HalowBWTxPowerCapDBM = map[string]string{"1MHz": "24", "2MHz": "24", "4MHz": "22"}
+	HalowBWTxPowerCapDBM = map[string]string{"1MHz": "24", "2MHz": "24", "4MHz": "22", "8MHz": "20"}
 )
 
 // --- JSON types matching frontend expectations ---

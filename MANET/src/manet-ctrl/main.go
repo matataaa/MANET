@@ -468,6 +468,7 @@ func main() {
 	mux.HandleFunc("/api/admin/stage", requireAuth(apiAdminStage))
 	mux.HandleFunc("/api/admin/activate", requireAuth(apiAdminActivate))
 	mux.HandleFunc("/api/admin/cancel", requireAuth(apiAdminCancel))
+	mux.HandleFunc("/api/admin/delete-node", requireAuth(apiAdminDeleteNode))
 	mux.HandleFunc("/api/admin/preferences", requireAuth(apiFleetPreferences))
 
 	// Perf APIs (run tests on mesh — require auth)

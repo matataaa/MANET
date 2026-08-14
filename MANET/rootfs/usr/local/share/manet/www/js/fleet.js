@@ -48,7 +48,7 @@ const PROFILE_SECTIONS = [
     { key: 'eud', label: 'EUD Mode', type: 'select', options: ['wired','wifi','both','auto'] },
     { key: 'max_euds_per_node', label: 'Max EUDs (0=unlimited)' },
     { key: 'eud_bandwidth', label: 'Bandwidth Cap (Mbit)', type: 'select', options: [
-      {v:'0',l:'Unlimited'},{v:'1',l:'1 Mbit'},{v:'2',l:'2 Mbit'},{v:'5',l:'5 Mbit'},
+      {v:'0',l:'Unlimited'},{v:'0.25',l:'0.25 Mbit'},{v:'0.5',l:'0.5 Mbit'},{v:'1',l:'1 Mbit'},{v:'2',l:'2 Mbit'},{v:'5',l:'5 Mbit'},
       {v:'10',l:'10 Mbit'},{v:'20',l:'20 Mbit'},{v:'50',l:'50 Mbit'},{v:'100',l:'100 Mbit'}
     ] },
   ]},

@@ -848,6 +848,12 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		applied["mesh_manager_restarted"] = true
 	}
 
+	// Apply HaLow bandwidth
+	if updates["halow_bw"] != "" || updates["regulatory_domain"] != "" {
+		applyHalowBW(conf)
+		applied["halow_bw_applied"] = true
+	}
+
 	// Apply mesh key/SSID changes to wpa_supplicant configs
 	if updates["mesh_ssid"] != "" || updates["mesh_key"] != "" {
 		applyWPAConfig(conf)
@@ -892,6 +898,14 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		runCmd(5*time.Second, "systemctl", "reload", "node-update")
 		applied["node_update_reloaded"] = true
 	}
+
+	go func() {
+		args := []string{"config-change"}
+		for _, k := range saved {
+			args = append(args, "KEY="+k)
+		}
+		exec.Command("/usr/local/bin/mesh-hook", args...).Run()
+	}()
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "saved": saved, "applied": applied})
 }
@@ -991,6 +1005,37 @@ func apiAdminCancel(w http.ResponseWriter, r *http.Request) {
 	cmd.Stdin = strings.NewReader("")
 	cmd.Run()
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
+func apiAdminDeleteNode(w http.ResponseWriter, r *http.Request) {
+	body := readBody(r)
+	nodeID, _ := body["id"].(string)
+	if nodeID == "" {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "missing node id"})
+		return
+	}
+	nodeID = strings.ReplaceAll(strings.ToLower(nodeID), ":", "")
+
+	data, err := os.ReadFile(RegistryFile)
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "cannot read registry"})
+		return
+	}
+
+	prefix := "NODE_" + nodeID + "_"
+	var kept []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, prefix) {
+			kept = append(kept, line)
+		}
+	}
+
+	if err := os.WriteFile(RegistryFile, []byte(strings.Join(kept, "\n")), 0644); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+
+	writeJSON(w, 200, map[string]interface{}{"ok": true, "deleted": nodeID})
 }
 
 // --- Service action ---
@@ -1544,6 +1589,85 @@ func applyWPAConfig(conf map[string]string) {
 	}
 }
 
+func halowBWParams(bw, regDomain string) (opClass, channel, primChwidth, txpowerMBM string) {
+	if regDomain == "US" {
+		switch bw {
+		case "1MHz":
+			return "68", "11", "0", "2400"
+		case "2MHz":
+			return "69", "10", "1", "2400"
+		case "8MHz":
+			return "72", "8", "1", "2000"
+		default:
+			return "71", "12", "1", "2200"
+		}
+	}
+	switch bw {
+	case "2MHz":
+		return "67", "2", "1", "2400"
+	default:
+		return "66", "1", "0", "2400"
+	}
+}
+
+func applyHalowBW(conf map[string]string) {
+	bw := conf["halow_bw"]
+	if bw == "" {
+		return
+	}
+	regDomain := confGet(conf, "regulatory_domain", "US")
+	opClass, ch, chwidth, txMBM := halowBWParams(bw, regDomain)
+
+	opClassRE := regexp.MustCompile(`op_class=\d+`)
+	channelRE := regexp.MustCompile(`(^|\s)channel=\d+`)
+	chwidthRE := regexp.MustCompile(`s1g_prim_chwidth=\d+`)
+	txpowerRE := regexp.MustCompile(`txpower fixed \d+`)
+
+	wpaDir := "/etc/wpa_supplicant"
+	entries, _ := os.ReadDir(wpaDir)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.Contains(name, "s1g") {
+			continue
+		}
+		path := wpaDir + "/" + name
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		text := string(data)
+		text = opClassRE.ReplaceAllString(text, "op_class="+opClass)
+		text = channelRE.ReplaceAllStringFunc(text, func(m string) string {
+			prefix := ""
+			if len(m) > 0 && m[0] != 'c' {
+				prefix = string(m[0])
+			}
+			return prefix + "channel=" + ch
+		})
+		text = chwidthRE.ReplaceAllString(text, "s1g_prim_chwidth="+chwidth)
+		os.WriteFile(path, []byte(text), 0644)
+		log.Printf("halow bw updated: %s -> %s (op_class=%s ch=%s)", name, bw, opClass, ch)
+	}
+
+	svcDir := "/etc/systemd/system"
+	svcEntries, _ := os.ReadDir(svcDir)
+	for _, entry := range svcEntries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "halow-txpower-") {
+			continue
+		}
+		path := svcDir + "/" + name
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		text := txpowerRE.ReplaceAllString(string(data), "txpower fixed "+txMBM)
+		os.WriteFile(path, []byte(text), 0644)
+	}
+	runCmd(5*time.Second, "systemctl", "daemon-reload")
+	runCmd(10*time.Second, "bash", "-c", "systemctl restart 'wpa_supplicant-s1g-wlan*.service' 2>/dev/null || true")
+}
+
 func applyHostapdConfig(conf map[string]string) {
 	apf := "/etc/hostapd/hostapd.conf"
 	data, err := os.ReadFile(apf)
@@ -1706,10 +1830,14 @@ func apiATAKPackage(w http.ResponseWriter, r *http.Request) {
 
 func applyEUDBandwidth(capMbit string) {
 	iface := "br0"
-	// Clear existing tc config
+	ifbDev := "ifb0"
+
 	runCmd(3*time.Second, "tc", "qdisc", "del", "dev", iface, "root")
+	runCmd(3*time.Second, "tc", "qdisc", "del", "dev", iface, "ingress")
+	runCmd(3*time.Second, "tc", "qdisc", "del", "dev", ifbDev, "root")
 
 	if capMbit == "" || capMbit == "0" {
+		runCmd(3*time.Second, "ip", "link", "set", ifbDev, "down")
 		return
 	}
 
@@ -1719,7 +1847,7 @@ func applyEUDBandwidth(capMbit string) {
 		return
 	}
 
-	// HTB root qdisc + default class
+	// Download shaping (br0 egress)
 	runCmd(3*time.Second, "tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "htb", "default", "99")
 	runCmd(3*time.Second, "tc", "class", "add", "dev", iface, "parent", "1:", "classid", "1:99", "htb", "rate", "1000mbit")
 
@@ -1729,6 +1857,25 @@ func applyEUDBandwidth(capMbit string) {
 		runCmd(3*time.Second, "tc", "class", "add", "dev", iface, "parent", "1:", "classid", classID, "htb", "rate", rate, "ceil", rate)
 		runCmd(3*time.Second, "tc", "qdisc", "add", "dev", iface, "parent", classID, "handle", handleID, "sfq", "perturb", "10")
 		runCmd(3*time.Second, "tc", "filter", "add", "dev", iface, "parent", "1:", "protocol", "ip", "prio", "1", "u32", "match", "ip", "dst", eud.IP+"/32", "flowid", classID)
+	}
+
+	// Upload shaping (br0 ingress via IFB redirect)
+	runCmd(3*time.Second, "modprobe", "ifb")
+	runCmd(3*time.Second, "ip", "link", "add", ifbDev, "type", "ifb")
+	runCmd(3*time.Second, "ip", "link", "set", ifbDev, "up")
+	runCmd(3*time.Second, "tc", "qdisc", "add", "dev", iface, "handle", "ffff:", "ingress")
+	runCmd(3*time.Second, "tc", "filter", "add", "dev", iface, "parent", "ffff:", "protocol", "ip", "u32",
+		"match", "u32", "0", "0", "action", "mirred", "egress", "redirect", "dev", ifbDev)
+
+	runCmd(3*time.Second, "tc", "qdisc", "add", "dev", ifbDev, "root", "handle", "1:", "htb", "default", "99")
+	runCmd(3*time.Second, "tc", "class", "add", "dev", ifbDev, "parent", "1:", "classid", "1:99", "htb", "rate", "1000mbit")
+
+	for i, eud := range euds {
+		classID := fmt.Sprintf("1:%d", 10+i)
+		handleID := fmt.Sprintf("%d:", 10+i)
+		runCmd(3*time.Second, "tc", "class", "add", "dev", ifbDev, "parent", "1:", "classid", classID, "htb", "rate", rate, "ceil", rate)
+		runCmd(3*time.Second, "tc", "qdisc", "add", "dev", ifbDev, "parent", classID, "handle", handleID, "sfq", "perturb", "10")
+		runCmd(3*time.Second, "tc", "filter", "add", "dev", ifbDev, "parent", "1:", "protocol", "ip", "prio", "1", "u32", "match", "ip", "src", eud.IP+"/32", "flowid", classID)
 	}
 }
 

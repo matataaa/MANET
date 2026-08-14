@@ -177,6 +177,7 @@ func unescapeAlfred(s string) string {
 }
 
 var knownNodes = make(map[string]NodeInfo)
+var prevLive = make(map[string]bool)
 
 func loadKnownNodes() {
 	data, err := os.ReadFile(nodesFile)
@@ -240,6 +241,29 @@ func writeRegistry(self NodeInfo, peers map[string]NodeInfo) {
 	}
 	os.Rename(tmp, registryFile)
 	saveKnownNodes()
+
+	// Emit peer-join / peer-leave events
+	for mac := range liveMACs {
+		if mac == self.MAC {
+			continue
+		}
+		if !prevLive[mac] {
+			n := knownNodes[mac]
+			go meshHook("peer-join", "MAC="+mac, "IP="+n.IPv4, "HOSTNAME="+n.Hostname)
+		}
+	}
+	for mac := range prevLive {
+		if !liveMACs[mac] {
+			n := knownNodes[mac]
+			go meshHook("peer-leave", "MAC="+mac, "IP="+n.IPv4, "HOSTNAME="+n.Hostname)
+		}
+	}
+	prevLive = make(map[string]bool)
+	for mac := range liveMACs {
+		if mac != self.MAC {
+			prevLive[mac] = true
+		}
+	}
 }
 
 func writeNodeWithState(b *strings.Builder, n NodeInfo, isLive bool) {
@@ -288,6 +312,11 @@ func writeNodeWithState(b *strings.Builder, n NodeInfo, isLive bool) {
 }
 
 // --- System data collection ---
+
+func meshHook(event string, args ...string) {
+	cmdArgs := append([]string{event}, args...)
+	exec.Command("/usr/local/bin/mesh-hook", cmdArgs...).Run()
+}
 
 func getMyMAC() string {
 	for _, name := range []string{"bat0", "br0"} {

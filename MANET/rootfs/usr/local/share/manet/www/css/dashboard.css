@@ -259,3 +259,10 @@
   .topo-panel > svg { touch-action: pan-y !important; }
   .dash-side { overflow-y: visible; }
 }
+.node-del-btn {
+  float: right; background: none; border: none; color: var(--muted);
+  font-size: 14px; cursor: pointer; padding: 0 2px; line-height: 1;
+  opacity: 0; transition: opacity .15s;
+}
+.node-row:hover .node-del-btn { opacity: .6; }
+.node-del-btn:hover { opacity: 1 !important; color: var(--bad); }

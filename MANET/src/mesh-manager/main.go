@@ -523,6 +523,7 @@ func (im *ipManager) run() {
 
 		os.WriteFile(myChunkFile, []byte(strconv.Itoa(chunk)), 0644)
 		log.Printf("Successfully claimed chunk %d", chunk)
+		go meshHook("ip-change", "IP="+c.Primary.String(), "GATEWAY="+c.Secondary.String())
 	} else {
 		// CONFIGURED — check for conflicts
 		claimed := im.claimedChunks()
@@ -943,4 +944,9 @@ func main() {
 	}()
 
 	wg.Wait()
+}
+
+func meshHook(event string, args ...string) {
+	cmdArgs := append([]string{event}, args...)
+	exec.Command("/usr/local/bin/mesh-hook", cmdArgs...).Run()
 }

@@ -1095,77 +1095,63 @@ EOF
 
     rm -f /etc/wpa_supplicant/*${WLAN}* 2>/dev/null
 
-    if [[ "$HALOW_REGULATORY_DOMAIN" == "US" ]]; then
-cat << EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-s1g.conf
-country="US"
-ctrl_interface=/var/run/wpa_supplicant_s1g
-sae_pwe=0
-max_peer_links=10
-mesh_fwding=0
-network={
-    ssid="$mesh_ssid"
-    key_mgmt=SAE
-    mode=5
-    channel=12
-    op_class=71
-    country="US"
-    s1g_prim_chwidth=1
-    s1g_prim_1mhz_chan_index=0
-    dtim_period=1
-    mesh_rssi_threshold=-85
-    dot11MeshHWMPRootMode=0
-    dot11MeshGateAnnouncements=0
-    mbca_config=1
-    mbca_min_beacon_gap_ms=25
-    mbca_tbtt_adj_interval_sec=60
-    dot11MeshBeaconTimingReportInterval=10
-    mbss_start_scan_duration_ms=2048
-    mesh_beaconless_mode=0
-    mesh_dynamic_peering=1
-    sae_password="$mesh_key"
-    pairwise=CCMP
-    ieee80211w=2
-    beacon_int=1000
-    group_rekey=0
-}
-EOF
-    else
-cat << EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-s1g.conf
-country="$HALOW_REGULATORY_DOMAIN"
-ctrl_interface=/var/run/wpa_supplicant_s1g
-sae_pwe=0
-max_peer_links=10
-mesh_fwding=0
-network={
-    ssid="$mesh_ssid"
-    key_mgmt=SAE
-    mode=5
-    channel=1
-    op_class=66
-    country="$HALOW_REGULATORY_DOMAIN"
-    s1g_prim_chwidth=0
-    s1g_prim_1mhz_chan_index=0
-    dtim_period=1
-    mesh_rssi_threshold=-85
-    dot11MeshHWMPRootMode=0
-    dot11MeshGateAnnouncements=0
-    mbca_config=0
-    mbca_min_beacon_gap_ms=25
-    mbca_tbtt_adj_interval_sec=60
-    dot11MeshBeaconTimingReportInterval=10
-    mbss_start_scan_duration_ms=2048
-    mesh_beaconless_mode=0
-    mesh_dynamic_peering=1
-    sae_password="$mesh_key"
-    pairwise=CCMP
-    ieee80211w=2
-    beacon_int=1000
-    group_rekey=0
-}
-EOF
-    fi
+    # Map HaLow bandwidth to S1G radio parameters
+    halow_bw="${halow_bw:-4MHz}"
+    case "$HALOW_REGULATORY_DOMAIN" in
+        US)
+            case "$halow_bw" in
+                1MHz)  S1G_OP_CLASS=68; S1G_CHANNEL=11; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
+                2MHz)  S1G_OP_CLASS=69; S1G_CHANNEL=10; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2400 ;;
+                8MHz)  S1G_OP_CLASS=72; S1G_CHANNEL=8;  S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2000 ;;
+                *)     S1G_OP_CLASS=71; S1G_CHANNEL=12; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2200 ;;
+            esac
+            S1G_COUNTRY="US"
+            S1G_MBCA=1
+            ;;
+        *)
+            case "$halow_bw" in
+                2MHz)  S1G_OP_CLASS=67; S1G_CHANNEL=2; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2400 ;;
+                *)     S1G_OP_CLASS=66; S1G_CHANNEL=1; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
+            esac
+            S1G_COUNTRY="$HALOW_REGULATORY_DOMAIN"
+            S1G_MBCA=0
+            ;;
+    esac
 
-    # Set HaLow TX power to 24 dBm (2400 mBm) after interface comes up
+cat << EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-s1g.conf
+country="$S1G_COUNTRY"
+ctrl_interface=/var/run/wpa_supplicant_s1g
+sae_pwe=0
+max_peer_links=10
+mesh_fwding=0
+network={
+    ssid="$mesh_ssid"
+    key_mgmt=SAE
+    mode=5
+    channel=$S1G_CHANNEL
+    op_class=$S1G_OP_CLASS
+    country="$S1G_COUNTRY"
+    s1g_prim_chwidth=$S1G_PRIM_CHWIDTH
+    s1g_prim_1mhz_chan_index=0
+    dtim_period=1
+    mesh_rssi_threshold=-85
+    dot11MeshHWMPRootMode=0
+    dot11MeshGateAnnouncements=0
+    mbca_config=$S1G_MBCA
+    mbca_min_beacon_gap_ms=25
+    mbca_tbtt_adj_interval_sec=60
+    dot11MeshBeaconTimingReportInterval=10
+    mbss_start_scan_duration_ms=2048
+    mesh_beaconless_mode=0
+    mesh_dynamic_peering=1
+    sae_password="$mesh_key"
+    pairwise=CCMP
+    ieee80211w=2
+    beacon_int=1000
+    group_rekey=0
+}
+EOF
+
 cat << EOF > /etc/systemd/system/halow-txpower-$WLAN.service
 [Unit]
 Description=Set HaLow TX power for $WLAN
@@ -1175,7 +1161,7 @@ Wants=wpa_supplicant-s1g-$WLAN.service
 [Service]
 Type=oneshot
 ExecStartPre=/bin/sleep 5
-ExecStart=/usr/sbin/iw dev $WLAN set txpower fixed 2400
+ExecStart=/usr/sbin/iw dev $WLAN set txpower fixed $S1G_TXPOWER
 RemainAfterExit=yes
 
 [Install]

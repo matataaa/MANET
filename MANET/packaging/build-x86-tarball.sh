@@ -54,6 +54,7 @@ GO_SERVICES=(
     halow-mcs-summary
     manet-ctrl
     mesh-chat
+    mesh-hook
     mesh-manager
     mesh-radio-state
     mesh-registry

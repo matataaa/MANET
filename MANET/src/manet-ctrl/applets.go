@@ -58,6 +58,12 @@ type appletManifest struct {
 		PreInstall string `json:"pre_install,omitempty"`
 		PostRemove string `json:"post_remove,omitempty"`
 	} `json:"hooks,omitempty"`
+	Events []appletEvent `json:"events,omitempty"`
+}
+
+type appletEvent struct {
+	Event  string `json:"event"`
+	Script string `json:"script"`
 }
 
 func collectAppletDNS(myIP, myHostname string) []map[string]interface{} {
@@ -458,6 +464,7 @@ func apiAppletUninstall(w http.ResponseWriter, r *http.Request, name string) {
 		}
 	}
 
+	removeEventHooks(m)
 	os.Remove(filepath.Join(systemdDir, svc))
 	os.RemoveAll(filepath.Join(appletsDir, name))
 	exec.Command("systemctl", "daemon-reload").Run()
@@ -573,6 +580,7 @@ func apiAppletInstall(w http.ResponseWriter, r *http.Request) {
 	exec.Command("systemctl", "daemon-reload").Run()
 	systemctl("enable", svc)
 	systemctl("start", svc)
+	installEventHooks(&manifest, dest)
 	go refreshMeshDNS()
 
 	writeJSON(w, 200, map[string]interface{}{
@@ -580,6 +588,37 @@ func apiAppletInstall(w http.ResponseWriter, r *http.Request) {
 		"installed": manifest.Name,
 		"version":   manifest.Version,
 	})
+}
+
+// --- Event hooks ---
+
+const eventHooksDir = "/usr/local/share/manet/hooks"
+
+func installEventHooks(m *appletManifest, appletDir string) {
+	for _, ev := range m.Events {
+		if ev.Event == "" || ev.Script == "" {
+			continue
+		}
+		hookDir := filepath.Join(eventHooksDir, ev.Event)
+		os.MkdirAll(hookDir, 0755)
+		scriptPath := filepath.Join(appletDir, ev.Script)
+		os.Chmod(scriptPath, 0755)
+		linkName := filepath.Join(hookDir, m.Name+"-"+ev.Script)
+		os.Remove(linkName)
+		os.Symlink(scriptPath, linkName)
+		log.Printf("applet %s: registered hook %s -> %s", m.Name, ev.Event, ev.Script)
+	}
+}
+
+func removeEventHooks(m *appletManifest) {
+	for _, ev := range m.Events {
+		if ev.Event == "" {
+			continue
+		}
+		hookDir := filepath.Join(eventHooksDir, ev.Event)
+		linkName := filepath.Join(hookDir, m.Name+"-"+ev.Script)
+		os.Remove(linkName)
+	}
 }
 
 // --- Route dispatcher ---

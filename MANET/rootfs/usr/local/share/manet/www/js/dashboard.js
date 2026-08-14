@@ -286,11 +286,30 @@ function renderDashNodeList(nodes) {
     const ipLine = n.ip ? '<span class="node-ip-addr">' + escHtml(n.ip) + '</span>' : '';
     const uptimeLine = n.uptime ? '<span class="node-uptime">' + escHtml(n.uptime) + '</span>' : '';
 
+    const delBtn = (!n.is_me && n.id) ? '<button class="node-del-btn" data-node-id="' + escHtml(n.id) + '" title="Remove from registry">&times;</button>' : '';
+
     return '<div class="' + cls + '">' +
-      '<div class="node-name">' + (n.ip ? '<a href="https://' + encodeURI(n.ip) + '/" target="_blank" class="node-link">' + escHtml(n.hostname || n.mac) + '</a>' : escHtml(n.hostname || n.mac)) + ' ' + tqBadge + '</div>' +
+      '<div class="node-name">' + (n.ip ? '<a href="https://' + encodeURI(n.ip) + '/" target="_blank" class="node-link">' + escHtml(n.hostname || n.mac) + '</a>' : escHtml(n.hostname || n.mac)) + ' ' + tqBadge + delBtn + '</div>' +
       '<div class="node-ip">' + ipLine + (uptimeLine && ipLine ? ' &middot; ' : '') + uptimeLine + '</div>' +
       '<div class="node-meta">' + badges.join('') + offline + '</div>' +
       bar +
       '</div>';
   }).join('');
+
+  el.querySelectorAll('.node-del-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var id = this.dataset.nodeId;
+      var row = this.closest('.node-row');
+      var name = row ? row.querySelector('.node-name').textContent.trim() : id;
+      if (!confirm('Remove ' + name + ' from registry?\nIt will reappear if still active on the mesh.')) return;
+      fetch('/api/admin/delete-node', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: id})
+      }).then(function(r) { return r.json(); }).then(function(d) {
+        if (d.ok && row) row.remove();
+      });
+    });
+  });
 }

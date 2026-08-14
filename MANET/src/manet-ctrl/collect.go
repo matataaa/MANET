@@ -765,14 +765,16 @@ func getHalowDriverInfo(iface string) map[string]string {
 		if m := regexp.MustCompile(`channel=(\d+)`).FindStringSubmatch(text); len(m) > 1 {
 			info["channel"] = m[1]
 		}
-		if m := regexp.MustCompile(`s1g_prim_chwidth=(\d+)`).FindStringSubmatch(text); len(m) > 1 {
+		if m := regexp.MustCompile(`op_class=(\d+)`).FindStringSubmatch(text); len(m) > 1 {
 			switch m[1] {
-			case "0":
+			case "66", "68":
 				info["halow_bw"] = "1MHz"
-			case "1":
+			case "67", "69", "70":
 				info["halow_bw"] = "2MHz"
-			case "2":
+			case "71":
 				info["halow_bw"] = "4MHz"
+			case "72":
+				info["halow_bw"] = "8MHz"
 			}
 		}
 		info["halow_source"] = "config"
