@@ -255,7 +255,7 @@
     height: auto;
     overflow: visible;
   }
-  .topo-panel { min-height: 0; height: 280px; }
+  .topo-panel { min-height: 0; height: 280px; position: relative; top: auto; }
   .topo-panel > svg { touch-action: pan-y !important; }
   .dash-side { overflow-y: visible; }
 }
