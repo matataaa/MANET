@@ -197,6 +197,7 @@ func saveKnownNodes() {
 		log.Printf("marshal known nodes: %v", err)
 		return
 	}
+	os.MkdirAll(filepath.Dir(nodesFile), 0755)
 	tmp := nodesFile + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		log.Printf("write known nodes: %v", err)
@@ -213,11 +214,28 @@ func writeRegistry(self NodeInfo, peers map[string]NodeInfo) {
 		liveMACs[p.MAC] = true
 	}
 
-	// Merge current peers into known nodes, always keyed by NodeInfo.MAC
+	// Merge current peers into known nodes, always keyed by NodeInfo.MAC.
+	// Dedup by IP: if a live node has the same IP as a stale entry under
+	// a different MAC (e.g. bat0 MAC changed after reboot), drop the stale one.
 	knownNodes[self.MAC] = self
 	for _, p := range peers {
 		if p.MAC != self.MAC {
 			knownNodes[p.MAC] = p
+		}
+	}
+	for mac := range knownNodes {
+		if liveMACs[mac] {
+			continue
+		}
+		stale := knownNodes[mac]
+		if stale.IPv4 == "" {
+			continue
+		}
+		for liveMac := range liveMACs {
+			if live, ok := knownNodes[liveMac]; ok && live.IPv4 == stale.IPv4 && liveMac != mac {
+				delete(knownNodes, mac)
+				break
+			}
 		}
 	}
 
