@@ -488,7 +488,7 @@ public class EudActivity extends AppCompatActivity {
         GradientDrawable fillShape = new GradientDrawable();
         fillShape.setCornerRadius(dpToPx(4));
         fillShape.setColor(0xFF33FF33);
-        homeClip = new ClipDrawable(fillShape, Gravity.END, ClipDrawable.HORIZONTAL);
+        homeClip = new ClipDrawable(fillShape, Gravity.START, ClipDrawable.HORIZONTAL);
         homeClip.setLevel(0);
 
         LayerDrawable layers = new LayerDrawable(new android.graphics.drawable.Drawable[]{homeBaseBg, homeClip});
@@ -501,7 +501,7 @@ public class EudActivity extends AppCompatActivity {
                     homeBtn.setText("MGMT");
                     homeBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
                     homeBtn.setPadding(dpToPx(4), 0, 0, 0);
-                    homeBtn.setTextColor(0xFF000000);
+                    homeBtn.setTextColor(0xFF0a1a0a);
                     handler.post(homeTickRunnable);
                     return true;
                 case MotionEvent.ACTION_UP:
