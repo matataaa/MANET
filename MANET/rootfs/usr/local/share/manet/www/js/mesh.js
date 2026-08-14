@@ -81,6 +81,37 @@ function meshRender() {
   html += meshKV('Selected Gateway', selGW ? meshNodeLabel(selGW) : '<span style="color:var(--muted)">None</span>');
   html += '</div></div>';
 
+  // Link budget card — per-neighbor RF margin against the current MCS floor
+  var lbNeigh = (d.neighbors || []).filter(function(n) { return n.link && n.link.signal < 0; });
+  if (lbNeigh.length) {
+    html += '<div class="card mesh-table-card mesh-wide">';
+    html += '<div class="card-header">LINK BUDGET' + (d.halow_bw ? ' — ' + escHtml(d.halow_bw) + ' CHANNEL' : '') + '</div>';
+    html += '<table class="mesh-table"><thead><tr><th>Node</th><th>Signal</th><th>MCS</th><th>PHY Rate</th><th>Floor</th><th>Margin</th><th>Retry %</th></tr></thead><tbody>';
+    lbNeigh.forEach(function(n) {
+      var L = n.link;
+      var marginHtml = '<span class="badge badge-tq-none">n/a</span>';
+      if (L.margin != null) {
+        var cls = L.margin >= 15 ? 'badge-tq-great' : L.margin >= 9 ? 'badge-tq-ok' : L.margin >= 4 ? 'badge-tq-warn' : 'badge-tq-bad';
+        marginHtml = '<span class="badge ' + cls + '">' + Math.round(L.margin) + ' dB</span>';
+      }
+      var retryHtml = '--';
+      if (L.retry_pct != null) {
+        var rc = L.retry_pct < 10 ? 'var(--good)' : L.retry_pct < 30 ? 'var(--warn)' : 'var(--bad)';
+        retryHtml = '<span style="color:' + rc + '">' + L.retry_pct.toFixed(0) + '%</span>';
+      }
+      html += '<tr><td>' + meshNodeLabel(n) + meshNodeSub(n) + '</td>';
+      html += '<td>' + L.signal + ' dBm</td>';
+      html += '<td>' + (L.mcs >= 0 ? 'MCS ' + L.mcs : '--') + '</td>';
+      html += '<td>' + (L.phy_mbps ? L.phy_mbps.toFixed(1) + ' Mbps' : '--') + '</td>';
+      html += '<td>' + (L.floor != null ? L.floor + ' dBm' : '--') + '</td>';
+      html += '<td>' + marginHtml + '</td>';
+      html += '<td>' + retryHtml + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div style="padding:8px 12px;color:var(--muted);font-size:11px">Margin is signal headroom above the decode floor of the current MCS — every −6 dB roughly halves usable distance. Rate adaptation trades MCS (speed) for floor (reach) as margin shrinks; a narrower channel lowers the floor (~+3 dB per halving).</div>';
+    html += '</div>';
+  }
+
   // Neighbors table
   html += '<div class="card mesh-table-card">';
   html += '<div class="card-header">DIRECT NEIGHBORS (' + nCount + ')</div>';

@@ -472,12 +472,28 @@ func apiMesh(w http.ResponseWriter, r *http.Request) {
 		origList = append(origList, entry)
 	}
 
+	stations := map[string]*StationLink{}
+	seenIface := map[string]bool{}
+	for _, n := range neighbors {
+		if n.Iface == "" || seenIface[n.Iface] {
+			continue
+		}
+		seenIface[n.Iface] = true
+		for mac, st := range runStationDump(n.Iface) {
+			stations[mac] = st
+		}
+	}
+	halowBW := getHalowDriverInfo("wlan2")["halow_bw"]
+
 	var neighList []map[string]interface{}
 	for _, n := range neighbors {
 		entry := enrichMAC(n.MAC)
 		entry["tq"] = n.TQ
 		entry["iface"] = n.Iface
 		entry["last_seen"] = fmt.Sprintf("%d", now-int64(n.LastSeen))
+		if st, ok := stations[n.MAC]; ok {
+			entry["link"] = buildLinkBudget(st, n.Iface, halowBW)
+		}
 		neighList = append(neighList, entry)
 	}
 
@@ -528,6 +544,7 @@ func apiMesh(w http.ResponseWriter, r *http.Request) {
 			"gw_mode": bat0["gw_mode"],
 		},
 		"hostname":          myHostname,
+		"halow_bw":          halowBW,
 		"mesh_ssid":         conf["mesh_ssid"],
 		"network":           confGet(conf, "ipv4_network", "10.30.2.0/24"),
 		"originators":       origList,

@@ -83,6 +83,127 @@ func meshRefThroughput() float64 {
 	return meshRefMbps
 }
 
+// --- Link budget ---
+
+// Approximate S1G receiver decode floors (dBm) per MCS at 1 MHz. Wider
+// channels shift the floor up by ~3 dB per doubling (thermal noise scales
+// with bandwidth). Values follow docs/halow-range-calc.md / MM6108 typicals.
+var s1gFloor1MHz = map[int]float64{
+	0: -97, 1: -95, 2: -93, 3: -90, 4: -88,
+	5: -85, 6: -83, 7: -81, 8: -76, 9: -73,
+}
+
+var s1gBWFloorOffset = map[string]float64{
+	"1MHz": 0, "2MHz": 3, "4MHz": 6, "8MHz": 9,
+}
+
+type StationLink struct {
+	MAC          string
+	SignalDBM    int
+	SignalAvg    int
+	TxMbit       float64
+	TxMCS        int
+	RxMbit       float64
+	RxMCS        int
+	TxRetries    int64
+	TxPackets    int64
+	TxFailed     int64
+	ExpectedMbps float64
+}
+
+func parseBitrateLine(s string) (float64, int) {
+	mbit := 0.0
+	fmt.Sscanf(s, "%f MBit/s", &mbit)
+	mcs := -1
+	if m := regexp.MustCompile(`MCS (\d+)`).FindStringSubmatch(s); len(m) > 1 {
+		mcs, _ = strconv.Atoi(m[1])
+	}
+	return mbit, mcs
+}
+
+func runStationDump(iface string) map[string]*StationLink {
+	out := map[string]*StationLink{}
+	txt, err := runCmdStdout(5*time.Second, "iw", "dev", iface, "station", "dump")
+	if err != nil {
+		return out
+	}
+	var cur *StationLink
+	for _, line := range strings.Split(txt, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Station ") {
+			f := strings.Fields(line)
+			if len(f) >= 2 {
+				cur = &StationLink{MAC: normMAC(f[1]), TxMCS: -1, RxMCS: -1}
+				out[cur.MAC] = cur
+			}
+			continue
+		}
+		if cur == nil {
+			continue
+		}
+		k, v, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		switch strings.TrimSpace(k) {
+		case "signal":
+			fmt.Sscanf(v, "%d", &cur.SignalDBM)
+		case "signal avg":
+			fmt.Sscanf(v, "%d", &cur.SignalAvg)
+		case "tx bitrate":
+			cur.TxMbit, cur.TxMCS = parseBitrateLine(v)
+		case "rx bitrate":
+			cur.RxMbit, cur.RxMCS = parseBitrateLine(v)
+		case "tx retries":
+			cur.TxRetries, _ = strconv.ParseInt(v, 10, 64)
+		case "tx packets":
+			cur.TxPackets, _ = strconv.ParseInt(v, 10, 64)
+		case "tx failed":
+			cur.TxFailed, _ = strconv.ParseInt(v, 10, 64)
+		case "expected throughput":
+			fmt.Sscanf(v, "%fMbps", &cur.ExpectedMbps)
+		}
+	}
+	return out
+}
+
+func round1(x float64) float64 { return math.Round(x*10) / 10 }
+
+// buildLinkBudget converts raw station stats into a link-budget view. The
+// morse driver presents S1G as a 5 GHz alias: reported bitrates are 20x the
+// real over-the-air rate, so divide when the interface is HaLow.
+func buildLinkBudget(st *StationLink, iface, halowBW string) map[string]interface{} {
+	isHalow := halowBW != "" && iface == "wlan2"
+	scale := 1.0
+	if isHalow {
+		scale = 20.0
+	}
+	m := map[string]interface{}{
+		"signal":     st.SignalDBM,
+		"signal_avg": st.SignalAvg,
+		"mcs":        st.TxMCS,
+		"phy_mbps":   round1(st.TxMbit / scale),
+		"rx_mbps":    round1(st.RxMbit / scale),
+		"tx_retries": st.TxRetries,
+		"tx_failed":  st.TxFailed,
+	}
+	if st.ExpectedMbps > 0 {
+		m["expected_mbps"] = st.ExpectedMbps
+	}
+	if st.TxPackets > 0 {
+		m["retry_pct"] = round1(float64(st.TxRetries) * 100 / float64(st.TxPackets))
+	}
+	if isHalow && st.TxMCS >= 0 && st.SignalDBM < 0 {
+		if base, ok := s1gFloor1MHz[st.TxMCS]; ok {
+			floor := base + s1gBWFloorOffset[halowBW]
+			m["floor"] = floor
+			m["margin"] = round1(float64(st.SignalDBM) - floor)
+		}
+	}
+	return m
+}
+
 func normTQ(raw float64) int {
 	if isBatmanV() {
 		return int(math.Min(raw*255/meshRefThroughput(), 255))
