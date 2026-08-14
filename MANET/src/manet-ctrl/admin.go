@@ -120,6 +120,13 @@ func assembleAdminStatus() AdminStatus {
 		"qos_voice_band":       confGet(conf, "qos_voice_band", "0"),
 		"qos_cot_band":         confGet(conf, "qos_cot_band", "1"),
 		"qos_chat_band":        confGet(conf, "qos_chat_band", "2"),
+		"require_auth":         confGet(conf, "require_auth", "n"),
+		"auto_update":          confGet(conf, "auto_update", "n"),
+		"update_url":           confGet(conf, "update_url", ""),
+		"eud_bandwidth":        confGet(conf, "eud_bandwidth", "0"),
+		"battery_monitor":      confGet(conf, "battery_monitor", "y"),
+		"voice_beep_tx_start":  confGet(conf, "voice_beep_tx_start", "y"),
+		"voice_beep_rx_end":    confGet(conf, "voice_beep_rx_end", "y"),
 	}
 
 	if currentConfig["halow_bw"] == "" {
@@ -153,6 +160,11 @@ func assembleAdminStatus() AdminStatus {
 		if mac == myMAC && localAck != "" {
 			ack = localAck
 		}
+		fleetAcksMu.Lock()
+		if mcastAck, ok := fleetAcks[mac]; ok && mcastAck != "" && ack == "" {
+			ack = mcastAck
+		}
+		fleetAcksMu.Unlock()
 		adminNodes = append(adminNodes, AdminNode{
 			Hostname:  rn["HOSTNAME"],
 			IP:        rn["IPV4_ADDRESS"],

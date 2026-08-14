@@ -31,7 +31,7 @@ const MESH_FIELDS = [
 
 const PROFILE_SECTIONS = [
   { id: 'node', cat: 'Node', fields: [
-    { key: 'node_hostname', label: 'Hostname Prefix', hint: 'Prefix — full: {this}-{ssid}-{mac}' },
+    { key: 'node_hostname', label: 'Hostname Prefix', hint: 'Prefix — full: {this}-{ssid}-{mac}. Use {{hostname}} in other fields for per-node substitution' },
     { key: 'battery_monitor', label: 'Battery Monitor', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
   ]},
   { id: 'gateway', cat: 'Gateway', fields: [
@@ -187,7 +187,9 @@ function fleetRender() {
         var val = (p.config || {})[f.key] || curCfg[f.key] || '';
         var display = f.type === 'password' && val ? '••••••' : fleetOptLabel(f, val);
         html += '<div class="fleet-field-inline"><span class="fleet-field-label">' + escHtml(f.label) + '</span>';
-        html += '<span>' + escHtml(display || '—') + '</span></div>';
+        html += '<span>' + escHtml(display || '—') + '</span>';
+        if (f.hint) html += '<span style="font-size:10px;color:var(--muted);margin-left:6px">' + escHtml(f.hint) + '</span>';
+        html += '</div>';
       });
     });
     if (nodes.length) {
@@ -229,8 +231,10 @@ function fleetRenderPending(pkg, status) {
   var diffs = [];
   var hasDangerous = false;
   for (var k in config) {
-    if (config[k] !== current[k]) {
-      diffs.push({ key: k, old: current[k] || '', new: config[k] || '' });
+    var cv = current[k] || '';
+    var nv = config[k] || '';
+    if (cv !== nv) {
+      diffs.push({ key: k, old: cv, new: nv });
       if (['mesh_ssid','mesh_key','ipv4_network'].indexOf(k) !== -1) hasDangerous = true;
     }
   }

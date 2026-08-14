@@ -13,7 +13,7 @@
         android:layout_weight="1"
         android:orientation="horizontal">
 
-        <!-- Left: LCD screen (2/3 normally, shrinks when channel grid visible) -->
+        <!-- Left: LCD screen -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
@@ -98,7 +98,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="● ○ ○ ○"
+                    android:text="● ○ ○ ○ ○"
                     android:textColor="#33ff33"
                     android:textSize="11sp"
                     android:fontFamily="monospace"
@@ -118,14 +118,16 @@
 
         </LinearLayout>
 
-        <!-- Right panel: channel grid + voice controls (COMMS page only, 1/3 width) -->
+        <!-- Right panel: COMMS controls (toggled visible by Java) -->
         <LinearLayout
+            android:id="@+id/eud_side_panel"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
             android:orientation="vertical"
             android:paddingStart="6dp"
-            android:gravity="center">
+            android:gravity="center"
+            android:visibility="gone">
 
             <!-- Channel grid -->
             <LinearLayout
@@ -207,6 +209,49 @@
 
     </LinearLayout>
 
+    <!-- Chat input (CHAT page only, below LCD) -->
+    <LinearLayout
+        android:id="@+id/eud_chat_input_row"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="4dp"
+        android:gravity="center_vertical"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/eud_chat_input"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:background="@drawable/eud_input_bg"
+            android:textColor="#33ff33"
+            android:textColorHint="#1a5a1a"
+            android:hint="Message..."
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:paddingHorizontal="8dp"
+            android:inputType="text"
+            android:imeOptions="actionSend"
+            android:singleLine="true"
+            android:importantForAutofill="no"/>
+
+        <Button
+            android:id="@+id/eud_chat_send"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:minWidth="56dp"
+            android:background="@drawable/eud_btn_bg"
+            android:text="SEND"
+            android:textColor="#33ff33"
+            android:textSize="10sp"
+            android:fontFamily="monospace"
+            android:textStyle="bold"
+            android:textAllCaps="false"/>
+
+    </LinearLayout>
+
     <!-- Page nav buttons -->
     <LinearLayout
         android:layout_width="match_parent"
@@ -265,6 +310,20 @@
             android:layout_marginHorizontal="3dp"
             android:background="@drawable/eud_btn_bg"
             android:text="STAT"
+            android:textColor="#33ff33"
+            android:textSize="10sp"
+            android:fontFamily="monospace"
+            android:textStyle="bold"
+            android:textAllCaps="false"/>
+
+        <Button
+            android:id="@+id/eud_nav_chat"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:layout_marginHorizontal="3dp"
+            android:background="@drawable/eud_btn_bg"
+            android:text="CHAT"
             android:textColor="#33ff33"
             android:textSize="10sp"
             android:fontFamily="monospace"

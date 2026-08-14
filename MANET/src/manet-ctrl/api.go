@@ -993,6 +993,8 @@ func apiAdminActivate(w http.ResponseWriter, r *http.Request) {
 	pkg["activate_at"] = activateAt
 	savePendingConfig(pkg)
 	broadcastConfigPackage(pkg)
+	version := jsonStr(pkg, "version", "")
+	go fleetMcastSendActivation(version, activateAt)
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "activate_at": activateAt})
 }
@@ -1618,13 +1620,14 @@ func applyHalowBW(conf map[string]string) {
 	regDomain := confGet(conf, "regulatory_domain", "US")
 	opClass, ch, chwidth, txMBM := halowBWParams(bw, regDomain)
 
-	opClassRE := regexp.MustCompile(`op_class=\d+`)
+	opClassRE := regexp.MustCompile(`op_class=(\d+)`)
 	channelRE := regexp.MustCompile(`(^|\s)channel=\d+`)
 	chwidthRE := regexp.MustCompile(`s1g_prim_chwidth=\d+`)
 	txpowerRE := regexp.MustCompile(`txpower fixed \d+`)
 
 	wpaDir := "/etc/wpa_supplicant"
 	entries, _ := os.ReadDir(wpaDir)
+	changed := false
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.Contains(name, "s1g") {
@@ -1636,6 +1639,11 @@ func applyHalowBW(conf map[string]string) {
 			continue
 		}
 		text := string(data)
+
+		if m := opClassRE.FindStringSubmatch(text); len(m) > 1 && m[1] == opClass {
+			continue
+		}
+
 		text = opClassRE.ReplaceAllString(text, "op_class="+opClass)
 		text = channelRE.ReplaceAllStringFunc(text, func(m string) string {
 			prefix := ""
@@ -1647,6 +1655,11 @@ func applyHalowBW(conf map[string]string) {
 		text = chwidthRE.ReplaceAllString(text, "s1g_prim_chwidth="+chwidth)
 		os.WriteFile(path, []byte(text), 0644)
 		log.Printf("halow bw updated: %s -> %s (op_class=%s ch=%s)", name, bw, opClass, ch)
+		changed = true
+	}
+
+	if !changed {
+		return
 	}
 
 	svcDir := "/etc/systemd/system"

@@ -537,9 +537,16 @@ func getInterfaces() []Iface {
 			iface.Role = "mesh"
 			iface.Detail = "Mesh radio"
 			batState := batSlaves[name]
-			if state == "DOWN" {
+			wpaRestarting := isUnitRestarting("wpa_supplicant@"+name) || isUnitRestarting("wpa_supplicant-s1g-"+name)
+			if state == "DOWN" && wpaRestarting {
+				iface.Health = "warn"
+				iface.Faults = append(iface.Faults, "Restarting")
+			} else if state == "DOWN" {
 				iface.Health = "fault"
 				iface.Faults = append(iface.Faults, "Interface is DOWN")
+			} else if batState == "inactive" && wpaRestarting {
+				iface.Health = "warn"
+				iface.Faults = append(iface.Faults, "Restarting")
 			} else if batState == "inactive" {
 				iface.Health = "fault"
 				iface.Faults = append(iface.Faults, "Inactive in batman-adv")
@@ -596,6 +603,12 @@ func getInterfaces() []Iface {
 func isUnitActive(unit string) bool {
 	err := exec.Command("systemctl", "is-active", "--quiet", unit).Run()
 	return err == nil
+}
+
+func isUnitRestarting(unit string) bool {
+	out, _ := runCmdStdout(2*time.Second, "systemctl", "show", "-p", "ActiveState", "--value", unit+".service")
+	s := strings.TrimSpace(out)
+	return s == "activating" || s == "reloading" || s == "deactivating"
 }
 
 func parseIWDev() map[string]iwDev {

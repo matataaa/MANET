@@ -2899,6 +2899,7 @@ drawable design_ic_visibility_off
 drawable design_password_eye
 drawable design_snackbar_background
 drawable eud_btn_bg
+drawable eud_input_bg
 drawable eud_lcd_bg
 drawable ic_arrow_back_black_24
 drawable ic_call_answer
@@ -3165,14 +3166,19 @@ id eud_btn_mic_up
 id eud_btn_vol_down
 id eud_btn_vol_up
 id eud_channel_grid
+id eud_chat_input
+id eud_chat_input_row
+id eud_chat_send
 id eud_conn
 id eud_display
+id eud_nav_chat
 id eud_nav_comms
 id eud_nav_exit
 id eud_nav_mesh
 id eud_nav_radio
 id eud_nav_stat
 id eud_pages
+id eud_side_panel
 id eud_time
 id eud_title
 id eud_voice_row

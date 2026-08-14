@@ -8,12 +8,18 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
-	fleetMcastAddr = "239.30.2.70:17070"
+	fleetMcastAddr  = "239.30.2.70:17070"
 	fleetMcastIface = "br0"
+)
+
+var (
+	fleetAcksMu sync.Mutex
+	fleetAcks   = map[string]string{} // mac -> version
 )
 
 func fleetConfigWatcher() {
@@ -112,6 +118,9 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	if updates["qos_enabled"] != "" || updates["qos_voice_band"] != "" || updates["qos_cot_band"] != "" || updates["qos_chat_band"] != "" {
 		applyQoSFromConf(conf)
 	}
+	if updates["halow_bw"] != "" {
+		applyHalowBW(conf)
+	}
 }
 
 func fleetPollAlfred() {
@@ -120,27 +129,47 @@ func fleetPollAlfred() {
 		return
 	}
 
-	// Alfred output: { "mac", "json_payload" },
-	// Find the JSON payload between the second quote pair
-	s := strings.TrimSpace(string(out))
-	idx := strings.Index(s, "\", \"")
-	if idx < 0 {
-		return
-	}
-	rest := s[idx+4:]
-	end := strings.LastIndex(rest, "\"")
-	if end < 0 {
-		return
-	}
-	payload := rest[:end]
+	// Alfred output has one line per node: { "mac", "json_payload" },
+	// Parse all entries and process the most recently staged one
+	myMAC := getMyMAC()
+	var best []byte
+	var bestStaged int64
 
-	// Unescape JSON string escaping
-	var raw string
-	if json.Unmarshal([]byte("\""+payload+"\""), &raw) != nil {
-		raw = payload
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		idx := strings.Index(line, "\", \"")
+		if idx < 0 {
+			continue
+		}
+		mac := strings.TrimLeft(line[:idx], "{ \"")
+		if strings.ReplaceAll(mac, ":", "") == strings.ReplaceAll(myMAC, ":", "") {
+			continue
+		}
+		rest := line[idx+4:]
+		end := strings.LastIndex(rest, "\"")
+		if end < 0 {
+			continue
+		}
+		payload := rest[:end]
+
+		var raw string
+		if json.Unmarshal([]byte("\""+payload+"\""), &raw) != nil {
+			raw = payload
+		}
+		var pkg map[string]interface{}
+		if json.Unmarshal([]byte(raw), &pkg) != nil {
+			continue
+		}
+		stagedAt, _ := pkg["staged_at"].(float64)
+		if int64(stagedAt) > bestStaged {
+			bestStaged = int64(stagedAt)
+			best = []byte(raw)
+		}
 	}
 
-	fleetProcessPackage([]byte(raw))
+	if best != nil {
+		fleetProcessPackage(best)
+	}
 }
 
 func fleetProcessPackage(data []byte) {
@@ -156,11 +185,27 @@ func fleetProcessPackage(data []byte) {
 	// Check if we already have this version ACKed
 	existing, _ := os.ReadFile(AckVersionFile)
 	if strings.TrimSpace(string(existing)) == version {
+		// Already ACKed — but check if remote added activate_at that we don't have yet
+		if activateAt, ok := pkg["activate_at"].(float64); ok && activateAt > 0 {
+			local := getPendingConfig()
+			if local != nil {
+				var localPkg map[string]interface{}
+				if json.Unmarshal(local, &localPkg) == nil {
+					if _, has := localPkg["activate_at"]; !has {
+						savePendingConfig(pkg)
+						log.Printf("fleet: activation received for version %s (at %d)", version, int64(activateAt))
+					}
+				}
+			}
+		}
 		return
 	}
 
 	// Save as pending config
 	savePendingConfig(pkg)
+
+	// Sync profiles from the staging node so all nodes share the same view
+	fleetSyncProfiles(pkg)
 
 	// Write ACK
 	os.WriteFile(AckVersionFile, []byte(version), 0644)
@@ -168,6 +213,66 @@ func fleetProcessPackage(data []byte) {
 
 	// Broadcast ACK via multicast for fast propagation
 	fleetMcastSendAck(version)
+}
+
+func fleetSyncProfiles(pkg map[string]interface{}) {
+	prefs := loadFleetPreferences()
+
+	if profiles, ok := pkg["profiles"].(map[string]interface{}); ok {
+		synced := make(map[string]FleetProfile)
+		for pid, pv := range profiles {
+			pm, _ := pv.(map[string]interface{})
+			name, _ := pm["name"].(string)
+			cfg := make(map[string]string)
+			if cfgRaw, ok := pm["config"].(map[string]interface{}); ok {
+				for k, v := range cfgRaw {
+					cfg[k] = fmt.Sprintf("%v", v)
+				}
+			}
+			synced[pid] = FleetProfile{Name: name, Config: cfg}
+		}
+		if len(synced) > 0 {
+			prefs.Profiles = synced
+		}
+	}
+
+	if np, ok := pkg["node_profiles"].(map[string]interface{}); ok {
+		synced := make(map[string]string)
+		for mac, pid := range np {
+			synced[mac], _ = pid.(string)
+		}
+		prefs.NodeProfiles = synced
+	}
+
+	if config, ok := pkg["config"].(map[string]interface{}); ok {
+		mc := make(map[string]string)
+		for k, v := range config {
+			mc[k] = fmt.Sprintf("%v", v)
+		}
+		prefs.MeshConfig = mc
+	}
+
+	saveFleetPreferences(prefs)
+	log.Printf("fleet: synced profiles from staged package")
+}
+
+func fleetMcastSendActivation(version string, activateAt int64) {
+	addr, err := net.ResolveUDPAddr("udp4", fleetMcastAddr)
+	if err != nil {
+		return
+	}
+	conn, err := net.DialUDP("udp4", nil, addr)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	msg := map[string]interface{}{
+		"type":        "fleet_activate",
+		"version":     version,
+		"activate_at": activateAt,
+	}
+	data, _ := json.Marshal(msg)
+	conn.Write(data)
 }
 
 func fleetMcastSendAck(version string) {
@@ -225,12 +330,40 @@ func fleetMcastListener() {
 		if err != nil {
 			continue
 		}
-		var msg map[string]string
+		var msg map[string]interface{}
 		if json.Unmarshal(buf[:n], &msg) != nil {
 			continue
 		}
-		if msg["type"] == "fleet_stage" {
+		msgType, _ := msg["type"].(string)
+		if msgType == "fleet_stage" {
 			fleetProcessPackage(buf[:n])
+		} else if msgType == "fleet_ack" {
+			mac, _ := msg["mac"].(string)
+			version, _ := msg["version"].(string)
+			if mac != "" && version != "" {
+				fleetAcksMu.Lock()
+				fleetAcks[normMAC(mac)] = version
+				fleetAcksMu.Unlock()
+			}
+		} else if msgType == "fleet_activate" {
+			version, _ := msg["version"].(string)
+			activateAt, _ := msg["activate_at"].(float64)
+			if version != "" && activateAt > 0 {
+				local := getPendingConfig()
+				if local != nil {
+					var localPkg map[string]interface{}
+					if json.Unmarshal(local, &localPkg) == nil {
+						localVer, _ := localPkg["version"].(string)
+						if localVer == version {
+							if _, has := localPkg["activate_at"]; !has {
+								localPkg["activate_at"] = activateAt
+								savePendingConfig(localPkg)
+								log.Printf("fleet: mcast activation for version %s", version)
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 }
