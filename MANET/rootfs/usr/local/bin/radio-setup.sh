@@ -133,6 +133,13 @@ if [ -f /etc/modprobe.d/morse.conf ] && ! has_usb_morse_device; then
 fi
 echo "options morse enable_mcast_whitelist=0 enable_mcast_rate_control=1" > /etc/modprobe.d/morse.conf
 echo "options morse country=$EARLY_HALOW_REGULATORY_DOMAIN" >> /etc/modprobe.d/morse.conf
+# Field nodes run mains/battery-banked: disable every chip power-save mode and
+# lift the driver TX cap to the 24 dBm design target (params verified on the
+# SPI MM6108 v1.16.4 driver only; USB MM81xx param set differs).
+if ! has_usb_morse_device; then
+    echo "options morse enable_ps=0 enable_dynamic_ps_offload=N enable_auto_duty_cycle=N enable_twt=N" >> /etc/modprobe.d/morse.conf
+    echo "options morse tx_max_power_mbm=2400" >> /etc/modprobe.d/morse.conf
+fi
 if [[ -z "$EARLY_MORSE_BCF" ]] && ! has_usb_morse_device; then
     EARLY_MORSE_BCF="bcf_fgh100mhaamd.bin"
     EARLY_MORSE_SPI_CLOCK="${EARLY_MORSE_SPI_CLOCK:-1500000}"

@@ -10,10 +10,27 @@ var topoStreamType = null;
 var topoOrbTimer = null;
 var topoOrbs = [];
 
+// Realistic max link throughput (Mbps) per HaLow channel width. Link colors
+// grade against the channel's own ceiling — 3 Mbps is red on 5 GHz Wi-Fi but
+// excellent on a 1 MHz S1G channel.
+var HALOW_CAPACITY = { '1MHz': 3.3, '2MHz': 7.2, '4MHz': 16, '8MHz': 32 };
+
+function halowCapacity() {
+  if (typeof LOCAL_DATA === 'undefined' || !LOCAL_DATA || !LOCAL_DATA.interfaces) return null;
+  for (var i = 0; i < LOCAL_DATA.interfaces.length; i++) {
+    var bw = LOCAL_DATA.interfaces[i].halow_bw;
+    if (bw && HALOW_CAPACITY[bw]) return HALOW_CAPACITY[bw];
+  }
+  return null;
+}
+
 function tpColor(tp) {
   if (tp == null || tp <= 0) return '#9aa4b2';
-  if (tp >= 5) return '#22c55e';
-  if (tp >= 2) return '#eab308';
+  var cap = halowCapacity();
+  var green = cap ? cap * 0.35 : 5;
+  var amber = cap ? cap * 0.12 : 2;
+  if (tp >= green) return '#22c55e';
+  if (tp >= amber) return '#eab308';
   return '#ef4444';
 }
 
@@ -364,7 +381,11 @@ function topoUpdate(data) {
       var html = '<div class="tt-host">' + escHtml(d.hostname || d.id) + '</div>';
       if (d.ip) html += '<div class="tt-row"><span class="tt-label">IP</span>' + escHtml(d.ip) + '</div>';
       html += '<div class="tt-row"><span class="tt-label">DNS</span>' + escHtml((d.hostname || '') + '.mesh') + '</div>';
-      if (!d.is_me && d.best_link && d.best_link.throughput) html += '<div class="tt-row"><span class="tt-label">Speed</span>' + fmtThroughput(d.best_link.throughput) + '</div>';
+      if (!d.is_me && d.best_link && d.best_link.throughput) {
+        var cap = halowCapacity();
+        var capNote = cap ? ' <span style="opacity:0.6">(' + Math.min(100, Math.round(d.best_link.throughput / cap * 100)) + '% of ch)</span>' : '';
+        html += '<div class="tt-row"><span class="tt-label">Speed</span>' + fmtThroughput(d.best_link.throughput) + capNote + '</div>';
+      }
       if (!d.is_me && d.tq != null) html += '<div class="tt-row"><span class="tt-label">TQ</span>' + d.tq + ' (' + tqPct(d.tq) + '%)</div>';
       if (d.hop_count) html += '<div class="tt-row"><span class="tt-label">Hops</span>' + d.hop_count + '</div>';
       if (d.uptime) html += '<div class="tt-row"><span class="tt-label">Up</span>' + d.uptime + '</div>';
