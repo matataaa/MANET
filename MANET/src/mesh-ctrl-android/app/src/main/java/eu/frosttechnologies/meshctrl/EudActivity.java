@@ -84,6 +84,7 @@ public class EudActivity extends AppCompatActivity {
 
     private TextView tvTitle, tvConn, tvDisplay, tvPages, tvTime;
     private LinearLayout voiceRow, channelGrid, chatInputRow;
+    private LinearLayout sidePanel;
     private EditText chatInput;
     private Button chatSendBtn;
     private Button[] navButtons;
@@ -147,6 +148,7 @@ public class EudActivity extends AppCompatActivity {
         voiceRow = findViewById(R.id.eud_voice_row);
         channelGrid = findViewById(R.id.eud_channel_grid);
         chatInputRow = findViewById(R.id.eud_chat_input_row);
+        sidePanel = findViewById(R.id.eud_side_panel);
         chatInput = findViewById(R.id.eud_chat_input);
         chatSendBtn = findViewById(R.id.eud_chat_send);
         chatSendBtn.setBackgroundTintList(null);
@@ -597,6 +599,9 @@ public class EudActivity extends AppCompatActivity {
         channelGrid.setVisibility(comms ? View.VISIBLE : View.GONE);
         voiceRow.setVisibility(comms ? View.VISIBLE : View.GONE);
         chatInputRow.setVisibility(chat && chatAvailable ? View.VISIBLE : View.GONE);
+        if (sidePanel != null) {
+            sidePanel.setVisibility(comms ? View.VISIBLE : View.GONE);
+        }
 
         if (comms) updateChannelButtons();
 
