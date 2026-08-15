@@ -4,9 +4,7 @@ import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Typeface;
-import android.graphics.drawable.ClipDrawable;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.LayerDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -120,8 +118,6 @@ public class EudActivity extends AppCompatActivity {
     private Button homeBtn;
 
     private long homeDownTime = 0;
-    private ClipDrawable homeClip;
-    private GradientDrawable homeBaseBg;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -161,9 +157,9 @@ public class EudActivity extends AppCompatActivity {
                 finish();
                 return;
             }
-            int level = (int) (elapsed * 10000 / HOLD_MS);
-            homeClip.setLevel(level);
-            handler.postDelayed(this, 50);
+            int secsLeft = (int) Math.ceil((HOLD_MS - elapsed) / 1000.0);
+            homeBtn.setText("(" + secsLeft + ") MGMT");
+            handler.postDelayed(this, 100);
         }
     };
 
@@ -484,28 +480,14 @@ public class EudActivity extends AppCompatActivity {
     }
 
     private void setupHomeButton() {
-        homeBaseBg = new GradientDrawable();
-        homeBaseBg.setCornerRadius(dpToPx(4));
-        homeBaseBg.setColor(0xFF0a1a0a);
-        homeBaseBg.setStroke(dpToPx(1), 0xFF1a5a1a);
-
-        GradientDrawable fillShape = new GradientDrawable();
-        fillShape.setCornerRadius(dpToPx(4));
-        fillShape.setColor(0xFF33FF33);
-        homeClip = new ClipDrawable(fillShape, Gravity.START, ClipDrawable.HORIZONTAL);
-        homeClip.setLevel(0);
-
-        LayerDrawable layers = new LayerDrawable(new android.graphics.drawable.Drawable[]{homeBaseBg, homeClip});
-        homeBtn.setBackground(layers);
-
         homeBtn.setOnTouchListener((v, event) -> {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
                     homeDownTime = System.currentTimeMillis();
-                    homeBtn.setText("MGMT");
+                    homeBtn.setText("(3) MGMT");
+                    homeBtn.setTextColor(0xFF33FF33);
                     homeBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
                     homeBtn.setPadding(dpToPx(4), 0, 0, 0);
-                    homeBtn.setTextColor(0xFF0a1a0a);
                     handler.post(homeTickRunnable);
                     return true;
                 case MotionEvent.ACTION_UP:
@@ -530,7 +512,6 @@ public class EudActivity extends AppCompatActivity {
     private void resetHomeButton() {
         homeDownTime = 0;
         handler.removeCallbacks(homeTickRunnable);
-        homeClip.setLevel(0);
         homeBtn.setText("HOME");
         homeBtn.setGravity(Gravity.CENTER);
         homeBtn.setPadding(0, 0, 0, 0);
@@ -1209,7 +1190,7 @@ public class EudActivity extends AppCompatActivity {
         sb.append(row("HOST", truncate(hostname, 20)));
         sb.append(row("EUD", eudMode));
         sb.append(row("GW", isGw ? "YES" : "NO"));
-        sb.append(row("USB", usbTether ? "TETHERED ▲" : "---"));
+        if (usbTether) sb.append(row("USB", "TETHERED ▲"));
         sb.append(row("GPS", gps));
         sb.append(row("UPD", lastUpdateTime()));
         return sb.toString();
