@@ -859,8 +859,73 @@ confirm_flash() {
 }
 
 # Flash one SD card — Rock3A path (dd)
+# Resolve (rebuilding when possible) the tools tarball for a hardware model.
+# Prints the path on stdout; returns 1 if unavailable. First boot has no
+# download fallback — flashing without the tarball produces a node that
+# cannot provision, so fail here at flash time instead.
+resolve_tools_tarball() {
+        local model="$1" tarball_name="" build_script=""
+        case "$model" in
+                cm4|rpi4) tarball_name="cm4-tools.tar.gz";   build_script="build-cm4-tarball.sh" ;;
+                rpi5)     tarball_name="rpi5-tools.tar.gz";  build_script="build-rpi5-tarball.sh" ;;
+                r3a)      tarball_name="r3a-install.tar.gz"; build_script="build-r3a-tarball.sh" ;;
+                *)        return 1 ;;
+        esac
+        local repo_root
+        repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+        local tarball_path="${repo_root}/install_packages/${tarball_name}"
+        if command -v go >/dev/null 2>&1 && [ -f "${repo_root}/packaging/${build_script}" ]; then
+                echo "Rebuilding ${tarball_name}..." >&2
+                mkdir -p "${repo_root}/install_packages"
+                if ! bash "${repo_root}/packaging/${build_script}" "$tarball_path" >&2; then
+                        echo "WARNING: tarball rebuild failed, using existing copy if present" >&2
+                fi
+        fi
+        if [ ! -f "$tarball_path" ]; then
+                echo "ERROR: ${tarball_path} not found and could not be rebuilt." >&2
+                echo "Build it with packaging/${build_script} (needs Go), or copy" >&2
+                echo "install_packages/ from a machine that has built it." >&2
+                return 1
+        fi
+        echo "$tarball_path"
+}
+
+# Copy the tools tarball onto the freshly flashed boot partition. rpi-imager
+# can power the reader down when it finishes, so retry with a re-insert
+# prompt before giving up.
+embed_tools_tarball() {
+        local target="$1" tarball_path="$2"
+        local bootpart mnt attempt
+        mnt=$(mktemp -d)
+        for attempt in 1 2 3; do
+                sudo partprobe "$target" 2>/dev/null || true
+                sleep 2
+                bootpart="${target}1"
+                [ -b "${target}p1" ] && bootpart="${target}p1"
+                if sudo mount "$bootpart" "$mnt" 2>/dev/null; then
+                        sudo cp "$tarball_path" "$mnt/mesh-tools.tar.gz"
+                        sudo sync
+                        sudo umount "$mnt"
+                        rmdir "$mnt"
+                        echo "Embedded tools tarball: $(basename "$tarball_path")"
+                        return 0
+                fi
+                echo "Boot partition not mountable (imager may have ejected the card)."
+                read -p "Remove and re-insert the SD card, then press Enter to retry..."
+        done
+        rmdir "$mnt"
+        echo "ERROR: Could not mount ${bootpart} to embed the tools tarball."
+        echo "Mount the boot partition manually and copy:"
+        echo "  ${tarball_path} -> <boot>/mesh-tools.tar.gz"
+        echo "The node CANNOT provision without it."
+        return 1
+}
+
 flash_r3a() {
         local target="$1"
+
+        local tools_tarball
+        tools_tarball=$(resolve_tools_tarball r3a) || exit 1
 
         # Create temp copy of image to avoid modifying original
         local TEMP_IMAGE
@@ -1007,6 +1072,11 @@ SERVICE_EOF
         sudo ln -sf /etc/systemd/system/mesh-provision.service \
                 "$ROOT_MOUNT/etc/systemd/system/multi-user.target.wants/mesh-provision.service"
 
+        # Stage the install tarball into the image — rock3a-provision.sh
+        # requires it at /root and no longer downloads.
+        echo "Staging install tarball into image..."
+        sudo cp "$tools_tarball" "$ROOT_MOUNT/root/morse-pi-install.tar.gz"
+
         # ============================================================
         # Unmount and flash
         # ============================================================
@@ -1044,71 +1114,12 @@ SERVICE_EOF
         echo " minutes"
 }
 
-# Build the local tools tarball (if a build script exists) and copy it onto
-# the boot partition of $1 so firstrun.sh doesn't need internet on first boot.
-embed_tools_tarball() {
-        local target="$1"
-
-        local tarball_name="" build_script=""
-        case "$HARDWARE_MODEL" in
-                cm4|rpi4) tarball_name="cm4-tools.tar.gz"; build_script="build-cm4-tarball.sh" ;;
-                rpi5)     tarball_name="rpi5-tools.tar.gz"; build_script="build-rpi5-tarball.sh" ;;
-        esac
-        [ -z "$tarball_name" ] && return 0
-
-        local repo_root
-        repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-        local tarball_path="${repo_root}/install_packages/${tarball_name}"
-        local packaging_dir="${repo_root}/packaging"
-
-        if [ -f "${packaging_dir}/${build_script}" ]; then
-                echo "Rebuilding ${tarball_name}..."
-                mkdir -p "${repo_root}/install_packages"
-                bash "${packaging_dir}/${build_script}" "$tarball_path"
-                echo "Tarball rebuilt: $(du -h "$tarball_path" | cut -f1)"
-        fi
-
-        if [ ! -f "$tarball_path" ]; then
-                echo "WARNING: Tools tarball not found at $tarball_path — node will download at first boot"
-                return 0
-        fi
-
-        echo "Embedding tools tarball onto boot partition..."
-        sync
-        command -v udevadm &>/dev/null && sudo udevadm settle 2>/dev/null
-
-        local boot_part="${target}1"
-        [[ "$target" =~ [0-9]$ ]] && boot_part="${target}p1"
-
-        local boot_mount we_mounted=0
-        boot_mount=$(findmnt -n -o TARGET "$boot_part" 2>/dev/null || true)
-        if [ -z "$boot_mount" ]; then
-                boot_mount=$(mktemp -d)
-                if sudo mount "$boot_part" "$boot_mount" 2>/dev/null; then
-                        we_mounted=1
-                else
-                        rmdir "$boot_mount" 2>/dev/null
-                        boot_mount=""
-                fi
-        fi
-
-        if [ -z "$boot_mount" ]; then
-                echo "WARNING: Could not mount boot partition ($boot_part) — node will download tarball at first boot"
-                return 0
-        fi
-
-        sudo cp "$tarball_path" "$boot_mount/mesh-tools.tar.gz"
-        sudo sync
-        if [ "$we_mounted" = "1" ]; then
-                sudo umount "$boot_mount"
-                rmdir "$boot_mount" 2>/dev/null
-        fi
-        echo "Embedded tools tarball: $tarball_name ($(du -h "$tarball_path" | cut -f1))"
-}
-
 # Flash one SD card — Raspberry Pi path (rpi-imager)
 flash_rpi() {
         local target="$1"
+
+        local tools_tarball
+        tools_tarball=$(resolve_tools_tarball "$HARDWARE_MODEL") || exit 1
 
         echo "Generating firstrun script from template..."
         sed -e "s|__HARDWARE_MODEL__|${HARDWARE_MODEL}|g" \
@@ -1130,7 +1141,7 @@ flash_rpi() {
 
         sudo rpi-imager --cli "$PI_OS_IMAGE_URL" "$target" --first-run-script "$TEMP_SCRIPT_FILE"
 
-        embed_tools_tarball "$target"
+        embed_tools_tarball "$target" "$tools_tarball" || exit 1
 
         echo ""
         echo "=============================================="

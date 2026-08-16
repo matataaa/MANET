@@ -183,101 +183,6 @@ function Expand-XzFile {
     return $false
 }
 
-# Converts a Windows path (C:\foo\bar) to the equivalent WSL path (/mnt/c/foo/bar).
-function ConvertTo-WslPath {
-    param([string]$WindowsPath)
-
-    $p = $WindowsPath -replace '\\', '/'
-    if ($p -match '^([A-Za-z]):(.*)') { $p = "/mnt/$($Matches[1].ToLower())$($Matches[2])" }
-    return $p
-}
-
-# Rebuilds the local tools tarball for $HARDWARE_MODEL via the packaging/
-# build script, run inside WSL (cross-compiling Go/building the APK isn't
-# practical from native PowerShell). Returns the Windows path to the tarball,
-# which may not exist if the rebuild was skipped or failed.
-function Build-ToolsTarball {
-    param([string]$RepoRoot)
-
-    $tarballName = ""; $buildScript = ""
-    switch ($Script:HARDWARE_MODEL) {
-        { $_ -in @('cm4', 'rpi4') } { $tarballName = "cm4-tools.tar.gz";  $buildScript = "build-cm4-tarball.sh" }
-        'rpi5'                     { $tarballName = "rpi5-tools.tar.gz"; $buildScript = "build-rpi5-tarball.sh" }
-    }
-    if (-not $tarballName) { return $null }
-
-    $installDir = Join-Path $RepoRoot "install_packages"
-    $tarballPath = Join-Path $installDir $tarballName
-    $buildScriptPath = Join-Path (Join-Path $RepoRoot "packaging") $buildScript
-
-    if (Test-Path $buildScriptPath) {
-        $wsl = Get-Command wsl -ErrorAction SilentlyContinue
-        if ($wsl) {
-            Write-Host "Rebuilding $tarballName via WSL..."
-            New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-            $wslPackagingDir = ConvertTo-WslPath (Join-Path $RepoRoot "packaging")
-            $wslTarballPath = ConvertTo-WslPath $tarballPath
-            & wsl bash "$wslPackagingDir/$buildScript" "$wslTarballPath"
-            if ($LASTEXITCODE -eq 0 -and (Test-Path $tarballPath)) {
-                $sizeMB = [math]::Round((Get-Item $tarballPath).Length / 1MB, 1)
-                Write-Host "Tarball rebuilt: ${sizeMB}MB"
-            } else {
-                Write-Host "WARNING: Tarball rebuild failed (exit $LASTEXITCODE)." -ForegroundColor Yellow
-            }
-        } else {
-            Write-Host "WARNING: WSL not found — cannot build $tarballName locally." -ForegroundColor Yellow
-            Write-Host "         Install WSL (wsl --install) with Go (and the Android SDK for the APK) to build it, or the node will download it at first boot." -ForegroundColor Yellow
-        }
-    }
-
-    return $tarballPath
-}
-
-# Copies the tools tarball onto the boot (FAT32) partition of $DiskNumber so
-# firstrun.sh doesn't need internet on first boot.
-function Add-ToolsTarballToBootPartition {
-    param([int]$DiskNumber, [string]$TarballPath)
-
-    if (-not $TarballPath -or -not (Test-Path $TarballPath)) {
-        Write-Host "WARNING: Tools tarball not found — node will download at first boot" -ForegroundColor Yellow
-        return
-    }
-
-    Write-Host "Embedding tools tarball onto boot partition..."
-    Start-Sleep -Seconds 1
-    try { Update-Disk -Number $DiskNumber -ErrorAction SilentlyContinue } catch {}
-
-    $bootPartition = Get-Partition -DiskNumber $DiskNumber -ErrorAction SilentlyContinue |
-        Where-Object { (Get-Volume -Partition $_ -ErrorAction SilentlyContinue).FileSystem -eq 'FAT32' } |
-        Select-Object -First 1
-
-    if (-not $bootPartition) {
-        Write-Host "WARNING: Could not find boot partition on disk $DiskNumber — node will download tarball at first boot" -ForegroundColor Yellow
-        return
-    }
-
-    $addedLetter = $false
-    if (-not $bootPartition.DriveLetter) {
-        try {
-            $bootPartition | Add-PartitionAccessPath -AssignDriveLetter -ErrorAction Stop
-            $addedLetter = $true
-            $bootPartition = Get-Partition -DiskNumber $DiskNumber -PartitionNumber $bootPartition.PartitionNumber
-        } catch {
-            Write-Host "WARNING: Could not mount boot partition — node will download tarball at first boot" -ForegroundColor Yellow
-            return
-        }
-    }
-
-    $driveRoot = "$($bootPartition.DriveLetter):\"
-    Copy-Item -Path $TarballPath -Destination (Join-Path $driveRoot "mesh-tools.tar.gz") -Force
-    $sizeMB = [math]::Round((Get-Item $TarballPath).Length / 1MB, 1)
-    Write-Host "Embedded tools tarball: $(Split-Path $TarballPath -Leaf) (${sizeMB}MB)"
-
-    if ($addedLetter) {
-        try { $bootPartition | Remove-PartitionAccessPath -AccessPath $driveRoot -ErrorAction SilentlyContinue } catch {}
-    }
-}
-
 # ============================================================
 # Armbian Image Acquisition (Rock 3A)
 # ============================================================
@@ -928,6 +833,17 @@ if ($Script:HARDWARE_MODEL -eq "r3a") {
 
 if ($Script:HARDWARE_MODEL -eq "r3a") {
 
+    # rock3a-provision.sh requires the install tarball staged in the image —
+    # there is no first-boot download. Windows cannot build it; require the
+    # prebuilt copy before touching any card.
+    $R3aTarball = Join-Path (Join-Path (Split-Path $ScriptDir -Parent) "install_packages") "r3a-install.tar.gz"
+    if (-not (Test-Path $R3aTarball)) {
+        Write-Host "ERROR: $R3aTarball not found." -ForegroundColor Red
+        Write-Host "Build it on macOS/Linux with packaging/build-r3a-tarball.sh and" -ForegroundColor Red
+        Write-Host "copy the install_packages folder to this machine." -ForegroundColor Red
+        exit 1
+    }
+
     Write-Host ""
     Write-Host "Checking for ext4 filesystem driver (Ext2Fsd)..."
     if (-not (Test-Ext4Driver)) {
@@ -1111,6 +1027,9 @@ WantedBy=multi-user.target
         Write-Host "Creating provisioning trigger flag..."
         [System.IO.File]::WriteAllText((Join-Path $rootPath "root\.mesh-not-provisioned"), "")
 
+        Write-Host "Staging install tarball into image..."
+        Copy-Item $R3aTarball (Join-Path $rootPath "root\morse-pi-install.tar.gz") -Force
+
         $wantsDir = Join-Path $systemdDir "multi-user.target.wants"
         if (-not (Test-Path $wantsDir)) { New-Item -ItemType Directory -Path $wantsDir | Out-Null }
         Copy-Item (Join-Path $systemdDir "mesh-provision.service") (Join-Path $wantsDir "mesh-provision.service")
@@ -1247,6 +1166,20 @@ WantedBy=multi-user.target
         -replace '__AUTO_UPDATE__',             $Script:AUTO_UPDATE `
         -replace '__NODE_HOSTNAME__',           $Script:NODE_HOSTNAME
 
+    # First boot has no download fallback — the tools tarball must be embedded
+    # on the boot partition. Windows cannot rebuild it (needs bash + Go), so a
+    # prebuilt copy from install_packages\ is required before flashing.
+    $tarName = if ($Script:HARDWARE_MODEL -eq "rpi5") { "rpi5-tools.tar.gz" } else { "cm4-tools.tar.gz" }
+    $RepoRoot = Split-Path $ScriptDir -Parent
+    $ToolsTarball = Join-Path (Join-Path $RepoRoot "install_packages") $tarName
+    if (-not (Test-Path $ToolsTarball)) {
+        Write-Host "ERROR: $ToolsTarball not found." -ForegroundColor Red
+        Write-Host "Build it on macOS/Linux with packaging scripts, then copy" -ForegroundColor Red
+        Write-Host "the install_packages folder to this machine. Without it the" -ForegroundColor Red
+        Write-Host "node cannot provision on first boot." -ForegroundColor Red
+        exit 1
+    }
+
     $flashCount = 0
     $keepFlashing = $true
 
@@ -1272,9 +1205,27 @@ WantedBy=multi-user.target
         if ($LASTEXITCODE -eq 0) {
             $flashCount++
 
-            $repoRoot = Split-Path -Parent $ScriptDir
-            $tarballPath = Build-ToolsTarball -RepoRoot $repoRoot
-            Add-ToolsTarballToBootPartition -DiskNumber $Script:TARGET_DEVICE -TarballPath $tarballPath
+            # Embed the tools tarball. The imager ejects the card when done,
+            # so ask for a re-insert and wait for the bootfs volume to mount.
+            Write-Host ""
+            Write-Host "Embedding tools tarball on the boot partition..."
+            Write-Host "Remove and re-insert the SD card so Windows mounts it." -ForegroundColor Yellow
+            $bootVol = $null
+            for ($i = 0; $i -lt 24 -and -not $bootVol; $i++) {
+                Start-Sleep -Seconds 5
+                $bootVol = Get-Volume -ErrorAction SilentlyContinue |
+                    Where-Object { $_.FileSystemLabel -eq "bootfs" -and $_.DriveLetter } |
+                    Select-Object -First 1
+            }
+            if ($bootVol) {
+                Copy-Item $ToolsTarball "$($bootVol.DriveLetter):\mesh-tools.tar.gz" -Force
+                Write-Host "Embedded $tarName on $($bootVol.DriveLetter):\" -ForegroundColor Green
+            } else {
+                Write-Host "ERROR: bootfs volume never appeared." -ForegroundColor Red
+                Write-Host "Manually copy the tarball to the boot partition before booting:" -ForegroundColor Red
+                Write-Host "  $ToolsTarball -> <boot>\mesh-tools.tar.gz" -ForegroundColor Red
+                Write-Host "The node CANNOT provision without it." -ForegroundColor Red
+            }
 
             Write-Host ""
             Write-Host "==============================================" -ForegroundColor Green

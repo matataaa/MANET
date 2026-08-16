@@ -481,7 +481,10 @@ WRAPPER_HEAD
         cp "$tarball_path" "$boot_mount/mesh-tools.tar.gz"
         echo "Embedded tools tarball: $tarball_name ($(du -h "$tarball_path" | cut -f1))"
     else
-        echo "WARNING: Tools tarball not found at $tarball_path — node will download at first boot"
+        echo "ERROR: Tools tarball not found at $tarball_path"
+        echo "First boot has no download fallback — the node cannot provision without it."
+        diskutil unmount "$boot_mount" 2>/dev/null || true
+        exit 1
     fi
 
     # Modify cmdline.txt to run firstrun.sh on first boot
