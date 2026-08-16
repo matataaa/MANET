@@ -97,10 +97,10 @@ elif [ "rpi5" = "rpi5" ]; then
 		touch /var/lib/expand-root-done
 elif [ "rpi5" = "rpi4" ]; then
 		echo "Applying RPi 4 specific settings..."
-		wget -q  https://www.colorado-governor.com/manet/cm4-install.tar.gz -O /root/morse-pi-install.tar.gz || {
-				echo "ERROR: Failed to download rpi4 package"
+		if [ ! -f /root/morse-pi-install.tar.gz ]; then
+				echo "ERROR: /root/morse-pi-install.tar.gz not found — copy cm4-install.tar.gz to the node first"
 				exit 1
-		}
+		fi
 
 		USAGE_PERCENT=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
 		echo "Root filesystem is ${USAGE_PERCENT}% full"
@@ -124,10 +124,10 @@ elif [ "rpi5" = "rpi4" ]; then
 		touch /var/lib/expand-root-done
 elif [ "rpi5" = "r3a" ]; then
 		echo "Applying Rock 3A specific settings..."
-		wget -q https://www.colorado-governor.com/manet/r3a-install.tar.gz -O /root/morse-pi-install.tar.gz || {
-				echo "ERROR: Failed to download Rock 3A package"
+		if [ ! -f /root/morse-pi-install.tar.gz ]; then
+				echo "ERROR: /root/morse-pi-install.tar.gz not found — copy r3a-install.tar.gz to the node first"
 				exit 1
-		}
+		fi
 fi
 
 #

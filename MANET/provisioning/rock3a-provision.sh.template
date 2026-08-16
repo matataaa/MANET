@@ -46,12 +46,11 @@ cd /root
 # Get rid of the extra nonsense printed on an SSH connection
 > /etc/motd
 
-# Download the Rock 3A install package
-echo "Downloading Rock 3A install package..."
-wget -q https://www.colorado-governor.com/manet/r3a-install.tar.gz -O /root/morse-pi-install.tar.gz || {
-	echo "ERROR: Failed to download Rock 3A package"
+# The Rock 3A install package must be staged on the node before provisioning
+if [ ! -f /root/morse-pi-install.tar.gz ]; then
+	echo "ERROR: /root/morse-pi-install.tar.gz not found — copy r3a-install.tar.gz to the node first"
 	exit 1
-}
+fi
 
 #
 #  Setup base system
