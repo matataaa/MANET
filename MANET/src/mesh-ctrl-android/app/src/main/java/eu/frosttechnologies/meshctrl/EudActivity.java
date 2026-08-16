@@ -2,6 +2,7 @@ package eu.frosttechnologies.meshctrl;
 
 import android.annotation.SuppressLint;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -26,6 +27,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -70,6 +72,10 @@ public class EudActivity extends AppCompatActivity {
     private static final long HOLD_MS = 3000;
     private static final long DEBOUNCE_MS = 4000;
     private static final String[] PAGES = {"RADIO", "MESH", "COMMS", "STATUS", "CHAT"};
+    private static final String[] TEMPLATES = {"CHECK IN", "ROGER", "MOVING", "CONTACT"};
+
+    private boolean nvgMode = false;
+    private int cPri, cDim, cBg, cBgAct, cMuted;
 
     private int page = 0;
     private String nodeUrl;
@@ -86,6 +92,7 @@ public class EudActivity extends AppCompatActivity {
     private boolean connected = false;
     private boolean wasConnected = false;
     private boolean pttConnected = false;
+    private int lastSeenMsgCount = 0;
 
     private int txChannel = 1;
     private Set<Integer> rxChannels = new HashSet<>();
@@ -103,19 +110,23 @@ public class EudActivity extends AppCompatActivity {
     private LinearLayout voiceRow, channelGrid, chatInputRow;
     private LinearLayout sidePanel;
     private LinearLayout chatActionRow;
+    private LinearLayout templateRow;
     private ScrollView channelScroll;
     private Button dmTargetBtn;
     private FrameLayout topoContainer;
     private MeshTopoView topoView;
+    private BftView bftView;
     private EditText chatInput;
     private Button chatSendBtn;
     private Button pttBtn;
+    private Button alertBtn;
     private FrameLayout offlineOverlay;
     private TextView offlineSubText;
     private Button[] navButtons;
     private Button[] chanTxButtons;
     private Button[] chanRxButtons;
     private Button homeBtn;
+    private long alertDownTime = 0;
 
     private long homeDownTime = 0;
 
@@ -163,6 +174,68 @@ public class EudActivity extends AppCompatActivity {
         }
     };
 
+    private void applyColors() {
+        if (nvgMode) {
+            cPri = 0xFFCC3333; cDim = 0xFF5a1a1a; cBg = 0xFF1a0a0a;
+            cBgAct = 0xFF2a0a0a; cMuted = 0xFF8a1a1a;
+        } else {
+            cPri = 0xFF33FF33; cDim = 0xFF1a5a1a; cBg = 0xFF0a1a0a;
+            cBgAct = 0xFF0a2a0a; cMuted = 0xFF1a8a1a;
+        }
+    }
+
+    private void toggleNvg() {
+        nvgMode = !nvgMode;
+        applyColors();
+        getSharedPreferences("mesh_ctrl", MODE_PRIVATE).edit()
+                .putBoolean("nvg_mode", nvgMode).apply();
+        tvTitle.setTextColor(cPri);
+        tvTitle.setShadowLayer(6, 0, 0, cPri);
+        tvDisplay.setTextColor(cPri);
+        tvDisplay.setShadowLayer(3, 0, 0, cPri);
+        tvPages.setTextColor(cPri);
+        tvPages.setShadowLayer(4, 0, 0, cPri);
+        tvTime.setTextColor(cMuted);
+        chatInput.setTextColor(cPri);
+        chatInput.setTextColor(cPri);
+        chatInput.setHintTextColor(cDim);
+        chatSendBtn.setTextColor(cPri);
+        recolorButtonRow(chatActionRow);
+        recolorButtonRow(templateRow);
+        int[] vIds = {R.id.eud_btn_mic_up, R.id.eud_btn_mic_down, R.id.eud_btn_vol_up, R.id.eud_btn_vol_down};
+        for (int id : vIds) {
+            Button b = findViewById(id);
+            if (b != null) b.setTextColor(cPri);
+        }
+        if (topoView != null) topoView.setNvgMode(nvgMode);
+        if (bftView != null) bftView.setNvgMode(nvgMode);
+        if (!pttBtn.getText().equals("TX!")) {
+            pttBtn.setTextColor(cPri);
+            GradientDrawable pbg = new GradientDrawable();
+            pbg.setCornerRadius(dpToPx(4));
+            pbg.setColor(cBg);
+            pbg.setStroke(dpToPx(2), cPri);
+            pttBtn.setBackground(pbg);
+        }
+        updateDisplay();
+    }
+
+    private void recolorButtonRow(LinearLayout row) {
+        if (row == null) return;
+        for (int i = 0; i < row.getChildCount(); i++) {
+            View child = row.getChildAt(i);
+            if (child instanceof Button) {
+                Button b = (Button) child;
+                b.setTextColor(cPri);
+                GradientDrawable bg = new GradientDrawable();
+                bg.setCornerRadius(dpToPx(3));
+                bg.setColor(cBg);
+                bg.setStroke(dpToPx(1), cDim);
+                b.setBackground(bg);
+            }
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -173,19 +246,33 @@ public class EudActivity extends AppCompatActivity {
             page = savedInstanceState.getInt("page", 0);
         }
 
+        SharedPreferences prefs = getSharedPreferences("mesh_ctrl", MODE_PRIVATE);
+        nvgMode = prefs.getBoolean("nvg_mode", false);
+        applyColors();
+
         hideSystemUI();
 
         ActionBar ab = getSupportActionBar();
         if (ab != null) ab.hide();
 
-        nodeUrl = getSharedPreferences("mesh_ctrl", MODE_PRIVATE)
-                .getString("node_url", "https://radio.mesh");
+        nodeUrl = prefs.getString("node_url", "https://radio.mesh");
 
         tvTitle = findViewById(R.id.eud_title);
         tvConn = findViewById(R.id.eud_conn);
         tvDisplay = findViewById(R.id.eud_display);
         tvPages = findViewById(R.id.eud_pages);
         tvTime = findViewById(R.id.eud_time);
+
+        tvTitle.setTextColor(cPri);
+        tvTitle.setShadowLayer(6, 0, 0, cPri);
+        tvDisplay.setTextColor(cPri);
+        tvDisplay.setShadowLayer(3, 0, 0, cPri);
+        tvPages.setTextColor(cPri);
+        tvPages.setShadowLayer(4, 0, 0, cPri);
+        tvTime.setTextColor(cMuted);
+
+        tvConn.setOnClickListener(v -> toggleNvg());
+
         voiceRow = findViewById(R.id.eud_voice_row);
         channelGrid = findViewById(R.id.eud_channel_grid);
         if (channelGrid.getParent() instanceof ScrollView) {
@@ -196,12 +283,29 @@ public class EudActivity extends AppCompatActivity {
         topoContainer = findViewById(R.id.eud_topo_container);
         if (topoContainer != null) {
             topoView = new MeshTopoView(this);
+            topoView.setNvgMode(nvgMode);
+            topoView.setOnNodeTapListener((hostname, ip, isMe) -> {
+                if (isMe || ip.isEmpty()) {
+                    Toast.makeText(this, hostname + (isMe ? " (SELF)" : " NO IP"), Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                Toast.makeText(this, "PING " + hostname + "...", Toast.LENGTH_SHORT).show();
+                doPing(hostname, ip);
+            });
             topoContainer.addView(topoView);
+
+            bftView = new BftView(this);
+            bftView.setNvgMode(nvgMode);
+            bftView.setVisibility(View.GONE);
+            topoContainer.addView(bftView);
         }
         chatInput = findViewById(R.id.eud_chat_input);
+        chatInput.setTextColor(cPri);
+        chatInput.setHintTextColor(cDim);
         chatSendBtn = findViewById(R.id.eud_chat_send);
         chatSendBtn.setBackgroundTintList(null);
         chatSendBtn.setStateListAnimator(null);
+        chatSendBtn.setTextColor(cPri);
         chatSendBtn.setOnClickListener(v -> sendChatMessage());
         chatInput.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_SEND) { sendChatMessage(); return true; }
@@ -209,6 +313,7 @@ public class EudActivity extends AppCompatActivity {
         });
 
         buildChatActionRow();
+        buildTemplateRow();
         buildPttButton();
 
         int[] voiceBtnIds = {R.id.eud_btn_mic_up, R.id.eud_btn_mic_down, R.id.eud_btn_vol_up, R.id.eud_btn_vol_down};
@@ -216,6 +321,7 @@ public class EudActivity extends AppCompatActivity {
             Button b = findViewById(id);
             b.setBackgroundTintList(null);
             b.setStateListAnimator(null);
+            b.setTextColor(cPri);
         }
         findViewById(R.id.eud_btn_mic_up).setOnClickListener(v -> adjustRadioVolume("mic", VOL_STEP));
         findViewById(R.id.eud_btn_mic_down).setOnClickListener(v -> adjustRadioVolume("mic", -VOL_STEP));
@@ -242,6 +348,7 @@ public class EudActivity extends AppCompatActivity {
         setupHomeButton();
 
         buildChannelGrid();
+        buildAlertButton();
         buildOfflineOverlay();
         updateDisplay();
     }
@@ -279,6 +386,50 @@ public class EudActivity extends AppCompatActivity {
             int idx = root.indexOfChild(chatInputRow);
             root.addView(chatActionRow, idx);
         }
+    }
+
+    private void buildTemplateRow() {
+        templateRow = new LinearLayout(this);
+        templateRow.setOrientation(LinearLayout.HORIZONTAL);
+        templateRow.setGravity(Gravity.CENTER);
+        templateRow.setVisibility(View.GONE);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dpToPx(2);
+        templateRow.setLayoutParams(lp);
+
+        for (String tmpl : TEMPLATES) {
+            Button btn = makeActionButton(tmpl);
+            btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8);
+            btn.setOnClickListener(v -> { flashButton(btn); sendTemplate(tmpl); });
+            templateRow.addView(btn);
+        }
+
+        if (sidePanel != null) {
+            sidePanel.addView(templateRow);
+        } else {
+            LinearLayout root = (LinearLayout) chatInputRow.getParent();
+            int idx = root.indexOfChild(chatActionRow);
+            root.addView(templateRow, idx);
+        }
+    }
+
+    private void sendTemplate(String message) {
+        String target = getDmTarget();
+        executor.execute(() -> {
+            try {
+                String base = nodeUrl.replaceAll("/$", "");
+                String escaped = message.replace("\\", "\\\\").replace("\"", "\\\"");
+                String body;
+                if (target != null) {
+                    String tEsc = target.replace("\\", "\\\\").replace("\"", "\\\"");
+                    body = "{\"body\":\"" + escaped + "\",\"to\":[\"" + tEsc + "\"]}";
+                } else {
+                    body = "{\"body\":\"" + escaped + "\"}";
+                }
+                postJson(base + "/api/applets/mesh-chat/proxy/send", body);
+            } catch (Exception ignored) {}
+        });
     }
 
     private void launchCamera() {
@@ -320,24 +471,24 @@ public class EudActivity extends AppCompatActivity {
     private void flashButton(Button btn) {
         GradientDrawable flash = new GradientDrawable();
         flash.setCornerRadius(dpToPx(3));
-        flash.setColor(0xFF33FF33);
-        flash.setStroke(dpToPx(1), 0xFF33FF33);
+        flash.setColor(cPri);
+        flash.setStroke(dpToPx(1), cPri);
         btn.setBackground(flash);
         btn.setTextColor(0xFF000000);
         handler.postDelayed(() -> {
             GradientDrawable bg = new GradientDrawable();
             bg.setCornerRadius(dpToPx(3));
-            bg.setColor(0xFF0a1a0a);
-            bg.setStroke(dpToPx(1), 0xFF1a5a1a);
+            bg.setColor(cBg);
+            bg.setStroke(dpToPx(1), cDim);
             btn.setBackground(bg);
-            btn.setTextColor(0xFF33FF33);
+            btn.setTextColor(cPri);
         }, 150);
     }
 
     private Button makeActionButton(String text) {
         Button btn = new Button(this);
         btn.setText(text);
-        btn.setTextColor(0xFF33FF33);
+        btn.setTextColor(cPri);
         btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
         btn.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         btn.setAllCaps(false);
@@ -353,8 +504,8 @@ public class EudActivity extends AppCompatActivity {
         btn.setLayoutParams(lp);
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(dpToPx(3));
-        bg.setColor(0xFF0a1a0a);
-        bg.setStroke(dpToPx(1), 0xFF1a5a1a);
+        bg.setColor(cBg);
+        bg.setStroke(dpToPx(1), cDim);
         btn.setBackground(bg);
         return btn;
     }
@@ -362,7 +513,7 @@ public class EudActivity extends AppCompatActivity {
     private void buildPttButton() {
         pttBtn = new Button(this);
         pttBtn.setText("PTT");
-        pttBtn.setTextColor(0xFF33FF33);
+        pttBtn.setTextColor(cPri);
         pttBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
         pttBtn.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         pttBtn.setAllCaps(false);
@@ -379,8 +530,8 @@ public class EudActivity extends AppCompatActivity {
         pttBtn.setLayoutParams(lp);
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(dpToPx(4));
-        bg.setColor(0xFF0a1a0a);
-        bg.setStroke(dpToPx(2), 0xFF33FF33);
+        bg.setColor(cBg);
+        bg.setStroke(dpToPx(2), cPri);
         pttBtn.setBackground(bg);
 
         pttBtn.setOnTouchListener((v, event) -> {
@@ -411,10 +562,10 @@ public class EudActivity extends AppCompatActivity {
         } else {
             GradientDrawable bg = new GradientDrawable();
             bg.setCornerRadius(dpToPx(4));
-            bg.setColor(0xFF0a1a0a);
-            bg.setStroke(dpToPx(2), 0xFF33FF33);
+            bg.setColor(cBg);
+            bg.setStroke(dpToPx(2), cPri);
             pttBtn.setBackground(bg);
-            pttBtn.setTextColor(0xFF33FF33);
+            pttBtn.setTextColor(cPri);
             pttBtn.setText("PTT");
         }
         executor.execute(() -> {
@@ -425,12 +576,144 @@ public class EudActivity extends AppCompatActivity {
         });
     }
 
+    private final Runnable alertTickRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (alertDownTime == 0) return;
+            long elapsed = System.currentTimeMillis() - alertDownTime;
+            if (elapsed >= 2000) {
+                alertDownTime = 0;
+                resetAlertButton();
+                sendDuress();
+                return;
+            }
+            int secsLeft = (int) Math.ceil((2000 - elapsed) / 1000.0);
+            alertBtn.setText("(" + secsLeft + ") ALERT");
+            handler.postDelayed(this, 100);
+        }
+    };
+
+    private void buildAlertButton() {
+        alertBtn = new Button(this);
+        alertBtn.setText("DURESS");
+        alertBtn.setTextColor(0xFFFF3333);
+        alertBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        alertBtn.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        alertBtn.setAllCaps(false);
+        alertBtn.setPadding(0, 0, 0, 0);
+        alertBtn.setMinimumWidth(0);
+        alertBtn.setMinWidth(0);
+        alertBtn.setMinimumHeight(0);
+        alertBtn.setMinHeight(0);
+        alertBtn.setBackgroundTintList(null);
+        alertBtn.setStateListAnimator(null);
+        alertBtn.setVisibility(View.GONE);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(40));
+        lp.topMargin = dpToPx(4);
+        alertBtn.setLayoutParams(lp);
+        resetAlertButton();
+
+        alertBtn.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    alertDownTime = System.currentTimeMillis();
+                    alertBtn.setText("(2) ALERT");
+                    GradientDrawable press = new GradientDrawable();
+                    press.setCornerRadius(dpToPx(4));
+                    press.setColor(0xFF330000);
+                    press.setStroke(dpToPx(2), 0xFFFF3333);
+                    alertBtn.setBackground(press);
+                    handler.post(alertTickRunnable);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    alertDownTime = 0;
+                    handler.removeCallbacks(alertTickRunnable);
+                    resetAlertButton();
+                    return true;
+            }
+            return false;
+        });
+
+        LinearLayout navParent = (LinearLayout) voiceRow.getParent();
+        int navIdx = navParent.indexOfChild(voiceRow);
+        navParent.addView(alertBtn, navIdx);
+    }
+
+    private void resetAlertButton() {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dpToPx(4));
+        bg.setColor(0xFF1a0000);
+        bg.setStroke(dpToPx(2), 0xFFCC3333);
+        alertBtn.setBackground(bg);
+        alertBtn.setText("DURESS");
+        alertBtn.setTextColor(0xFFFF3333);
+    }
+
+    private void sendDuress() {
+        Toast.makeText(this, "DURESS SENT", Toast.LENGTH_LONG).show();
+        String gps = "NO FIX";
+        if (apiLocal != null) {
+            JSONObject gpsObj = apiLocal.optJSONObject("gps");
+            if (gpsObj != null && gpsObj.optBoolean("connected", false)) {
+                String lat = gpsObj.optString("lat", ""), lon = gpsObj.optString("lon", "");
+                if (!lat.isEmpty() && !lon.isEmpty()) gps = lat + "," + lon;
+            }
+        }
+        String msg = "!DURESS! " + nodeHostname + " @ " + gps + " - IMMEDIATE ASSISTANCE REQUIRED";
+        executor.execute(() -> {
+            try {
+                String base = nodeUrl.replaceAll("/$", "");
+                String escaped = msg.replace("\\", "\\\\").replace("\"", "\\\"");
+                postJson(base + "/api/applets/mesh-chat/proxy/send", "{\"body\":\"" + escaped + "\"}");
+            } catch (Exception ignored) {}
+        });
+    }
+
     private void doSync() {
         executor.execute(() -> {
             try {
                 String base = nodeUrl.replaceAll("/$", "");
                 postJson(base + "/api/applets/mesh-chat/proxy/sync", "{}");
             } catch (Exception ignored) {}
+        });
+    }
+
+    private void doPing(String hostname, String ip) {
+        executor.execute(() -> {
+            try {
+                String base = nodeUrl.replaceAll("/$", "");
+                String body = "{\"target\":\"" + ip + "\",\"count\":3,\"interval\":0.5}";
+                HttpURLConnection conn = openConnection(base + "/api/ping");
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(10000);
+                OutputStream os = conn.getOutputStream();
+                os.write(body.getBytes(StandardCharsets.UTF_8));
+                os.close();
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                reader.close();
+                JSONObject resp = new JSONObject(sb.toString());
+                JSONObject result = resp.optJSONObject("result");
+                String msg;
+                if (result != null && result.has("rtt_avg")) {
+                    double avg = result.optDouble("rtt_avg", 0);
+                    int loss = result.optInt("loss_pct", 0);
+                    msg = hostname + ": " + String.format(Locale.US, "%.1fms", avg)
+                            + (loss > 0 ? " (" + loss + "% loss)" : "");
+                } else {
+                    msg = hostname + ": TIMEOUT";
+                }
+                runOnUiThread(() -> Toast.makeText(this, msg, Toast.LENGTH_LONG).show());
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, hostname + ": UNREACHABLE", Toast.LENGTH_SHORT).show());
+            }
         });
     }
 
@@ -485,7 +768,7 @@ public class EudActivity extends AppCompatActivity {
                 case MotionEvent.ACTION_DOWN:
                     homeDownTime = System.currentTimeMillis();
                     homeBtn.setText("(3) MGMT");
-                    homeBtn.setTextColor(0xFF33FF33);
+                    homeBtn.setTextColor(cPri);
                     homeBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
                     homeBtn.setPadding(dpToPx(4), 0, 0, 0);
                     handler.post(homeTickRunnable);
@@ -515,7 +798,7 @@ public class EudActivity extends AppCompatActivity {
         homeBtn.setText("HOME");
         homeBtn.setGravity(Gravity.CENTER);
         homeBtn.setPadding(0, 0, 0, 0);
-        homeBtn.setTextColor(0xFF33FF33);
+        homeBtn.setTextColor(cPri);
     }
 
     private void buildOfflineOverlay() {
@@ -635,7 +918,7 @@ public class EudActivity extends AppCompatActivity {
     private Button makeChanButton(String text) {
         Button btn = new Button(this);
         btn.setText(text);
-        btn.setTextColor(0xFF33FF33);
+        btn.setTextColor(cPri);
         btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
         btn.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         btn.setAllCaps(false);
@@ -659,13 +942,13 @@ public class EudActivity extends AppCompatActivity {
             if (txBtn != null) {
                 GradientDrawable txBg = new GradientDrawable();
                 txBg.setCornerRadius(dpToPx(3));
-                txBg.setStroke(dpToPx(2), 0xFF33FF33);
+                txBg.setStroke(dpToPx(2), cPri);
                 if (ch == txChannel) {
-                    txBg.setColor(0xFF33FF33);
+                    txBg.setColor(cPri);
                     txBtn.setTextColor(0xFF000000);
                 } else {
-                    txBg.setColor(0xFF0a1a0a);
-                    txBtn.setTextColor(0xFF33FF33);
+                    txBg.setColor(cBg);
+                    txBtn.setTextColor(cPri);
                 }
                 txBtn.setText(label + "TX");
                 txBtn.setBackground(txBg);
@@ -675,13 +958,13 @@ public class EudActivity extends AppCompatActivity {
             if (rxBtn != null) {
                 GradientDrawable rxBg = new GradientDrawable();
                 rxBg.setCornerRadius(dpToPx(3));
-                rxBg.setStroke(dpToPx(2), 0xFF33FF33);
+                rxBg.setStroke(dpToPx(2), cPri);
                 if (rxChannels.contains(ch)) {
-                    rxBg.setColor(0xFF33FF33);
+                    rxBg.setColor(cPri);
                     rxBtn.setTextColor(0xFF000000);
                 } else {
-                    rxBg.setColor(0xFF0a1a0a);
-                    rxBtn.setTextColor(0xFF33FF33);
+                    rxBg.setColor(cBg);
+                    rxBtn.setTextColor(cPri);
                 }
                 rxBtn.setText(label + "RX");
                 rxBtn.setBackground(rxBg);
@@ -735,6 +1018,7 @@ public class EudActivity extends AppCompatActivity {
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
         outState.putInt("page", page);
+        outState.putBoolean("nvg_mode", nvgMode);
     }
 
     @Override
@@ -888,7 +1172,26 @@ public class EudActivity extends AppCompatActivity {
                     apiChannels = cObj;
                     chatUnread = ur;
                     chatAvailable = chatOkFinal;
-                    if (msgsFinal != null) chatMessages = msgsFinal;
+
+                    if (msgsFinal != null) {
+                        int prevCount = chatMessages != null ? chatMessages.length() : 0;
+                        chatMessages = msgsFinal;
+                        if (msgsFinal.length() > prevCount && page != 4) {
+                            for (int i = prevCount; i < msgsFinal.length(); i++) {
+                                JSONObject m = msgsFinal.optJSONObject(i);
+                                if (m != null && "file".equals(m.optString("type"))) {
+                                    String fname = "";
+                                    JSONObject f = m.optJSONObject("file");
+                                    if (f != null) fname = f.optString("name", "file");
+                                    Toast.makeText(EudActivity.this,
+                                            "FILE: " + fname + " from " + m.optString("from", "?"),
+                                            Toast.LENGTH_SHORT).show();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
                     if (!chatHostFinal.isEmpty()) chatHostname = chatHostFinal;
                     if (!peersFinal.isEmpty()) {
                         peersFinal.remove(chatHostname);
@@ -940,8 +1243,8 @@ public class EudActivity extends AppCompatActivity {
     private void updateDisplay() {
         String titleHost = nodeHostname.isEmpty() ? "" : " " + truncate(nodeHostname, 16);
         tvTitle.setText("── " + PAGES[page] + " ──" + titleHost);
-        tvConn.setText(connected ? "■" : "□");
-        tvConn.setTextColor(connected ? 0xFF33FF33 : 0xFF994444);
+        tvConn.setText(connected ? (nvgMode ? "NVG" : "■") : "□");
+        tvConn.setTextColor(connected ? cPri : 0xFF994444);
 
         if (offlineOverlay != null) {
             offlineOverlay.setVisibility(connected ? View.GONE : View.VISIBLE);
@@ -963,13 +1266,13 @@ public class EudActivity extends AppCompatActivity {
             GradientDrawable bg = new GradientDrawable();
             bg.setCornerRadius(dpToPx(4));
             if (i == page) {
-                bg.setColor(0xFF0a2a0a);
-                bg.setStroke(dpToPx(2), 0xFF33FF33);
-                navButtons[i].setTextColor(0xFF33FF33);
+                bg.setColor(cBgAct);
+                bg.setStroke(dpToPx(2), cPri);
+                navButtons[i].setTextColor(cPri);
             } else {
-                bg.setColor(0xFF0a1a0a);
-                bg.setStroke(dpToPx(1), 0xFF1a5a1a);
-                navButtons[i].setTextColor(0xFF1a5a1a);
+                bg.setColor(cBg);
+                bg.setStroke(dpToPx(1), cDim);
+                navButtons[i].setTextColor(cDim);
             }
             navButtons[i].setBackground(bg);
         }
@@ -984,11 +1287,15 @@ public class EudActivity extends AppCompatActivity {
         voiceRow.setVisibility(comms ? View.VISIBLE : View.GONE);
         chatInputRow.setVisibility(chat && chatAvailable ? View.VISIBLE : View.GONE);
         chatActionRow.setVisibility(chat && chatAvailable ? View.VISIBLE : View.GONE);
+        templateRow.setVisibility(chat && chatAvailable ? View.VISIBLE : View.GONE);
+        boolean stat = page == 3;
         if (topoContainer != null) {
-            topoContainer.setVisibility(mesh ? View.VISIBLE : View.GONE);
+            topoContainer.setVisibility((mesh || stat) ? View.VISIBLE : View.GONE);
+            if (topoView != null) topoView.setVisibility(mesh ? View.VISIBLE : View.GONE);
+            if (bftView != null) bftView.setVisibility(stat ? View.VISIBLE : View.GONE);
         }
         if (sidePanel != null) {
-            sidePanel.setVisibility((comms || mesh || (chat && chatAvailable)) ? View.VISIBLE : View.GONE);
+            sidePanel.setVisibility((comms || mesh || stat || (chat && chatAvailable)) ? View.VISIBLE : View.GONE);
         }
         int eudCount = 0;
         if (apiLocal != null) {
@@ -1002,8 +1309,12 @@ public class EudActivity extends AppCompatActivity {
                     apiData.optLong("timestamp", 0),
                     eudCount);
         }
+        if (stat && bftView != null && apiData != null) {
+            bftView.setData(apiData.optJSONArray("nodes"), apiData.optLong("timestamp", 0));
+        }
 
         pttBtn.setVisibility(comms && pttConnected ? View.VISIBLE : View.GONE);
+        alertBtn.setVisibility(stat ? View.VISIBLE : View.GONE);
 
         if (comms) updateChannelButtons();
 
@@ -1034,6 +1345,7 @@ public class EudActivity extends AppCompatActivity {
         StringBuilder sb = new StringBuilder();
         String ssid = optLocalStr("mesh_ssid", "--");
         String freq = "--", bw = "--", tx = "--", ch = "--", state = "--", ifname = "wlan2";
+        String signal = "--";
         if (apiLocal != null) {
             JSONArray ifaces = apiLocal.optJSONArray("interfaces");
             if (ifaces != null) {
@@ -1046,19 +1358,29 @@ public class EudActivity extends AppCompatActivity {
                         ch = ifc.optString("channel", "--");
                         state = ifc.optString("state", "--").toUpperCase();
                         ifname = ifc.optString("name", "wlan2");
+                        signal = ifc.optString("signal_dbm", "--");
                         break;
                     }
                 }
             }
         }
-        sb.append(row("SSID", ssid));
-        sb.append(row("CHAN", ch));
-        sb.append(row("FREQ", freq.equals("--") ? "--" : freq + " MHz"));
-        sb.append(row("BW", bw));
-        sb.append(row("TX", tx.equals("--") ? "--" : tx + " dBm"));
-        sb.append(row("LINK", ifname + " " + state));
-        sb.append(row("UPD", lastUpdateTime()));
+        sb.append(" ┌─ RF LINK ───────────┐\n");
+        sb.append(cardRow("SSID", ssid));
+        sb.append(cardRow("CHAN", ch + " / " + (freq.equals("--") ? "--" : freq + " MHz")));
+        sb.append(cardRow("BW", bw));
+        sb.append(cardRow("TX PWR", tx.equals("--") ? "--" : tx + " dBm"));
+        sb.append(cardRow("SIGNAL", signal.equals("--") ? "--" : signal + " dBm"));
+        sb.append(cardRow("STATE", ifname + " " + state));
+        sb.append(" └──────────────────────┘\n");
+        sb.append(" ┌─ SYSTEM ────────────┐\n");
+        sb.append(cardRow("MODE", nvgMode ? "NVG RED" : "STD GRN"));
+        sb.append(cardRow("UPD", lastUpdateTime()));
+        sb.append(" └──────────────────────┘\n");
         return sb.toString();
+    }
+
+    private String cardRow(String label, String value) {
+        return String.format(Locale.US, " │ %-5s %s\n", label, value);
     }
 
     private String formatMesh() {
@@ -1103,13 +1425,17 @@ public class EudActivity extends AppCompatActivity {
             String selGw = apiData.optString("selected_gw", "");
             if (!selGw.isEmpty()) gw = selGw;
         }
-        sb.append(row("NODES", online + "/" + total + " ONLINE"));
-        sb.append(row("SELF", selfIp));
-        sb.append(row("GW", gw));
-        sb.append(row("BEST", bestTp));
-        sb.append(row("GWs", apiData != null ? "" + apiData.optInt("gateway_count", 0) : "--"));
-        sb.append(row("PROTO", "BATMAN_V"));
-        sb.append(row("UPD", lastUpdateTime()));
+        sb.append(" ┌─ TOPOLOGY ──────────┐\n");
+        sb.append(cardRow("NODES", online + "/" + total + " ONLINE"));
+        sb.append(cardRow("SELF", selfIp));
+        sb.append(cardRow("GW", gw));
+        sb.append(cardRow("GWs", apiData != null ? "" + apiData.optInt("gateway_count", 0) : "--"));
+        sb.append(" └──────────────────────┘\n");
+        sb.append(" ┌─ PERFORMANCE ───────┐\n");
+        sb.append(cardRow("BEST", bestTp));
+        sb.append(cardRow("PROTO", "BATMAN_V"));
+        sb.append(cardRow("UPD", lastUpdateTime()));
+        sb.append(" └──────────────────────┘\n");
         return sb.toString();
     }
 
@@ -1186,13 +1512,17 @@ public class EudActivity extends AppCompatActivity {
                 gps = (!lat.isEmpty() && !lon.isEmpty()) ? lat + "," + lon : "CONNECTED";
             }
         }
-        sb.append(row("UP", uptime));
-        sb.append(row("HOST", truncate(hostname, 20)));
-        sb.append(row("EUD", eudMode));
-        sb.append(row("GW", isGw ? "YES" : "NO"));
-        if (usbTether) sb.append(row("USB", "TETHERED ▲"));
-        sb.append(row("GPS", gps));
-        sb.append(row("UPD", lastUpdateTime()));
+        sb.append(" ┌─ NODE ──────────────┐\n");
+        sb.append(cardRow("HOST", truncate(hostname, 18)));
+        sb.append(cardRow("UP", uptime));
+        sb.append(cardRow("EUD", eudMode));
+        sb.append(cardRow("GW", isGw ? "YES" : "NO"));
+        if (usbTether) sb.append(cardRow("USB", "TETHERED"));
+        sb.append(" └──────────────────────┘\n");
+        sb.append(" ┌─ POSITION ──────────┐\n");
+        sb.append(cardRow("GPS", gps));
+        sb.append(cardRow("UPD", lastUpdateTime()));
+        sb.append(" └──────────────────────┘\n");
         return sb.toString();
     }
 
