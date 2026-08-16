@@ -187,6 +187,7 @@ type LocalData struct {
 	Throttle   *ThrottleInfo     `json:"throttle,omitempty"`
 	Network    *NetworkState     `json:"network,omitempty"`
 	System     *SystemStats      `json:"system,omitempty"`
+	Airtime    *AirtimeInfo      `json:"airtime,omitempty"`
 }
 
 type BatOriginator struct {

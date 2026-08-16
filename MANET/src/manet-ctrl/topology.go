@@ -112,6 +112,7 @@ func assembleLocalData() LocalData {
 		Throttle:   throttle,
 		Network:    network,
 		System:     getSystemStats(),
+		Airtime:    currentAirtime(),
 	}
 }
 

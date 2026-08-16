@@ -10,6 +10,7 @@ function dashboardActivate() {
       </div>
       <div class="dash-side">
         <div id="dash-network-wrap"></div>
+        <div id="dash-airtime-wrap"></div>
         <div class="card">
           <div class="card-header">MESH NODES <span id="dash-node-count"></span></div>
           <div id="dash-node-list"></div>
@@ -42,9 +43,46 @@ function dashboardUpdate() {
   renderDashNodeList(DATA.nodes);
   renderThrottleWarning();
   renderDashNetwork();
+  renderDashAirtime();
   renderDashDaemons();
   renderDashApplets();
   renderFleetBubble();
+}
+
+function fmtBps(bps) {
+  if (bps == null || bps < 1) return '0';
+  if (bps < 1000) return Math.round(bps) + ' bps';
+  if (bps < 1000000) return (bps / 1000).toFixed(1) + ' kbps';
+  return (bps / 1000000).toFixed(2) + ' Mbps';
+}
+
+function renderDashAirtime() {
+  var wrap = document.getElementById('dash-airtime-wrap');
+  if (!wrap || !LOCAL_DATA || !LOCAL_DATA.airtime) { if (wrap) wrap.innerHTML = ''; return; }
+  var a = LOCAL_DATA.airtime;
+  var capBps = (a.capacity_mbps || 0) * 1000000;
+  var totalBps = (a.total_tx_bps || 0) + (a.total_rx_bps || 0);
+  var pct = capBps > 0 ? Math.min(100, Math.round(totalBps / capBps * 100)) : 0;
+  var pctColor = pct < 50 ? 'var(--good)' : pct < 80 ? 'var(--warn)' : 'var(--bad)';
+
+  var html = '<div class="card"><div class="card-header">AIRTIME';
+  if (a.capacity_mbps) html += ' <span style="color:var(--muted);font-weight:400">' + pct + '% of ' + a.capacity_mbps + ' Mbps</span>';
+  html += '</div><div style="padding:8px 14px 10px">';
+  html += '<div class="topo-fleet-ack-bar" style="margin-bottom:8px"><div class="topo-fleet-ack-fill" style="width:' + pct + '%;background:' + pctColor + '"></div></div>';
+  html += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px">';
+  html += '<span>' + escHtml(a.mesh_iface || '') + ' air total</span><span>&uarr; ' + fmtBps(a.total_tx_bps) + ' &nbsp; &darr; ' + fmtBps(a.total_rx_bps) + '</span></div>';
+  if (a.services && a.services.length) {
+    a.services.forEach(function(s) {
+      var active = (s.tx_bps + s.rx_bps) >= 1;
+      html += '<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0' + (active ? '' : ';opacity:.45') + '">';
+      html += '<span>' + escHtml(s.name) + '</span>';
+      html += '<span class="mono" style="font-size:11px">&uarr; ' + fmtBps(s.tx_bps) + ' &nbsp; &darr; ' + fmtBps(s.rx_bps) + '</span></div>';
+    });
+  } else if (!a.counters_ok) {
+    html += '<div style="font-size:11px;color:var(--muted)">Per-service counters unavailable (nft)</div>';
+  }
+  html += '</div></div>';
+  wrap.innerHTML = html;
 }
 
 function renderDashNetwork() {

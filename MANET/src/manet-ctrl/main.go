@@ -507,6 +507,7 @@ func main() {
 	voiceInitChannels()
 	go fleetConfigWatcher()
 	go fleetMcastListener()
+	go airtimeLoop()
 
 	handler := appletHostRedirect(mux, *webRoot)
 
