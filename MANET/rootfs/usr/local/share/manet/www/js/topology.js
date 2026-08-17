@@ -74,7 +74,10 @@ function topoInit(container) {
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#00d4cf" stroke-width="3.5"/></svg><span>GW Route</span></div>' +
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="1.5" stroke-dasharray="6,3"/></svg><span>Multi-hop</span></div>' +
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="1.5" stroke-dasharray="3,5"/></svg><span>Inferred</span></div>' +
-    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="4,6" opacity="0.4"/></svg><span>Stale</span></div>';
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="4,6" opacity="0.4"/></svg><span>Stale</span></div>' +
+    '<div class="topo-legend-title" style="margin-top:6px">RADIO</div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="2.5"/></svg><span>WiFi mesh</span></div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="2.5" stroke-dasharray="1,3"/></svg><span>HaLow</span></div>';
   container.appendChild(legend);
 
   var bar = document.createElement('div');
@@ -205,6 +208,11 @@ function topoUpdate(data) {
       if (d.type === 'inferred') return '3,5';
       if (d.type === 'multihop') return '6,3';
       if (d.type === 'unknown') return '2,6';
+      // 'direct' links are solid by default (no route-type pattern to
+      // show) — free to use a fine dotted pattern here to mark HaLow vs
+      // solid for standard WiFi mesh, without colliding with the dash
+      // patterns above that already mean something else (multihop etc).
+      if (d.type === 'direct' && isHalowIface(d.iface)) return '1,3';
       return null;
     })
     .attr('stroke-opacity', function(d) {
@@ -227,11 +235,9 @@ function topoUpdate(data) {
     .text(function(d) {
       var s = d.source.id || d.source, t = d.target.id || d.target;
       if (staleIds.has(s) || staleIds.has(t)) return '';
-      var radio = d.iface ? (isHalowIface(d.iface) ? 'HaLow' : 'WiFi') : '';
-      var speed = d.throughput != null && d.throughput > 0 ? fmtThroughput(d.throughput) :
-                  (d.tq != null ? tqPct(d.tq) + '%' : '');
-      if (!speed) return '';
-      return radio ? speed + ' · ' + radio : speed;
+      if (d.throughput != null && d.throughput > 0) return fmtThroughput(d.throughput);
+      if (d.tq == null) return '';
+      return tqPct(d.tq) + '%';
     })
     .attr('fill', function(d) {
       if (d.gw_route) return '#00d4cf';
@@ -396,6 +402,9 @@ function topoUpdate(data) {
         var cap = halowCapacity();
         var capNote = cap ? ' <span style="opacity:0.6">(' + Math.min(100, Math.round(d.best_link.throughput / cap * 100)) + '% of ch)</span>' : '';
         html += '<div class="tt-row"><span class="tt-label">Speed</span>' + fmtThroughput(d.best_link.throughput) + capNote + '</div>';
+      }
+      if (!d.is_me && d.best_link && d.best_link.iface) {
+        html += '<div class="tt-row"><span class="tt-label">Radio</span>' + (isHalowIface(d.best_link.iface) ? 'HaLow' : 'WiFi') + ' (' + escHtml(d.best_link.iface) + ')</div>';
       }
       if (!d.is_me && d.tq != null) html += '<div class="tt-row"><span class="tt-label">TQ</span>' + d.tq + ' (' + tqPct(d.tq) + '%)</div>';
       if (d.hop_count) html += '<div class="tt-row"><span class="tt-label">Hops</span>' + d.hop_count + '</div>';
