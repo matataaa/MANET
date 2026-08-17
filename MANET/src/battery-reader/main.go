@@ -422,33 +422,55 @@ func main() {
 		os.Exit(0)
 	}
 
-	bus, err := openBus()
-	if err != nil {
-		log.Fatalf("Failed to open I2C bus: %v", err)
-	}
-
-	log.Printf("Probing for a battery HAT on I2C bus %d...", i2cBus)
-	chip := detectChip(bus)
-	if chip == nil {
-		log.Printf("No known battery HAT responded (checked IP2368 @0x%02X and INA219 @%v) — reporting unknown and retrying every %s",
-			ip2368Addr, ina219Candidates, readInterval)
-	}
-
 	const cellLowMV = 3150 // IP2368 per-cell shutdown threshold
 	const packLowV = 6.6   // INA219: 2S pack, ~3.3V/cell shutdown threshold
 
 	shutdownTriggered := false
 	consecutiveErrors := 0
 
+	var bus *i2cBusHandle
+	var chip batteryChip
+
 	for {
+		// /dev/i2c-1 may not exist yet even with battery_monitor=y and
+		// i2c-dev in /etc/modules-load.d: on a node's very first boot after
+		// provisioning, radio-setup.sh appends that entry to the same file
+		// systemd-modules-load.service already read earlier in *this* boot,
+		// so the device node only appears after the next reboot. Treating
+		// that as fatal made this service crash-loop forever (confirmed live
+		// on a node with no UPS HAT at all) instead of just waiting like the
+		// no-chip-detected case below already does.
+		if bus == nil {
+			var err error
+			bus, err = openBus()
+			if err != nil {
+				consecutiveErrors++
+				log.Printf("I2C bus not available (%d consecutive): %v", consecutiveErrors, err)
+				if consecutiveErrors == 1 {
+					writeAtomic(outputFile, batteryStatus{
+						Status:    "unknown",
+						Timestamp: nowStamp(),
+					})
+				}
+				time.Sleep(readInterval)
+				continue
+			}
+			log.Printf("Probing for a battery HAT on I2C bus %d...", i2cBus)
+		}
+
 		if chip == nil {
 			// Nothing answered at startup; keep retrying detection rather
 			// than staying permanently blind if the HAT is hot-plugged or
 			// was just a transient bus/wiring issue.
 			chip = detectChip(bus)
+			if chip == nil {
+				log.Printf("No known battery HAT responded (checked IP2368 @0x%02X and INA219 @%v) — reporting unknown and retrying every %s",
+					ip2368Addr, ina219Candidates, readInterval)
+			}
 		}
 
 		var data *batteryStatus
+		var err error
 		if chip != nil {
 			data, err = chip.read(bus)
 		} else {
