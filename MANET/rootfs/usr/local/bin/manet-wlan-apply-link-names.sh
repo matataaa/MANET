@@ -128,10 +128,19 @@ remap_lines_by_mac() {
     [[ -f "$f" ]] || return 0
     while read -r line; do
         [[ -z "${line//[$'\t\r\n ']}" ]] && continue
-        if [[ -e "/sys/class/net/$line" ]]; then
-            m=$(read_mac "$line")
-        elif [[ -n "${pre_rename_mac[$line]:-}" ]]; then
+        # Prefer the pre-rename snapshot over a live sysfs lookup: after a
+        # multi-way swap (e.g. 3 interfaces rotating names), every old name
+        # still exists post-rename, just bound to a *different* device — so
+        # "-e /sys/class/net/$line" is true for the wrong reason and silently
+        # remaps to whichever device now happens to sit at that name instead
+        # of the device this file originally meant. Confirmed live: a 3-way
+        # wlan0/wlan1/wlan2 swap between an MT7916 card and a USB HaLow
+        # dongle left ap_interface pointing at the HaLow radio (which then
+        # got configured as the 5GHz AP) instead of the MT7916 5GHz port.
+        if [[ -n "${pre_rename_mac[$line]:-}" ]]; then
             m="${pre_rename_mac[$line]}"
+        elif [[ -e "/sys/class/net/$line" ]]; then
+            m=$(read_mac "$line")
         else
             lines+=("$line")
             continue
@@ -148,10 +157,12 @@ remap_single_line() {
     [[ -f "$f" ]] || return 0
     line=$(head -1 "$f" | tr -d '\r')
     [[ -z "${line// }" ]] && return 0
-    if [[ -e "/sys/class/net/$line" ]]; then
-        m=$(read_mac "$line")
-    elif [[ -n "${pre_rename_mac[$line]:-}" ]]; then
+    # See remap_lines_by_mac: pre-rename snapshot must win over a live
+    # sysfs lookup, or a multi-way name swap resolves to the wrong device.
+    if [[ -n "${pre_rename_mac[$line]:-}" ]]; then
         m="${pre_rename_mac[$line]}"
+    elif [[ -e "/sys/class/net/$line" ]]; then
+        m=$(read_mac "$line")
     else
         return 0
     fi
@@ -167,19 +178,21 @@ remap_iface_map() {
         [[ -z "${line// }" ]] && continue
         left="${line%%:*}"
         right="${line#*:}"
-        if [[ -e "/sys/class/net/$left" ]]; then
-            nl=$(iface_for_mac "$(read_mac "$left")") || return 1
-        elif [[ -n "${pre_rename_mac[$left]:-}" ]]; then
+        # See remap_lines_by_mac: pre-rename snapshot must win over a live
+        # sysfs lookup, or a multi-way name swap resolves to the wrong device.
+        if [[ -n "${pre_rename_mac[$left]:-}" ]]; then
             m="${pre_rename_mac[$left]}"
             nl=$(iface_for_mac "$m") || nl="$left"
+        elif [[ -e "/sys/class/net/$left" ]]; then
+            nl=$(iface_for_mac "$(read_mac "$left")") || return 1
         else
             nl="$left"
         fi
-        if [[ -e "/sys/class/net/$right" ]]; then
-            nr=$(iface_for_mac "$(read_mac "$right")") || return 1
-        elif [[ -n "${pre_rename_mac[$right]:-}" ]]; then
+        if [[ -n "${pre_rename_mac[$right]:-}" ]]; then
             m="${pre_rename_mac[$right]}"
             nr=$(iface_for_mac "$m") || nr="$right"
+        elif [[ -e "/sys/class/net/$right" ]]; then
+            nr=$(iface_for_mac "$(read_mac "$right")") || return 1
         else
             nr="$right"
         fi
