@@ -45,4 +45,12 @@ MANET/provisioning/.image-cache/
 # Vendored CM4 kernel/module overlay (see kernel-work/packages/cm4-sbc-overlay/
 # VENDORED_FROM.md) — kept local-only for build-cm4-tarball.sh's SBC_OVERLAY_DIR
 # auto-detection, never tracked in git (~46MB of third-party kernel binaries).
-kernel-work/
+# The fetch script that (re)populates it stays tracked, so a fresh clone
+# has a way to reproduce the directory instead of just missing it.
+kernel-work/*
+!kernel-work/packages/
+kernel-work/packages/*
+!kernel-work/packages/cm4-sbc-overlay/
+kernel-work/packages/cm4-sbc-overlay/*
+!kernel-work/packages/cm4-sbc-overlay/fetch-overlay.sh
+!kernel-work/packages/cm4-sbc-overlay/VENDORED_FROM.md
