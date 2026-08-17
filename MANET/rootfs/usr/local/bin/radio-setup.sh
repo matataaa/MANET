@@ -448,6 +448,20 @@ if [ "$PHY_COUNT" -eq 0 ]; then
     echo "  If you expect wireless: check 'dmesg | grep -i firmware'"
 fi
 
+# mt76 (mt7915e/MT7916) LED devices come up with the "phyNtpt" throughput-
+# blink trigger active by default. That trigger's periodic timer touches
+# PCIe MMIO registers, and racing it against an interface mode change —
+# which every step below does (renames, mesh setup, AP managed-mode
+# switch) — can hit a fatal "Asynchronous SError Interrupt" and panic the
+# kernel. Confirmed live: a full kernel panic in exactly this path right
+# as an AP radio was switched to managed mode for hostapd. The udev rule
+# (82-mt76-led-tpt-disable.rules) covers future boots, but the LED devices
+# here already exist from this boot's driver probe, before that rule was
+# even extracted from the tarball — so disable it directly too.
+for _led in /sys/class/leds/mt76-phy*; do
+    [ -e "$_led/trigger" ] && echo none > "$_led/trigger" 2>/dev/null || true
+done
+
 # ============================================================================
 # === INTERFACE DETECTION ===
 # ============================================================================
