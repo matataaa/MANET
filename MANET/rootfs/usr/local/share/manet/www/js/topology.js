@@ -77,7 +77,7 @@ function topoInit(container) {
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="4,6" opacity="0.4"/></svg><span>Stale</span></div>' +
     '<div class="topo-legend-title" style="margin-top:6px">RADIO</div>' +
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="2.5"/></svg><span>WiFi mesh</span></div>' +
-    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="2.5" stroke-dasharray="1,3"/></svg><span>HaLow</span></div>';
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="2.5" stroke-dasharray="3,3"/></svg><span>HaLow</span></div>';
   container.appendChild(legend);
 
   var bar = document.createElement('div');
@@ -180,7 +180,7 @@ function topoUpdate(data) {
   var links = (data.edges || []).filter(function(e) {
     return nodeIds.has(e.source) && nodeIds.has(e.target);
   }).map(function(e) {
-    return { source: e.source, target: e.target, type: e.type, tq: e.tq, throughput: e.throughput, gw_route: e.gw_route };
+    return { source: e.source, target: e.target, type: e.type, tq: e.tq, throughput: e.throughput, gw_route: e.gw_route, iface: e.iface };
   });
 
   // Status bar
