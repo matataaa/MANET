@@ -183,6 +183,101 @@ function Expand-XzFile {
     return $false
 }
 
+# Converts a Windows path (C:\foo\bar) to the equivalent WSL path (/mnt/c/foo/bar).
+function ConvertTo-WslPath {
+    param([string]$WindowsPath)
+
+    $p = $WindowsPath -replace '\\', '/'
+    if ($p -match '^([A-Za-z]):(.*)') { $p = "/mnt/$($Matches[1].ToLower())$($Matches[2])" }
+    return $p
+}
+
+# Rebuilds the local tools tarball for $HARDWARE_MODEL via the packaging/
+# build script, run inside WSL (cross-compiling Go/building the APK isn't
+# practical from native PowerShell). Returns the Windows path to the tarball,
+# which may not exist if the rebuild was skipped or failed.
+function Build-ToolsTarball {
+    param([string]$RepoRoot)
+
+    $tarballName = ""; $buildScript = ""
+    switch ($Script:HARDWARE_MODEL) {
+        { $_ -in @('cm4', 'rpi4') } { $tarballName = "cm4-tools.tar.gz";  $buildScript = "build-cm4-tarball.sh" }
+        'rpi5'                     { $tarballName = "rpi5-tools.tar.gz"; $buildScript = "build-rpi5-tarball.sh" }
+    }
+    if (-not $tarballName) { return $null }
+
+    $installDir = Join-Path $RepoRoot "install_packages"
+    $tarballPath = Join-Path $installDir $tarballName
+    $buildScriptPath = Join-Path (Join-Path $RepoRoot "packaging") $buildScript
+
+    if (Test-Path $buildScriptPath) {
+        $wsl = Get-Command wsl -ErrorAction SilentlyContinue
+        if ($wsl) {
+            Write-Host "Rebuilding $tarballName via WSL..."
+            New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+            $wslPackagingDir = ConvertTo-WslPath (Join-Path $RepoRoot "packaging")
+            $wslTarballPath = ConvertTo-WslPath $tarballPath
+            & wsl bash "$wslPackagingDir/$buildScript" "$wslTarballPath"
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $tarballPath)) {
+                $sizeMB = [math]::Round((Get-Item $tarballPath).Length / 1MB, 1)
+                Write-Host "Tarball rebuilt: ${sizeMB}MB"
+            } else {
+                Write-Host "WARNING: Tarball rebuild failed (exit $LASTEXITCODE)." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "WARNING: WSL not found — cannot build $tarballName locally." -ForegroundColor Yellow
+            Write-Host "         Install WSL (wsl --install) with Go (and the Android SDK for the APK) to build it, or the node will download it at first boot." -ForegroundColor Yellow
+        }
+    }
+
+    return $tarballPath
+}
+
+# Copies the tools tarball onto the boot (FAT32) partition of $DiskNumber so
+# firstrun.sh doesn't need internet on first boot.
+function Add-ToolsTarballToBootPartition {
+    param([int]$DiskNumber, [string]$TarballPath)
+
+    if (-not $TarballPath -or -not (Test-Path $TarballPath)) {
+        Write-Host "WARNING: Tools tarball not found — node will download at first boot" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "Embedding tools tarball onto boot partition..."
+    Start-Sleep -Seconds 1
+    try { Update-Disk -Number $DiskNumber -ErrorAction SilentlyContinue } catch {}
+
+    $bootPartition = Get-Partition -DiskNumber $DiskNumber -ErrorAction SilentlyContinue |
+        Where-Object { (Get-Volume -Partition $_ -ErrorAction SilentlyContinue).FileSystem -eq 'FAT32' } |
+        Select-Object -First 1
+
+    if (-not $bootPartition) {
+        Write-Host "WARNING: Could not find boot partition on disk $DiskNumber — node will download tarball at first boot" -ForegroundColor Yellow
+        return
+    }
+
+    $addedLetter = $false
+    if (-not $bootPartition.DriveLetter) {
+        try {
+            $bootPartition | Add-PartitionAccessPath -AssignDriveLetter -ErrorAction Stop
+            $addedLetter = $true
+            $bootPartition = Get-Partition -DiskNumber $DiskNumber -PartitionNumber $bootPartition.PartitionNumber
+        } catch {
+            Write-Host "WARNING: Could not mount boot partition — node will download tarball at first boot" -ForegroundColor Yellow
+            return
+        }
+    }
+
+    $driveRoot = "$($bootPartition.DriveLetter):\"
+    Copy-Item -Path $TarballPath -Destination (Join-Path $driveRoot "mesh-tools.tar.gz") -Force
+    $sizeMB = [math]::Round((Get-Item $TarballPath).Length / 1MB, 1)
+    Write-Host "Embedded tools tarball: $(Split-Path $TarballPath -Leaf) (${sizeMB}MB)"
+
+    if ($addedLetter) {
+        try { $bootPartition | Remove-PartitionAccessPath -AccessPath $driveRoot -ErrorAction SilentlyContinue } catch {}
+    }
+}
+
 # ============================================================
 # Armbian Image Acquisition (Rock 3A)
 # ============================================================
@@ -1176,6 +1271,11 @@ WantedBy=multi-user.target
 
         if ($LASTEXITCODE -eq 0) {
             $flashCount++
+
+            $repoRoot = Split-Path -Parent $ScriptDir
+            $tarballPath = Build-ToolsTarball -RepoRoot $repoRoot
+            Add-ToolsTarballToBootPartition -DiskNumber $Script:TARGET_DEVICE -TarballPath $tarballPath
+
             Write-Host ""
             Write-Host "==============================================" -ForegroundColor Green
             Write-Host "           DONE: Flash complete!" -ForegroundColor Green

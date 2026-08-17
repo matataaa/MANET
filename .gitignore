@@ -41,3 +41,8 @@ MANET/src/mesh-ctrl-android/app/build/
 
 # Provisioning scratch
 MANET/provisioning/.image-cache/
+
+# Vendored CM4 kernel/module overlay (see kernel-work/packages/cm4-sbc-overlay/
+# VENDORED_FROM.md) — kept local-only for build-cm4-tarball.sh's SBC_OVERLAY_DIR
+# auto-detection, never tracked in git (~46MB of third-party kernel binaries).
+kernel-work/
