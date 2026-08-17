@@ -118,10 +118,21 @@ function topoInit(container) {
   topoSim = d3.forceSimulation()
     .force('charge', d3.forceManyBody().strength(-1500))
     .force('link', d3.forceLink().id(function(d) { return d.id; }).distance(function(d) {
+      // Two directly-linked nodes each carrying a 115px collision radius
+      // need >=230px of separation to avoid touching; a 120px minimum
+      // here fought that (link force pulling them closer than collision
+      // wanted to allow), which is part of what produced the crowded,
+      // overlapping layout. 200px minimum leaves enough room.
       var tq = d.tq != null ? d.tq : 128;
-      return 120 + ((255 - tq) / 255) * 180;
+      return 200 + ((255 - tq) / 255) * 180;
     }))
-    .force('collision', d3.forceCollide(80))
+    // Each node's label stack (hostname/IP/sublabel) extends to roughly
+    // r+63 below its center — the previous flat 80px collision radius
+    // didn't account for that, so nodes could still be pushed close
+    // enough for one node's label text to run through a neighbor's icon
+    // or edge labels (confirmed live via screenshot). 115 gives the full
+    // label stack clearance regardless of node radius.
+    .force('collision', d3.forceCollide(115))
     .alphaDecay(0.05);
 
   topoNodeMap = {};
