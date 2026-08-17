@@ -198,6 +198,7 @@ type BatOriginator struct {
 	Nexthop  string
 	Iface    string
 	LastSeen float64
+	Selected bool
 }
 
 type BatNeighbor struct {

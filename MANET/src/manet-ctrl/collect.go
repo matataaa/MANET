@@ -33,7 +33,7 @@ func runCmdStdout(timeout time.Duration, name string, args ...string) (string, e
 
 // --- batman-adv ---
 
-var origRE = regexp.MustCompile(`[\s*]+([0-9a-f:]{17})\s+([\d.]+)(?:ms|s)\s+\(\s*([\d.]+)\)\s+([0-9a-f:]{17})(?:\s+\[\s*(\S+)\s*\])?`)
+var origRE = regexp.MustCompile(`(\*)?\s*([0-9a-f:]{17})\s+([\d.]+)(?:ms|s)\s+\(\s*([\d.]+)\)\s+([0-9a-f:]{17})(?:\s+\[\s*(\S+)\s*\])?`)
 var neighRE = regexp.MustCompile(`([0-9a-f:]{17})\s+([\d.]+)(?:ms|s)\s+\(\s*([\d.]+)\)\s+\[\s*(\S+)\s*\]`)
 var macRE = regexp.MustCompile(`([0-9a-f]{2}(?::[0-9a-f]{2}){5})`)
 
@@ -222,14 +222,15 @@ func runBatctlOriginators() (map[string]int, map[string]BatOriginator) {
 		return tqMap, origMap
 	}
 	for _, m := range origRE.FindAllStringSubmatch(out, -1) {
-		orig := normMAC(m[1])
-		lastSeen, _ := strconv.ParseFloat(m[2], 64)
-		raw, _ := strconv.ParseFloat(m[3], 64)
+		selected := m[1] == "*"
+		orig := normMAC(m[2])
+		lastSeen, _ := strconv.ParseFloat(m[3], 64)
+		raw, _ := strconv.ParseFloat(m[4], 64)
 		tq := normTQ(raw)
-		nexthop := normMAC(m[4])
+		nexthop := normMAC(m[5])
 		iface := ""
-		if len(m) > 5 {
-			iface = m[5]
+		if len(m) > 6 {
+			iface = m[6]
 		}
 		var rawTP float64
 		if isBatmanV() {
@@ -239,8 +240,17 @@ func runBatctlOriginators() (map[string]int, map[string]BatOriginator) {
 		if lastSeen > 60 {
 			continue
 		}
-		if prev, ok := origMap[orig]; !ok || tq > prev.TQ {
-			origMap[orig] = BatOriginator{TQ: tq, RawTP: rawTP, Nexthop: nexthop, Iface: iface, LastSeen: lastSeen}
+		// BATMAN_V's TQ metric saturates at 255 for any link at or above
+		// meshRefThroughput, so two real candidates to the same neighbor
+		// (e.g. a faster WiFi mesh radio and a slower HaLow radio) can tie
+		// on TQ alone — picking between ties via Go's randomized map
+		// iteration order silently produced a different "best" interface
+		// on every restart, even though batman-adv itself deterministically
+		// picks one and marks it with "*" in its own output. Prefer that
+		// ground truth outright; only fall back to the highest-TQ heuristic
+		// while no entry for this originator is marked selected yet.
+		if prev, ok := origMap[orig]; !ok || selected || (!prev.Selected && tq > prev.TQ) {
+			origMap[orig] = BatOriginator{TQ: tq, RawTP: rawTP, Nexthop: nexthop, Iface: iface, LastSeen: lastSeen, Selected: selected}
 		}
 		if tq > tqMap[orig] {
 			tqMap[orig] = tq
