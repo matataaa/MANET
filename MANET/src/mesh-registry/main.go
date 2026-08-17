@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -497,8 +498,18 @@ func getGatewayInfo() (string, string) {
 	return "false", ""
 }
 
+// gpspipe normally exits after -n 5 reports; if gpsd is present but stuck
+// (no fix, wedged receiver) it can instead block forever, and since this
+// runs synchronously at the top of every run(), a hung gpspipe freezes the
+// entire registry daemon indefinitely — confirmed live on a node where
+// mesh-registry never wrote /var/run/mesh_node_registry even once across
+// 2+ hours of uptime, with a single gpspipe child stuck the whole time.
+const gpsTimeout = 5 * time.Second
+
 func getGPS() (string, string, string) {
-	out, err := exec.Command("gpspipe", "-w", "-n", "5").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), gpsTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "gpspipe", "-w", "-n", "5").Output()
 	if err != nil {
 		return "", "", ""
 	}
