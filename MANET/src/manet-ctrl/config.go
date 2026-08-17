@@ -23,6 +23,7 @@ const (
 	AckVersionFile   = "/var/run/mesh_config_ack_version"
 	FleetPrefsFile   = "/var/run/fleet_preferences.json"
 	NoMeshIfFile     = "/var/lib/no_mesh_if"
+	APInterfaceFile  = "/var/lib/ap_interface"
 	RefreshMS        = 15000
 	PerfAuthCookie   = "manet_perf_auth"
 	PerfAuthMaxAge   = 15552000

@@ -617,7 +617,18 @@ func getInterfaces() []Iface {
 	// wpa_supplicant detection
 	wpaActive := parseWPAActive()
 
-	// no_mesh_if
+	// no_mesh_if lists interfaces on a genuinely separate non-mesh chip
+	// (e.g. onboard Broadcom used only for AP). radio-setup.sh's AP
+	// selection has a second path — carving the AP out of a 5GHz-capable
+	// interface on a dual-radio mesh card (e.g. MT7916: wlan0 2.4GHz mesh,
+	// wlan1 5GHz AP) — which removes that interface from mesh_if and
+	// records it in ap_interface instead, without ever touching
+	// no_mesh_if. Without also reading ap_interface here, such an
+	// interface is neither a batman slave nor in noMeshIfaces, so it falls
+	// through every classification case below and gets silently dropped
+	// from the interfaces list entirely — confirmed live on a CM4 with an
+	// MT7916 card, where a fully working hostapd AP on wlan1 never
+	// appeared anywhere in the UI.
 	noMeshIfaces := make(map[string]bool)
 	if data, err := os.ReadFile(NoMeshIfFile); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
@@ -625,6 +636,11 @@ func getInterfaces() []Iface {
 			if name != "" {
 				noMeshIfaces[name] = true
 			}
+		}
+	}
+	if data, err := os.ReadFile(APInterfaceFile); err == nil {
+		if name := strings.TrimSpace(string(data)); name != "" {
+			noMeshIfaces[name] = true
 		}
 	}
 
