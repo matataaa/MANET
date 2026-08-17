@@ -624,6 +624,11 @@ func collectMCS() map[string]string {
 	return result
 }
 
+// getDirectNeighbors formats each entry as MAC[=tq_or_throughput[=iface]].
+// The iface segment lets the topology UI show which physical radio (HaLow
+// vs standard WiFi mesh) actually carries the link between two *other*
+// nodes, not just links to this node itself — "batctl n" already reports
+// it per neighbor, e.g. "9c:04:b6:a0:aa:13    0.040s (  32.5) [ wlan2]".
 func getDirectNeighbors() string {
 	out, err := exec.Command(batctlBin, "n").Output()
 	if err != nil {
@@ -638,6 +643,11 @@ func getDirectNeighbors() string {
 				speed := strings.Trim(fields[3], "()")
 				if _, err := strconv.ParseFloat(speed, 64); err == nil {
 					entry += "=" + speed
+					if len(fields) >= 6 {
+						if iface := strings.Trim(fields[5], "[]"); iface != "" {
+							entry += "=" + iface
+						}
+					}
 				}
 			}
 			entries = append(entries, entry)

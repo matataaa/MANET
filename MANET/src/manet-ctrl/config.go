@@ -76,6 +76,7 @@ type Edge struct {
 	TQ         *int     `json:"tq"`
 	Throughput *float64 `json:"throughput,omitempty"`
 	GWRoute    bool     `json:"gw_route,omitempty"`
+	Iface      string   `json:"iface,omitempty"`
 }
 
 type BatteryInfo struct {

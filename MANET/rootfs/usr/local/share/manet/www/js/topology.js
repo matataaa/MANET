@@ -15,6 +15,15 @@ var topoOrbs = [];
 // excellent on a 1 MHz S1G channel.
 var HALOW_CAPACITY = { '1MHz': 3.3, '2MHz': 7.2, '4MHz': 16, '8MHz': 32 };
 
+// Interface naming is pinned fleet-wide by radio-setup.sh's .link rules:
+// wlan2 is always the HaLow radio, wlan0/wlan1 are always standard WiFi
+// mesh. edge.iface (populated by manet-ctrl from batctl's own per-link
+// interface column) lets a link between two *other* nodes show which
+// radio actually carries it, not just links to this node.
+function isHalowIface(iface) {
+  return !!iface && (iface === 'wlan2' || iface.indexOf('halow') === 0);
+}
+
 function halowCapacity() {
   if (typeof LOCAL_DATA === 'undefined' || !LOCAL_DATA || !LOCAL_DATA.interfaces) return null;
   for (var i = 0; i < LOCAL_DATA.interfaces.length; i++) {
@@ -218,9 +227,11 @@ function topoUpdate(data) {
     .text(function(d) {
       var s = d.source.id || d.source, t = d.target.id || d.target;
       if (staleIds.has(s) || staleIds.has(t)) return '';
-      if (d.throughput != null && d.throughput > 0) return fmtThroughput(d.throughput);
-      if (d.tq == null) return '';
-      return tqPct(d.tq) + '%';
+      var radio = d.iface ? (isHalowIface(d.iface) ? 'HaLow' : 'WiFi') : '';
+      var speed = d.throughput != null && d.throughput > 0 ? fmtThroughput(d.throughput) :
+                  (d.tq != null ? tqPct(d.tq) + '%' : '');
+      if (!speed) return '';
+      return radio ? speed + ' · ' + radio : speed;
     })
     .attr('fill', function(d) {
       if (d.gw_route) return '#00d4cf';
