@@ -181,10 +181,27 @@ apt install -y ipcalc nmap lshw tcpdump net-tools nftables wireless-tools iperf3
 
 # Unpack the tar file that was pulled down earlier.  This contains the kernel and
 # mesh tools
+# --no-overwrite-dir: an archive must never change the mode of an existing
+# directory, least of all /.
 if [ -f /root/morse-pi-install.tar.gz ]; then
-    tar -zxf /root/morse-pi-install.tar.gz -C /
+    tar -zxf /root/morse-pi-install.tar.gz --no-overwrite-dir -C /
 else
     echo "No tarball to extract — skipping (already provisioned?)"
+fi
+
+# Anyone who logs in from here until radio-setup finishes should be told the
+# node is still provisioning — pulling the Ethernet or power part-way through
+# leaves it half-configured, and it used to look identical to a finished node.
+mkdir -p /var/lib
+{
+    echo "STATE=running"
+    echo "PHASE=first-boot"
+    echo "STARTED=$(date +%s)"
+    echo "UPDATED=$(date +%s)"
+} > /var/lib/manet-provision.state
+if [ -x /usr/local/bin/manet-provision-status.sh ]; then
+    mkdir -p /etc/update-motd.d
+    ln -sf /usr/local/bin/manet-provision-status.sh /etc/update-motd.d/50-manet-provision
 fi
 
 # Reload udev rules after extracting (picks up 80-usb-ethernet.rules etc.)
@@ -267,9 +284,28 @@ morse
 dot11ah
 EOF
 
+# Detect a USB MM81xx HaLow card (325b:8100) from sysfs. This duplicates
+# has_usb_morse_device() in radio-setup.sh (this script runs before that one
+# exists on disk) — keep the grep pattern in sync if it ever changes.
+# Boards with one need none of the SPI-hat plumbing below — not the mm6108 BCF / SPI clock modparams
+# (wrong board file: probe dies with "morse_firmware_init failed: -5"), and not
+# the config.txt SPI overlay/GPIO entries further down.  The card is enumerated
+# by the time provision-mesh runs.  Detection failure falls back to the SPI
+# settings, which is the safe default for hat boards.
+_halow_on_spi=1
+for _usbdev in /sys/bus/usb/devices/*; do
+    [ -d "$_usbdev" ] || continue
+    if cat "$_usbdev/product" "$_usbdev/manufacturer" 2>/dev/null \
+        | tr '[:upper:]' '[:lower:]' | grep -Eq 'morse|mm81|halow|802\.11ah'; then
+        _halow_on_spi=0
+        echo " > USB Morse HaLow card detected — using USB modparams, skipping SPI entries"
+        break
+    fi
+done
+
 # Load the morse driver with options to allow the interface to be picked up
 # This will be re-written by radio-setup and become specific to the chosen region
-if [ "__HARDWARE_MODEL__" = "r3a" ]; then
+if [ "__HARDWARE_MODEL__" = "r3a" ] || [ "$_halow_on_spi" -eq 0 ]; then
 cat << EOF > /etc/modprobe.d/morse.conf
 options morse country=US
 options morse enable_mcast_whitelist=0 enable_mcast_rate_control=1
@@ -701,6 +737,11 @@ echo "node_hostname=__NODE_HOSTNAME__" >> /etc/mesh.conf
 echo "auto_update=__AUTO_UPDATE__" >> /etc/mesh.conf
 echo "update_url=" >> /etc/mesh.conf
 echo "admin_password=__ADMIN_PW__" >> /etc/mesh.conf
+# Always on, not a provisioning question: battery-reader degrades gracefully
+# when no UPS HAT is present (logs I2C errors, reports "unknown", never
+# crashes the boot) and i2c-dev is already unconditionally enabled by
+# radio-setup.sh, so there's no real board where enabling this does harm.
+echo "battery_monitor=y" >> /etc/mesh.conf
 echo "require_auth=n" >> /etc/mesh.conf
 
 
@@ -717,13 +758,19 @@ echo "nameserver 1.1.1.1" > /etc/resolv.conf
 # (provisioning) reboot.  radio-setup runs on that boot and will find the
 # interfaces already present.  All writes are idempotent; disable-wifi added
 # above is not affected.
+#
+# On a USB MM81xx board ($_halow_on_spi=0, detected above) the SPI overlay only
+# creates a phantom spi0.0 that fails probe on every boot ("morse_spi_probe
+# failed"), and gpio=3=op,dh fights dtparam=i2c_arm=on for the same pin.
 for _cfg in /boot/firmware/config.txt /boot/config.txt; do
     [ -f "$_cfg" ] || continue
-    grep -q 'dtparam=spi=on' "$_cfg"   || echo "dtparam=spi=on"            >> "$_cfg"
-    grep -q 'mm610x-spi'     "$_cfg"   || echo "dtoverlay=mm610x-spi.dtbo" >> "$_cfg"
-    grep -qF 'gpio=3=op,dh'  "$_cfg"   || echo "gpio=3=op,dh"              >> "$_cfg"
-    grep -qF 'gpio=7=op,dh'  "$_cfg"   || echo "gpio=7=op,dh"              >> "$_cfg"
-    grep -qF 'gpio=17=op,dh' "$_cfg"   || echo "gpio=17=op,dh"             >> "$_cfg"
+    if [ "$_halow_on_spi" -eq 1 ]; then
+        grep -q 'dtparam=spi=on' "$_cfg"   || echo "dtparam=spi=on"            >> "$_cfg"
+        grep -q 'mm610x-spi'     "$_cfg"   || echo "dtoverlay=mm610x-spi.dtbo" >> "$_cfg"
+        grep -qF 'gpio=3=op,dh'  "$_cfg"   || echo "gpio=3=op,dh"              >> "$_cfg"
+        grep -qF 'gpio=7=op,dh'  "$_cfg"   || echo "gpio=7=op,dh"              >> "$_cfg"
+        grep -qF 'gpio=17=op,dh' "$_cfg"   || echo "gpio=17=op,dh"             >> "$_cfg"
+    fi
     # Free PL011 UART for GPS hat (disables Bluetooth, frees /dev/ttyAMA0)
     grep -q 'disable-bt'     "$_cfg"   || echo "dtoverlay=disable-bt"       >> "$_cfg"
     grep -q 'enable_uart=1'  "$_cfg"   || echo "enable_uart=1"              >> "$_cfg"

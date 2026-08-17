@@ -156,8 +156,10 @@ apt install -y ipcalc nmap lshw tcpdump net-tools nftables wireless-tools iperf3
 
 # Unpack the tar file that was pulled down earlier.  This contains the kernel and
 # mesh tools
+# --no-overwrite-dir: an archive must never change the mode of an existing
+# directory, least of all /.
 if [ -f /root/morse-pi-install.tar.gz ]; then
-    tar -zxf /root/morse-pi-install.tar.gz -C /
+    tar -zxf /root/morse-pi-install.tar.gz --no-overwrite-dir -C /
 else
     echo "No tarball to extract — skipping (already provisioned?)"
 fi
