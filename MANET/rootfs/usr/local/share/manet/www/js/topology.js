@@ -209,10 +209,13 @@ function topoUpdate(data) {
       if (d.type === 'multihop') return '6,3';
       if (d.type === 'unknown') return '2,6';
       // 'direct' links are solid by default (no route-type pattern to
-      // show) — free to use a fine dotted pattern here to mark HaLow vs
-      // solid for standard WiFi mesh, without colliding with the dash
-      // patterns above that already mean something else (multihop etc).
-      if (d.type === 'direct' && isHalowIface(d.iface)) return '1,3';
+      // show) — free to use a dash pattern here to mark HaLow vs solid
+      // for standard WiFi mesh, without colliding with the patterns
+      // above that already mean something else (multihop etc). A fine
+      // 1,3 pattern was tried first and was imperceptible against a
+      // thick, brightly-colored line at normal zoom — even dashes at
+      // 3,3 read clearly as "dashed" rather than "solid with noise".
+      if (d.type === 'direct' && isHalowIface(d.iface)) return '3,3';
       return null;
     })
     .attr('stroke-opacity', function(d) {
