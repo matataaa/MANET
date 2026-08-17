@@ -302,7 +302,24 @@ func loadKVFile(path string) map[string]string {
 	return m
 }
 
+// saveKVFileMu serializes every saveKVFile call across all callers in this
+// process. Without it, two API handlers racing to update mesh.conf at
+// nearly the same time (e.g. a voice-settings save and a fleet hostname
+// push) can each os.ReadFile the same pre-update content, then both
+// os.WriteFile back a version missing the other's keys — or, worse, land
+// their writes byte-interleaved if the timing is close enough, corrupting
+// the file outright (observed live: a merged "voice_speaker_volume=80"
+// + "regulatory_domain=US" line, and mesh_ssid/mesh_key dropped entirely).
+// The mutex fixes the read-modify-write race; the temp-file+rename below
+// fixes visibility (no reader or concurrent writer ever sees a partially
+// written file, unlike the previous direct os.WriteFile which truncates
+// in place).
+var saveKVFileMu sync.Mutex
+
 func saveKVFile(path string, updates map[string]string) error {
+	saveKVFileMu.Lock()
+	defer saveKVFileMu.Unlock()
+
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -330,7 +347,12 @@ func saveKVFile(path string, updates map[string]string) error {
 			out = append(out, fmt.Sprintf("%s=%s", key, val))
 		}
 	}
-	return os.WriteFile(path, []byte(strings.Join(out, "\n")), 0644)
+
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strings.Join(out, "\n")), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func confGet(conf map[string]string, key, def string) string {

@@ -848,7 +848,12 @@ func parseWPAActive() map[string]bool {
 
 func enrichIfacesWithHalow(ifaces []Iface) []Iface {
 	for i, iface := range ifaces {
-		if iface.Driver != "morse_spi" {
+		// morse_usb boards: morse_cli's NL80211 vendor-command queries fail
+		// outright on this transport (confirmed live — every subcommand,
+		// not just "channel", errors with "Failed to rcvmsgs"), so
+		// getHalowDriverInfo falls through to its wpa_supplicant-config
+		// fallback below, which is driver-agnostic.
+		if iface.Driver != "morse_spi" && iface.Driver != "morse_usb" {
 			continue
 		}
 		info := getHalowDriverInfo(iface.Name)
@@ -858,10 +863,19 @@ func enrichIfacesWithHalow(ifaces []Iface) []Iface {
 		if src, ok := info["halow_source"]; ok {
 			ifaces[i].HalowSource = src
 		}
-		if ch, ok := info["channel"]; ok && ifaces[i].Channel == "" {
+		// Overwrite unconditionally, not just when empty: this loop already
+		// only reaches morse_spi/morse_usb interfaces, and the generic `iw
+		// dev` parse used to pre-populate Channel/FreqMHz reports the
+		// driver's internal VHT-mapped representation of the S1G channel
+		// (e.g. "36 / 5180MHz", matching neither the real S1G channel nor
+		// anything a user configured) — confirmed live on a USB HaLow
+		// board. The HaLow-specific source here (morse_cli or the
+		// wpa_supplicant-config fallback) is always more accurate for this
+		// radio and should win.
+		if ch, ok := info["channel"]; ok {
 			ifaces[i].Channel = ch
 		}
-		if freq, ok := info["freq_mhz"]; ok && ifaces[i].FreqMHz == "" {
+		if freq, ok := info["freq_mhz"]; ok {
 			ifaces[i].FreqMHz = freq
 		}
 		if cap, ok := HalowBWTxPowerCapDBM[ifaces[i].HalowBW]; ok {
@@ -887,6 +901,25 @@ func enrichIfacesWithMCS(ifaces []Iface, regNode RegistryNode) []Iface {
 }
 
 // --- Radio ---
+
+// readS1GChannelFromConfig returns the conventional S1G channel number
+// (e.g. "12") from the generated wpa_supplicant config — the only place
+// that number exists; morse_cli's own JSON doesn't carry it.
+func readS1GChannelFromConfig() string {
+	for _, path := range []string{
+		"/etc/wpa_supplicant/wpa_supplicant-wlan2-s1g.conf",
+		"/etc/wpa_supplicant/wpa_supplicant_s1g-wlan2.conf",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if m := regexp.MustCompile(`channel=(\d+)`).FindStringSubmatch(string(data)); len(m) > 1 {
+			return m[1]
+		}
+	}
+	return ""
+}
 
 func getHalowDriverInfo(iface string) map[string]string {
 	if iface == "" {
@@ -915,6 +948,16 @@ func getHalowDriverInfo(iface string) map[string]string {
 				info[k] = v
 			}
 			info["halow_source"] = "morse"
+			// morse_cli's own JSON has no field for the conventional S1G
+			// channel number (confirmed live: channel_frequency,
+			// channel_op_bw, channel_primary_bw, channel_index, bw_mhz —
+			// channel_index is a different concept, a sub-index that's
+			// legitimately 0 here, not the channel number). Only the
+			// wpa_supplicant config has that, so pull it in as a
+			// supplement even though morse_cli otherwise succeeded.
+			if ch := readS1GChannelFromConfig(); ch != "" {
+				info["channel"] = ch
+			}
 			return info
 		}
 	}
@@ -938,9 +981,13 @@ func getHalowDriverInfo(iface string) map[string]string {
 				info["halow_bw"] = "1MHz"
 			case "67", "69", "70":
 				info["halow_bw"] = "2MHz"
-			case "71":
-				info["halow_bw"] = "4MHz"
-			case "72":
+			case "71", "72":
+				// radio-setup.sh's default case (halow_bw unset or any
+				// value other than 1MHz/2MHz/8MHz) and its 8MHz case both
+				// resolve to op_class 71 (channel 12) as of the op_class
+				// 72/channel 8 fix — confirmed live via wpa_supplicant_s1g's
+				// own channel-info log ("Operating BW: 8 MHz"), not 4MHz as
+				// previously labeled here.
 				info["halow_bw"] = "8MHz"
 			}
 		}
@@ -956,7 +1003,12 @@ func parseMorseChannelOutput(text string) map[string]string {
 	if json.Unmarshal([]byte(text), &data) == nil {
 		freqKeys := []string{"channel_frequency", "frequency", "freq", "freq_khz", "freq_hz", "operating_frequency", "op_chan_freq"}
 		bwKeys := []string{"channel_op_bw", "op_bw", "operating_bw", "channel_bw", "bandwidth", "bw", "op_chan_bw"}
-		chKeys := []string{"channel_index", "channel", "primary_channel", "s1g_channel"}
+		// No "channel_index": confirmed live that's morse_cli's actual JSON
+		// schema for the S1G primary-channel sub-index (legitimately 0 in
+		// our config's s1g_prim_1mhz_chan_index=0), not a channel number —
+		// morse_cli has no field for that at all. getHalowDriverInfo pulls
+		// the real channel number from the wpa_supplicant config instead.
+		chKeys := []string{"channel", "s1g_channel", "primary_channel"}
 
 		for _, k := range freqKeys {
 			if v, ok := data[k]; ok {
