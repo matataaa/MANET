@@ -17,7 +17,7 @@ LOG_TAG="morse-spi-watchdog"
 CHECK_INTERVAL=30
 REBOOT_MAX=2
 REBOOT_WINDOW=3600
-STATE_FILE="/run/morse-spi-watchdog-reboots"
+STATE_FILE="/var/lib/morse-spi-watchdog-reboots"
 GPIO_RECOVER_COUNT=0
 MAX_GPIO_RECOVER=3
 

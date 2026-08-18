@@ -126,6 +126,7 @@ function configRenderView(panel, cfg) {
       { label: 'Require Auth', key: 'require_auth', fmt: function(v) { return (v||'').toLowerCase() === 'y' ? 'Yes' : 'No'; } },
     ]},
     { title: 'Voice', voice: true, fields: [
+      { label: 'Voice Enabled', key: 'voice_enabled', yesno: true },
       { label: 'PTT Mode', voiceKey: 'ptt_mode' },
       { label: 'TX Channel', voiceKey: 'channel', fmt: function(v) { return 'Ch ' + (v || '1'); } },
       { label: 'Mic Volume', key: 'voice_mic_volume', fmt: function(v) { return (v || '80') + '%'; } },
@@ -229,6 +230,8 @@ function configRenderEdit(panel, cfg) {
     { label: 'Admin Key', key: 'admin_password', type: 'password' },
     { label: 'Require Auth', key: 'require_auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },
     { section: 'Voice' },
+    { label: 'Voice Enabled', key: 'voice_enabled', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}],
+      hint: 'Off stops this node\'s local mic/speaker and physical PTT button. Browser-based web PTT is unaffected either way.' },
     { label: 'PTT Mode', key: 'voice_ptt_mode', type: 'select', options: [
       {v:'openvlm',l:'OpenVLM HID'},{v:'gpio',l:'GPIO Button'},{v:'always',l:'Always On'},{v:'vox',l:'VOX (auto)'}
     ], voiceKey: 'ptt_mode', fallback: 'openvlm' },
@@ -318,7 +321,7 @@ async function configSave() {
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
     'auto_update','update_url',
     'voice_mic_volume','voice_speaker_volume','voice_channel',
-    'voice_beep_tx_start','voice_beep_rx_end','voice_gain'];
+    'voice_beep_tx_start','voice_beep_rx_end','voice_gain','voice_enabled'];
   const config = {};
   meshFields.forEach(f => {
     const el = document.getElementById('cfg-f-' + f);

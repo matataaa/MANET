@@ -47,6 +47,18 @@ function meshLastSeen(entry) {
   return '<span class="' + cls + '">' + label + '</span>';
 }
 
+// bat0 is a virtual batman-adv routing interface, not a physical link — the
+// kernel has no carrier-detect concept for it, so its operstate reports as
+// "UNKNOWN" even when the mesh is completely healthy (confirmed: every
+// working node in this fleet shows this, never anything else while
+// functioning correctly). Showing "Unknown" as-is reads like a problem to
+// a user; translate it to what it actually means here.
+function bat0StateLabel(state) {
+  if (!state) return '--';
+  if (state.toUpperCase() === 'UNKNOWN') return 'Active';
+  return state;
+}
+
 function meshRender() {
   if (!meshData) return;
   const panel = document.getElementById('tab-mesh');
@@ -59,7 +71,7 @@ function meshRender() {
   html += '<div class="card-header">LOCAL NODE</div>';
   html += '<div class="mesh-kv">';
   html += meshKV('Hostname', d.hostname || '--');
-  html += meshKV('State', d.bat0.state || '--');
+  html += meshKV('State', bat0StateLabel(d.bat0.state));
   html += meshKV('Address', (d.bat0.addrs || []).join(', ') || '--');
   html += meshKV('Algorithm', d.bat0.algo || '--');
   html += meshKV('Gateway Mode', d.bat0.gw_mode || '--');

@@ -131,7 +131,14 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	if updates["voice_mic_volume"] != "" || updates["voice_speaker_volume"] != "" {
 		applyVoiceVolume(conf)
 	}
-	if updates["voice_ptt_mode"] != "" || updates["voice_channel"] != "" {
+	if updates["voice_enabled"] != "" {
+		if conf["voice_enabled"] == "n" {
+			runCmd(5*time.Second, "systemctl", "stop", "mesh-voice")
+		} else {
+			runCmd(5*time.Second, "systemctl", "restart", "mesh-voice")
+		}
+	}
+	if conf["voice_enabled"] != "n" && (updates["voice_ptt_mode"] != "" || updates["voice_channel"] != "") {
 		txCh := int(voiceTxCh.Load())
 		if txCh <= 0 {
 			txCh = 1
