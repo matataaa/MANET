@@ -126,6 +126,7 @@ function configRenderView(panel, cfg) {
       { label: 'Require Auth', key: 'require_auth', fmt: function(v) { return (v||'').toLowerCase() === 'y' ? 'Yes' : 'No'; } },
     ]},
     { title: 'Voice', voice: true, fields: [
+      { label: 'Voice Enabled', key: 'voice_enabled', yesno: true },
       { label: 'PTT Mode', voiceKey: 'ptt_mode' },
       { label: 'TX Channel', voiceKey: 'channel', fmt: function(v) { return 'Ch ' + (v || '1'); } },
       { label: 'Mic Volume', key: 'voice_mic_volume', fmt: function(v) { return (v || '80') + '%'; } },
