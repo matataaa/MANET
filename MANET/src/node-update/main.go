@@ -112,7 +112,11 @@ func checkAndUpdate(board string) {
 		return
 	}
 
-	out, err := exec.Command("tar", "-zxf", tarballPath, "-C", "/").CombinedOutput()
+	// --no-overwrite-dir: an archive must never change the mode of an
+	// existing directory, least of all /. Directory modes in the tarball
+	// come from the build machine's mktemp -d stage (0700) or umask; letting
+	// tar apply that to / would lock out every non-root process.
+	out, err := exec.Command("tar", "-zxf", tarballPath, "--no-overwrite-dir", "-C", "/").CombinedOutput()
 	if err != nil {
 		log.Printf("extract failed: %v: %s", err, strings.TrimSpace(string(out)))
 		os.Remove(tarballPath)

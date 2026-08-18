@@ -407,7 +407,7 @@ func assembleStatusData() StatusData {
 
 		if n.IsDirect || nexthopIsNode {
 			tq := orig.TQ
-			e := Edge{Source: selfID, Target: n.ID, Type: "direct", TQ: &tq}
+			e := Edge{Source: selfID, Target: n.ID, Type: "direct", TQ: &tq, Iface: orig.Iface}
 			if orig.RawTP > 0 {
 				tp := orig.RawTP
 				e.Throughput = &tp
@@ -416,7 +416,7 @@ func assembleStatusData() StatusData {
 		} else {
 			via := orig.Nexthop
 			tq := orig.TQ
-			e := Edge{Source: selfID, Target: n.ID, Type: "multihop", Via: via, TQ: &tq}
+			e := Edge{Source: selfID, Target: n.ID, Type: "multihop", Via: via, TQ: &tq, Iface: orig.Iface}
 			if orig.RawTP > 0 {
 				tp := orig.RawTP
 				e.Throughput = &tp
@@ -448,18 +448,28 @@ func assembleStatusData() StatusData {
 			if entry == "" {
 				continue
 			}
-			nbMAC := entry
+			// Format: MAC[=tq_or_throughput[=iface]] — the iface segment is
+			// newer (mesh-registry may still be running an older build
+			// fleet-wide), so parse positionally rather than via
+			// LastIndex, which would otherwise misparse "=iface" as the
+			// numeric segment and silently drop TQ/throughput for any
+			// entry that has it.
+			parts := strings.Split(entry, "=")
+			nbMAC := parts[0]
 			var peerTQ *int
 			var peerTP *float64
-			if eqIdx := strings.LastIndex(entry, "="); eqIdx > 0 {
-				nbMAC = entry[:eqIdx]
-				if raw, err := strconv.ParseFloat(entry[eqIdx+1:], 64); err == nil {
+			var peerIface string
+			if len(parts) >= 2 {
+				if raw, err := strconv.ParseFloat(parts[1], 64); err == nil {
 					tq := normTQ(raw)
 					peerTQ = &tq
 					if isBatmanV() && raw > 0 {
 						peerTP = &raw
 					}
 				}
+			}
+			if len(parts) >= 3 {
+				peerIface = parts[2]
 			}
 			nbNodeID, ok := macToNodeID[nbMAC]
 			if !ok || nbNodeID == selfID || nbNodeID == n.ID {
@@ -475,7 +485,7 @@ func assembleStatusData() StatusData {
 				}
 			}
 			if !dup {
-				edges = append(edges, Edge{Source: n.ID, Target: nbNodeID, Type: "direct", TQ: peerTQ, Throughput: peerTP})
+				edges = append(edges, Edge{Source: n.ID, Target: nbNodeID, Type: "direct", TQ: peerTQ, Throughput: peerTP, Iface: peerIface})
 			}
 		}
 	}

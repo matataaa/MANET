@@ -1,6 +1,6 @@
 [Unit]
-Description=Waveshare UPS HAT (E) battery monitor
-Documentation=https://www.waveshare.com/wiki/UPS_HAT_(E)
+Description=Waveshare UPS HAT battery monitor (auto-detects HAT E / IP2368 or HAT B / INA219)
+Documentation=https://www.waveshare.com/wiki/UPS_HAT_(E) https://www.waveshare.com/wiki/UPS_HAT_(B)
 After=multi-user.target
 Wants=multi-user.target
 

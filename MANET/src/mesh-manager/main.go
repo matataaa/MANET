@@ -411,6 +411,12 @@ log-dhcp
 	} else {
 		run(10*time.Second, "systemctl", "start", "dnsmasq.service")
 	}
+
+	// The web UI is restricted to whoever holds a lease from this node, so
+	// the firewall rule has to follow the pool whenever it moves.
+	if _, err := os.Stat("/usr/local/bin/manet-ui-firewall.sh"); err == nil {
+		run(5*time.Second, "/usr/local/bin/manet-ui-firewall.sh")
+	}
 }
 
 func (im *ipManager) ensureAddr(ip string) {

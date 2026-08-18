@@ -5,14 +5,78 @@
 #  if the mesh config file is updated
 #
 
-# log the output of this script to a file for debugging
-exec > >(tee /var/log/radio-setup.log) 2>&1
+# log the output of this script to a file for debugging. Append, never
+# truncate: this script runs more than once (first boot, post-rename re-run,
+# manual retry) and overwriting destroyed the history of the run that actually
+# went wrong. Two runs writing a truncating tee also interleave into an
+# unreadable file.
+exec >> >(tee -a /var/log/radio-setup.log) 2>&1
 set -x
+
+echo "=============================================================="
+echo " radio-setup starting: $(date -Is)"
+echo "=============================================================="
 
 led_error() {
     echo heartbeat > /sys/class/leds/PWR/trigger
 }
 trap led_error ERR
+
+# ── Provisioning state ──────────────────────────────────────────────────────
+# A node takes several reboots and about ten minutes to provision. Nothing used
+# to record whether that finished, so a node whose Ethernet was unplugged
+# part-way through looked exactly like a finished one — and got marked done.
+# These files are what `manet-provision-status.sh` reports on login.
+PROVISION_STATE_FILE="/var/lib/manet-provision.state"
+PROVISION_FAIL_FILE="/var/lib/manet-provision.failures"
+PROVISION_STARTED=$(date +%s)
+
+provision_state() {
+    mkdir -p /var/lib
+    {
+        echo "STATE=$1"
+        echo "PHASE=radio-setup"
+        echo "STARTED=$PROVISION_STARTED"
+        echo "UPDATED=$(date +%s)"
+        [ -n "$2" ] && echo "FINISHED=$2"
+    } > "$PROVISION_STATE_FILE"
+}
+
+# Record a step that did not work. The run continues — a node with no GPS
+# tooling is still a useful node — but it will not be marked provisioned.
+provision_fail() {
+    echo "$1" >> "$PROVISION_FAIL_FILE"
+    echo " !! PROVISION FAILURE: $1"
+}
+
+# Run a command, recording a failure if it does not succeed.
+provision_try() {
+    local what="$1"; shift
+    if ! "$@"; then
+        provision_fail "$what"
+        return 1
+    fi
+    return 0
+}
+
+# Is there a working path to the package repositories? Checked before the apt
+# phases so "no network" is reported once, plainly, instead of as a wall of
+# apt resolver errors.
+have_package_network() {
+    getent hosts deb.debian.org >/dev/null 2>&1 || return 1
+    return 0
+}
+
+: > "$PROVISION_FAIL_FILE"
+provision_state running
+
+# Show provisioning state on every SSH login. Installed before any of the work
+# below, so a node that is still setting itself up says so to anyone who logs
+# in to check on it.
+if [ -x /usr/local/bin/manet-provision-status.sh ]; then
+    mkdir -p /etc/update-motd.d
+    ln -sf /usr/local/bin/manet-provision-status.sh /etc/update-motd.d/50-manet-provision
+fi
 
 # This loop reads the stored setup variables to set the current config
 while IFS= read -r line; do
@@ -65,6 +129,8 @@ set_mesh_hostname() {
     fi
 }
 
+# Duplicated (not sourced) in firstrun.sh.template, which runs before this
+# script exists on disk — keep the grep pattern in sync if it ever changes.
 has_usb_morse_device() {
     local dev text
 
@@ -381,6 +447,20 @@ if [ "$PHY_COUNT" -eq 0 ]; then
     echo "  This is normal for wired-only configurations"
     echo "  If you expect wireless: check 'dmesg | grep -i firmware'"
 fi
+
+# mt76 (mt7915e/MT7916) LED devices come up with the "phyNtpt" throughput-
+# blink trigger active by default. That trigger's periodic timer touches
+# PCIe MMIO registers, and racing it against an interface mode change —
+# which every step below does (renames, mesh setup, AP managed-mode
+# switch) — can hit a fatal "Asynchronous SError Interrupt" and panic the
+# kernel. Confirmed live: a full kernel panic in exactly this path right
+# as an AP radio was switched to managed mode for hostapd. The udev rule
+# (82-mt76-led-tpt-disable.rules) covers future boots, but the LED devices
+# here already exist from this boot's driver probe, before that rule was
+# even extracted from the tarball — so disable it directly too.
+for _led in /sys/class/leds/mt76-phy*; do
+    [ -e "$_led/trigger" ] && echo none > "$_led/trigger" 2>/dev/null || true
+done
 
 # ============================================================================
 # === INTERFACE DETECTION ===
@@ -1109,7 +1189,17 @@ EOF
             case "$halow_bw" in
                 1MHz)  S1G_OP_CLASS=68; S1G_CHANNEL=11; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
                 2MHz)  S1G_OP_CLASS=69; S1G_CHANNEL=10; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2400 ;;
-                8MHz)  S1G_OP_CLASS=72; S1G_CHANNEL=8;  S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2000 ;;
+                # op_class 72 / channel 8 is rejected outright by
+                # wpa_supplicant_s1g ("error determining S1G operating
+                # channel width from operating class") — confirmed live on
+                # a USB MM8108 board with halow_bw=8MHz set. op_class 71 /
+                # channel 12 is what the *) fallback below already uses,
+                # and is confirmed working end-to-end on real SPI hardware
+                # at a genuine 8MHz operating bandwidth ("Operating BW: 8
+                # MHz" in wpa_supplicant_s1g's own channel-info log) — so
+                # an explicit halow_bw=8MHz now reaches the same, proven
+                # values instead of the broken pair.
+                8MHz)  S1G_OP_CLASS=71; S1G_CHANNEL=12; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2000 ;;
                 *)     S1G_OP_CLASS=71; S1G_CHANNEL=12; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2200 ;;
             esac
             S1G_COUNTRY="US"
@@ -1534,7 +1624,12 @@ fi
 # avahi-daemon is kept but restricted to deny mesh interfaces (bat0, wlan0-2).
 # Clients connected to the EUD AP can reach the admin panel at http://manet.local
 
-apt install -y avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf 2>/dev/null || true
+if have_package_network; then
+    provision_try "apt install failed: avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf" \
+        apt install -y avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf
+else
+    provision_fail "no network: cannot install avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf"
+fi
 install -m 644 /etc/avahi/avahi-daemon.conf /etc/avahi/avahi-daemon.conf.bak 2>/dev/null || true
 cp /usr/local/share/manet/avahi-daemon.conf /etc/avahi/avahi-daemon.conf
 # Add the AP interface to avahi's allow list (br0, end0, eth0 are in the template)
@@ -1565,32 +1660,43 @@ done
 # ============================================================================
 # === RPi config.txt — SPI, Morse HaLow overlay, CM4 PCIe 32-bit DMA ===
 # ============================================================================
-# The Morse mm610x HaLow chip uses SPI on CM4 and RPi5. config.txt must load
-# the DT overlay, enable SPI, and drive GPIO 3/7/17 HIGH at boot (Morse
-# power/reset pins). CM4 nodes with a PCIe mt7916 WiFi card also need
-# pcie-32bit-dma: the BCM2711 PCIe outbound window sits above 4GB and the
-# card fails probe with -ENOMEM without forcing 32-bit DMA mapping.
+# The Morse mm610x HaLow chip uses SPI on CM4 and RPi5 (Seeed-style SPI hat):
+# config.txt must load the DT overlay, enable SPI, and drive GPIO 3/7/17 HIGH at
+# boot (Morse power/reset pins). Boards carrying a USB MM81xx card instead need
+# none of that — the card enumerates on USB and the SPI overlay only creates a
+# phantom spi0.0 that fails probe every boot ("morse_spi_probe failed"), while
+# gpio=3=op,dh fights dtparam=i2c_arm=on for the same pin. CM4 nodes with a PCIe
+# mt7916 WiFi card also need pcie-32bit-dma: the BCM2711 PCIe outbound window
+# sits above 4GB and the card fails probe with -ENOMEM without 32-bit DMA.
 _config_txt_changed=0
+if has_usb_morse_device; then
+    _halow_on_spi=0
+    echo " > USB Morse HaLow card present — skipping SPI overlay/GPIO config.txt entries"
+else
+    _halow_on_spi=1
+fi
 for _cfg in /boot/firmware/config.txt /boot/config.txt; do
     [ -f "$_cfg" ] || continue
 
-    if ! grep -q 'dtparam=spi=on' "$_cfg"; then
-        echo "dtparam=spi=on" >> "$_cfg"
-        echo " > SPI enabled in $_cfg"
-        _config_txt_changed=1
-    fi
-    if ! grep -q 'mm610x-spi' "$_cfg"; then
-        echo "dtoverlay=mm610x-spi.dtbo" >> "$_cfg"
-        echo " > mm610x-spi HaLow overlay added to $_cfg"
-        _config_txt_changed=1
-    fi
-    for _gpio_line in "gpio=3=op,dh" "gpio=7=op,dh" "gpio=17=op,dh"; do
-        if ! grep -qF "$_gpio_line" "$_cfg"; then
-            echo "$_gpio_line" >> "$_cfg"
+    if [ "$_halow_on_spi" -eq 1 ]; then
+        if ! grep -q 'dtparam=spi=on' "$_cfg"; then
+            echo "dtparam=spi=on" >> "$_cfg"
+            echo " > SPI enabled in $_cfg"
             _config_txt_changed=1
         fi
-    done
-    echo " > Morse GPIO power/reset pins set in $_cfg"
+        if ! grep -q 'mm610x-spi' "$_cfg"; then
+            echo "dtoverlay=mm610x-spi.dtbo" >> "$_cfg"
+            echo " > mm610x-spi HaLow overlay added to $_cfg"
+            _config_txt_changed=1
+        fi
+        for _gpio_line in "gpio=3=op,dh" "gpio=7=op,dh" "gpio=17=op,dh"; do
+            if ! grep -qF "$_gpio_line" "$_cfg"; then
+                echo "$_gpio_line" >> "$_cfg"
+                _config_txt_changed=1
+            fi
+        done
+        echo " > Morse GPIO power/reset pins set in $_cfg"
+    fi
 
     # CM4 only: PCIe WiFi cards (mt7916) need 32-bit DMA — the BCM2711 PCIe
     # outbound window is above 4GB which the card cannot address otherwise.
@@ -1614,8 +1720,13 @@ if ! grep -q '^i2c-dev$' /etc/modules 2>/dev/null; then
     echo " > i2c-dev added to /etc/modules"
 fi
 
-# Install i2c-tools for battery-reader and diagnostics
-apt update -qq && apt install -y python3-smbus i2c-tools || true
+# Install smbus and i2c-tools for battery-reader and diagnostics
+if have_package_network; then
+    provision_try "apt install failed: python3-smbus i2c-tools" \
+        sh -c 'apt update -qq && apt install -y python3-smbus i2c-tools'
+else
+    provision_fail "no network: cannot install python3-smbus i2c-tools"
+fi
 
 systemctl enable battery-reader.service
 
@@ -1635,7 +1746,12 @@ systemctl enable battery-reader.service
 #   - No election logic change needed — existing is_ntp_server flag stays
 #     tied to the ethernet gateway; GPS just silently improves time quality.
 
-apt-get install -y gpsd gpsd-clients 2>/dev/null || true
+if have_package_network; then
+    provision_try "apt install failed: gpsd gpsd-clients" \
+        apt-get install -y gpsd gpsd-clients
+else
+    provision_fail "no network: cannot install gpsd gpsd-clients"
+fi
 
 # Detect UART GPS (e.g. Quectel L76K on WM1302 Pi Hat).
 # The hat connects GPS TX/RX to GPIO 14/15 (/dev/ttyAMA0).
@@ -1810,9 +1926,40 @@ if [ -f /var/lib/radio-setup-reboot-pending ]; then
     echo "=================================================="
 fi
 
+# ============================================================================
+# === DID THIS ACTUALLY WORK? ===
+# ============================================================================
+# Everything above continues past failures on purpose — a node with no GPS
+# tooling still meshes. What is not acceptable is calling such a node finished.
+# If anything was recorded as failed, leave the first-boot unit enabled so the
+# next boot retries, and leave the node visibly unprovisioned.
+PROVISION_FAILURES=0
+[ -s "$PROVISION_FAIL_FILE" ] && PROVISION_FAILURES=$(wc -l < "$PROVISION_FAIL_FILE")
+
+if [ "$PROVISION_FAILURES" -gt 0 ]; then
+    provision_state incomplete "$(date +%s)"
+    echo ""
+    echo "=================================================="
+    echo " PROVISIONING INCOMPLETE — $PROVISION_FAILURES step(s) failed"
+    sed 's/^/   - /' "$PROVISION_FAIL_FILE"
+    echo ""
+    echo " This node has NOT been marked provisioned."
+    echo " Reconnect Ethernet and reboot, or re-run this script."
+    echo " Failures: $PROVISION_FAIL_FILE"
+    echo "=================================================="
+    echo ""
+    # Leave radio-setup-run-once.service enabled: the next boot retries.
+    echo heartbeat > /sys/class/leds/PWR/trigger 2>/dev/null || true
+    exit 1
+fi
+
+provision_state complete "$(date +%s)"
+
 if [[ "$FIRST_BOOT_UNIT_ENABLED" -eq 1 ]]; then
     echo " >> Removing radio-setup-run-once.service"
     systemctl disable radio-setup-run-once.service
     rm -f "$FIRST_BOOT_STAGE_MARKER"
     touch /var/lib/radio-setup.done
 fi
+
+echo " >> Provisioning complete: $(date -Is)"

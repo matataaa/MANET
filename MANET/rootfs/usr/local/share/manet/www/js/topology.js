@@ -15,6 +15,15 @@ var topoOrbs = [];
 // excellent on a 1 MHz S1G channel.
 var HALOW_CAPACITY = { '1MHz': 3.3, '2MHz': 7.2, '4MHz': 16, '8MHz': 32 };
 
+// Interface naming is pinned fleet-wide by radio-setup.sh's .link rules:
+// wlan2 is always the HaLow radio, wlan0/wlan1 are always standard WiFi
+// mesh. edge.iface (populated by manet-ctrl from batctl's own per-link
+// interface column) lets a link between two *other* nodes show which
+// radio actually carries it, not just links to this node.
+function isHalowIface(iface) {
+  return !!iface && (iface === 'wlan2' || iface.indexOf('halow') === 0);
+}
+
 function halowCapacity() {
   if (typeof LOCAL_DATA === 'undefined' || !LOCAL_DATA || !LOCAL_DATA.interfaces) return null;
   for (var i = 0; i < LOCAL_DATA.interfaces.length; i++) {
@@ -65,7 +74,10 @@ function topoInit(container) {
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#00d4cf" stroke-width="3.5"/></svg><span>GW Route</span></div>' +
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="1.5" stroke-dasharray="6,3"/></svg><span>Multi-hop</span></div>' +
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="1.5" stroke-dasharray="3,5"/></svg><span>Inferred</span></div>' +
-    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="4,6" opacity="0.4"/></svg><span>Stale</span></div>';
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="4,6" opacity="0.4"/></svg><span>Stale</span></div>' +
+    '<div class="topo-legend-title" style="margin-top:6px">RADIO</div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="2.5"/></svg><span>WiFi mesh</span></div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="2.5" stroke-dasharray="3,3"/></svg><span>HaLow</span></div>';
   container.appendChild(legend);
 
   var bar = document.createElement('div');
@@ -106,10 +118,21 @@ function topoInit(container) {
   topoSim = d3.forceSimulation()
     .force('charge', d3.forceManyBody().strength(-1500))
     .force('link', d3.forceLink().id(function(d) { return d.id; }).distance(function(d) {
+      // Two directly-linked nodes each carrying a 115px collision radius
+      // need >=230px of separation to avoid touching; a 120px minimum
+      // here fought that (link force pulling them closer than collision
+      // wanted to allow), which is part of what produced the crowded,
+      // overlapping layout. 200px minimum leaves enough room.
       var tq = d.tq != null ? d.tq : 128;
-      return 120 + ((255 - tq) / 255) * 180;
+      return 200 + ((255 - tq) / 255) * 180;
     }))
-    .force('collision', d3.forceCollide(80))
+    // Each node's label stack (hostname/IP/sublabel) extends to roughly
+    // r+63 below its center — the previous flat 80px collision radius
+    // didn't account for that, so nodes could still be pushed close
+    // enough for one node's label text to run through a neighbor's icon
+    // or edge labels (confirmed live via screenshot). 115 gives the full
+    // label stack clearance regardless of node radius.
+    .force('collision', d3.forceCollide(115))
     .alphaDecay(0.05);
 
   topoNodeMap = {};
@@ -157,7 +180,7 @@ function topoUpdate(data) {
   var links = (data.edges || []).filter(function(e) {
     return nodeIds.has(e.source) && nodeIds.has(e.target);
   }).map(function(e) {
-    return { source: e.source, target: e.target, type: e.type, tq: e.tq, throughput: e.throughput, gw_route: e.gw_route };
+    return { source: e.source, target: e.target, type: e.type, tq: e.tq, throughput: e.throughput, gw_route: e.gw_route, iface: e.iface };
   });
 
   // Status bar
@@ -196,6 +219,14 @@ function topoUpdate(data) {
       if (d.type === 'inferred') return '3,5';
       if (d.type === 'multihop') return '6,3';
       if (d.type === 'unknown') return '2,6';
+      // 'direct' links are solid by default (no route-type pattern to
+      // show) — free to use a dash pattern here to mark HaLow vs solid
+      // for standard WiFi mesh, without colliding with the patterns
+      // above that already mean something else (multihop etc). A fine
+      // 1,3 pattern was tried first and was imperceptible against a
+      // thick, brightly-colored line at normal zoom — even dashes at
+      // 3,3 read clearly as "dashed" rather than "solid with noise".
+      if (d.type === 'direct' && isHalowIface(d.iface)) return '3,3';
       return null;
     })
     .attr('stroke-opacity', function(d) {
@@ -385,6 +416,9 @@ function topoUpdate(data) {
         var cap = halowCapacity();
         var capNote = cap ? ' <span style="opacity:0.6">(' + Math.min(100, Math.round(d.best_link.throughput / cap * 100)) + '% of ch)</span>' : '';
         html += '<div class="tt-row"><span class="tt-label">Speed</span>' + fmtThroughput(d.best_link.throughput) + capNote + '</div>';
+      }
+      if (!d.is_me && d.best_link && d.best_link.iface) {
+        html += '<div class="tt-row"><span class="tt-label">Radio</span>' + (isHalowIface(d.best_link.iface) ? 'HaLow' : 'WiFi') + ' (' + escHtml(d.best_link.iface) + ')</div>';
       }
       if (!d.is_me && d.tq != null) html += '<div class="tt-row"><span class="tt-label">TQ</span>' + d.tq + ' (' + tqPct(d.tq) + '%)</div>';
       if (d.hop_count) html += '<div class="tt-row"><span class="tt-label">Hops</span>' + d.hop_count + '</div>';

@@ -33,7 +33,7 @@ func runCmdStdout(timeout time.Duration, name string, args ...string) (string, e
 
 // --- batman-adv ---
 
-var origRE = regexp.MustCompile(`[\s*]+([0-9a-f:]{17})\s+([\d.]+)(?:ms|s)\s+\(\s*([\d.]+)\)\s+([0-9a-f:]{17})(?:\s+\[\s*(\S+)\s*\])?`)
+var origRE = regexp.MustCompile(`(\*)?\s*([0-9a-f:]{17})\s+([\d.]+)(?:ms|s)\s+\(\s*([\d.]+)\)\s+([0-9a-f:]{17})(?:\s+\[\s*(\S+)\s*\])?`)
 var neighRE = regexp.MustCompile(`([0-9a-f:]{17})\s+([\d.]+)(?:ms|s)\s+\(\s*([\d.]+)\)\s+\[\s*(\S+)\s*\]`)
 var macRE = regexp.MustCompile(`([0-9a-f]{2}(?::[0-9a-f]{2}){5})`)
 
@@ -222,14 +222,15 @@ func runBatctlOriginators() (map[string]int, map[string]BatOriginator) {
 		return tqMap, origMap
 	}
 	for _, m := range origRE.FindAllStringSubmatch(out, -1) {
-		orig := normMAC(m[1])
-		lastSeen, _ := strconv.ParseFloat(m[2], 64)
-		raw, _ := strconv.ParseFloat(m[3], 64)
+		selected := m[1] == "*"
+		orig := normMAC(m[2])
+		lastSeen, _ := strconv.ParseFloat(m[3], 64)
+		raw, _ := strconv.ParseFloat(m[4], 64)
 		tq := normTQ(raw)
-		nexthop := normMAC(m[4])
+		nexthop := normMAC(m[5])
 		iface := ""
-		if len(m) > 5 {
-			iface = m[5]
+		if len(m) > 6 {
+			iface = m[6]
 		}
 		var rawTP float64
 		if isBatmanV() {
@@ -239,8 +240,17 @@ func runBatctlOriginators() (map[string]int, map[string]BatOriginator) {
 		if lastSeen > 60 {
 			continue
 		}
-		if prev, ok := origMap[orig]; !ok || tq > prev.TQ {
-			origMap[orig] = BatOriginator{TQ: tq, RawTP: rawTP, Nexthop: nexthop, Iface: iface, LastSeen: lastSeen}
+		// BATMAN_V's TQ metric saturates at 255 for any link at or above
+		// meshRefThroughput, so two real candidates to the same neighbor
+		// (e.g. a faster WiFi mesh radio and a slower HaLow radio) can tie
+		// on TQ alone — picking between ties via Go's randomized map
+		// iteration order silently produced a different "best" interface
+		// on every restart, even though batman-adv itself deterministically
+		// picks one and marks it with "*" in its own output. Prefer that
+		// ground truth outright; only fall back to the highest-TQ heuristic
+		// while no entry for this originator is marked selected yet.
+		if prev, ok := origMap[orig]; !ok || selected || (!prev.Selected && tq > prev.TQ) {
+			origMap[orig] = BatOriginator{TQ: tq, RawTP: rawTP, Nexthop: nexthop, Iface: iface, LastSeen: lastSeen, Selected: selected}
 		}
 		if tq > tqMap[orig] {
 			tqMap[orig] = tq
@@ -617,7 +627,18 @@ func getInterfaces() []Iface {
 	// wpa_supplicant detection
 	wpaActive := parseWPAActive()
 
-	// no_mesh_if
+	// no_mesh_if lists interfaces on a genuinely separate non-mesh chip
+	// (e.g. onboard Broadcom used only for AP). radio-setup.sh's AP
+	// selection has a second path — carving the AP out of a 5GHz-capable
+	// interface on a dual-radio mesh card (e.g. MT7916: wlan0 2.4GHz mesh,
+	// wlan1 5GHz AP) — which removes that interface from mesh_if and
+	// records it in ap_interface instead, without ever touching
+	// no_mesh_if. Without also reading ap_interface here, such an
+	// interface is neither a batman slave nor in noMeshIfaces, so it falls
+	// through every classification case below and gets silently dropped
+	// from the interfaces list entirely — confirmed live on a CM4 with an
+	// MT7916 card, where a fully working hostapd AP on wlan1 never
+	// appeared anywhere in the UI.
 	noMeshIfaces := make(map[string]bool)
 	if data, err := os.ReadFile(NoMeshIfFile); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
@@ -625,6 +646,11 @@ func getInterfaces() []Iface {
 			if name != "" {
 				noMeshIfaces[name] = true
 			}
+		}
+	}
+	if data, err := os.ReadFile(APInterfaceFile); err == nil {
+		if name := strings.TrimSpace(string(data)); name != "" {
+			noMeshIfaces[name] = true
 		}
 	}
 
@@ -848,7 +874,12 @@ func parseWPAActive() map[string]bool {
 
 func enrichIfacesWithHalow(ifaces []Iface) []Iface {
 	for i, iface := range ifaces {
-		if iface.Driver != "morse_spi" {
+		// morse_usb boards: morse_cli's NL80211 vendor-command queries fail
+		// outright on this transport (confirmed live — every subcommand,
+		// not just "channel", errors with "Failed to rcvmsgs"), so
+		// getHalowDriverInfo falls through to its wpa_supplicant-config
+		// fallback below, which is driver-agnostic.
+		if iface.Driver != "morse_spi" && iface.Driver != "morse_usb" {
 			continue
 		}
 		info := getHalowDriverInfo(iface.Name)
@@ -858,10 +889,19 @@ func enrichIfacesWithHalow(ifaces []Iface) []Iface {
 		if src, ok := info["halow_source"]; ok {
 			ifaces[i].HalowSource = src
 		}
-		if ch, ok := info["channel"]; ok && ifaces[i].Channel == "" {
+		// Overwrite unconditionally, not just when empty: this loop already
+		// only reaches morse_spi/morse_usb interfaces, and the generic `iw
+		// dev` parse used to pre-populate Channel/FreqMHz reports the
+		// driver's internal VHT-mapped representation of the S1G channel
+		// (e.g. "36 / 5180MHz", matching neither the real S1G channel nor
+		// anything a user configured) — confirmed live on a USB HaLow
+		// board. The HaLow-specific source here (morse_cli or the
+		// wpa_supplicant-config fallback) is always more accurate for this
+		// radio and should win.
+		if ch, ok := info["channel"]; ok {
 			ifaces[i].Channel = ch
 		}
-		if freq, ok := info["freq_mhz"]; ok && ifaces[i].FreqMHz == "" {
+		if freq, ok := info["freq_mhz"]; ok {
 			ifaces[i].FreqMHz = freq
 		}
 		if cap, ok := HalowBWTxPowerCapDBM[ifaces[i].HalowBW]; ok {
@@ -887,6 +927,25 @@ func enrichIfacesWithMCS(ifaces []Iface, regNode RegistryNode) []Iface {
 }
 
 // --- Radio ---
+
+// readS1GChannelFromConfig returns the conventional S1G channel number
+// (e.g. "12") from the generated wpa_supplicant config — the only place
+// that number exists; morse_cli's own JSON doesn't carry it.
+func readS1GChannelFromConfig() string {
+	for _, path := range []string{
+		"/etc/wpa_supplicant/wpa_supplicant-wlan2-s1g.conf",
+		"/etc/wpa_supplicant/wpa_supplicant_s1g-wlan2.conf",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if m := regexp.MustCompile(`channel=(\d+)`).FindStringSubmatch(string(data)); len(m) > 1 {
+			return m[1]
+		}
+	}
+	return ""
+}
 
 func getHalowDriverInfo(iface string) map[string]string {
 	if iface == "" {
@@ -915,6 +974,16 @@ func getHalowDriverInfo(iface string) map[string]string {
 				info[k] = v
 			}
 			info["halow_source"] = "morse"
+			// morse_cli's own JSON has no field for the conventional S1G
+			// channel number (confirmed live: channel_frequency,
+			// channel_op_bw, channel_primary_bw, channel_index, bw_mhz —
+			// channel_index is a different concept, a sub-index that's
+			// legitimately 0 here, not the channel number). Only the
+			// wpa_supplicant config has that, so pull it in as a
+			// supplement even though morse_cli otherwise succeeded.
+			if ch := readS1GChannelFromConfig(); ch != "" {
+				info["channel"] = ch
+			}
 			return info
 		}
 	}
@@ -938,9 +1007,13 @@ func getHalowDriverInfo(iface string) map[string]string {
 				info["halow_bw"] = "1MHz"
 			case "67", "69", "70":
 				info["halow_bw"] = "2MHz"
-			case "71":
-				info["halow_bw"] = "4MHz"
-			case "72":
+			case "71", "72":
+				// radio-setup.sh's default case (halow_bw unset or any
+				// value other than 1MHz/2MHz/8MHz) and its 8MHz case both
+				// resolve to op_class 71 (channel 12) as of the op_class
+				// 72/channel 8 fix — confirmed live via wpa_supplicant_s1g's
+				// own channel-info log ("Operating BW: 8 MHz"), not 4MHz as
+				// previously labeled here.
 				info["halow_bw"] = "8MHz"
 			}
 		}
@@ -956,7 +1029,12 @@ func parseMorseChannelOutput(text string) map[string]string {
 	if json.Unmarshal([]byte(text), &data) == nil {
 		freqKeys := []string{"channel_frequency", "frequency", "freq", "freq_khz", "freq_hz", "operating_frequency", "op_chan_freq"}
 		bwKeys := []string{"channel_op_bw", "op_bw", "operating_bw", "channel_bw", "bandwidth", "bw", "op_chan_bw"}
-		chKeys := []string{"channel_index", "channel", "primary_channel", "s1g_channel"}
+		// No "channel_index": confirmed live that's morse_cli's actual JSON
+		// schema for the S1G primary-channel sub-index (legitimately 0 in
+		// our config's s1g_prim_1mhz_chan_index=0), not a channel number —
+		// morse_cli has no field for that at all. getHalowDriverInfo pulls
+		// the real channel number from the wpa_supplicant config instead.
+		chKeys := []string{"channel", "s1g_channel", "primary_channel"}
 
 		for _, k := range freqKeys {
 			if v, ok := data[k]; ok {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -497,8 +498,18 @@ func getGatewayInfo() (string, string) {
 	return "false", ""
 }
 
+// gpspipe normally exits after -n 5 reports; if gpsd is present but stuck
+// (no fix, wedged receiver) it can instead block forever, and since this
+// runs synchronously at the top of every run(), a hung gpspipe freezes the
+// entire registry daemon indefinitely — confirmed live on a node where
+// mesh-registry never wrote /var/run/mesh_node_registry even once across
+// 2+ hours of uptime, with a single gpspipe child stuck the whole time.
+const gpsTimeout = 5 * time.Second
+
 func getGPS() (string, string, string) {
-	out, err := exec.Command("gpspipe", "-w", "-n", "5").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), gpsTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "gpspipe", "-w", "-n", "5").Output()
 	if err != nil {
 		return "", "", ""
 	}
@@ -613,6 +624,11 @@ func collectMCS() map[string]string {
 	return result
 }
 
+// getDirectNeighbors formats each entry as MAC[=tq_or_throughput[=iface]].
+// The iface segment lets the topology UI show which physical radio (HaLow
+// vs standard WiFi mesh) actually carries the link between two *other*
+// nodes, not just links to this node itself — "batctl n" already reports
+// it per neighbor, e.g. "9c:04:b6:a0:aa:13    0.040s (  32.5) [ wlan2]".
 func getDirectNeighbors() string {
 	out, err := exec.Command(batctlBin, "n").Output()
 	if err != nil {
@@ -627,6 +643,11 @@ func getDirectNeighbors() string {
 				speed := strings.Trim(fields[3], "()")
 				if _, err := strconv.ParseFloat(speed, 64); err == nil {
 					entry += "=" + speed
+					if len(fields) >= 6 {
+						if iface := strings.Trim(fields[5], "[]"); iface != "" {
+							entry += "=" + iface
+						}
+					}
 				}
 			}
 			entries = append(entries, entry)

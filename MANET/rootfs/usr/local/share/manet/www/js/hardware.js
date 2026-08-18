@@ -61,10 +61,11 @@ function hwRenderRadios() {
                 '<span class="hw-badge hw-badge-unknown">' + escHtml(r.state || '?') + '</span>';
 
     var busType = r.driver === 'morse_spi' ? 'SPI (HaLow 802.11ah)' :
+                  r.driver === 'morse_usb' ? 'USB (HaLow 802.11ah)' :
                   r.driver === 'brcmfmac' ? 'Onboard WiFi (SDIO)' :
                   r.driver || 'Unknown';
 
-    var isHalow = r.driver === 'morse_spi';
+    var isHalow = r.driver === 'morse_spi' || r.driver === 'morse_usb';
     var rows = hwRow('Role', hwRoleLabel(r.role));
     if (r.driver) rows += hwRow('Driver', r.driver);
     rows += hwRow('Bus / Type', busType);

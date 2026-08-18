@@ -1,0 +1,14 @@
+# mt76 (mt7915e/MT7916) registers its "mt76-phyN" LED class devices with
+# the "phyNtpt" (throughput-blink) trigger active by default. That trigger
+# runs a periodic timer (tpt_trig_timer) that touches PCIe MMIO registers
+# via mt7915_led_set_blink() -> mt7915_wr(). Racing that timer against an
+# interface mode change — e.g. ap-interface-setup.service taking the AP
+# radio down/managed/up, or any later hostapd restart — can hit a fatal
+# "Asynchronous SError Interrupt" and panic the kernel. Confirmed live: a
+# full kernel panic in exactly this call path on a CM4 with an MT7916 card,
+# right as wlan1 was being switched to managed mode for hostapd.
+#
+# Disable the trigger as soon as each LED device appears, before any
+# interface reconfiguration can race it. Purely cosmetic loss (no more
+# blink-on-traffic LED); the radios themselves are unaffected.
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="mt76-phy*", ATTR{trigger}="none"

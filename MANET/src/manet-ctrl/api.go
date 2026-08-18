@@ -1622,7 +1622,14 @@ func halowBWParams(bw, regDomain string) (opClass, channel, primChwidth, txpower
 		case "2MHz":
 			return "69", "10", "1", "2400"
 		case "8MHz":
-			return "72", "8", "1", "2000"
+			// op_class 72 / channel 8 is rejected outright by
+			// wpa_supplicant_s1g ("error determining S1G operating channel
+			// width from operating class") — same bug as radio-setup.sh's
+			// table, fixed there but missed here since this is a separate
+			// duplicate lookup used when the UI/fleet push updates
+			// halow_bw on an already-provisioned node. op_class 71 /
+			// channel 12 is the confirmed-working pair for 8MHz.
+			return "71", "12", "1", "2000"
 		default:
 			return "71", "12", "1", "2200"
 		}
