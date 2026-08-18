@@ -231,7 +231,7 @@ function configRenderEdit(panel, cfg) {
     { label: 'Require Auth', key: 'require_auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },
     { section: 'Voice' },
     { label: 'Voice Enabled', key: 'voice_enabled', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}],
-      hint: 'Off stops mesh-voice entirely (no local capture attempts, no web PTT) — leave on if this node has no mic but should still relay web-based PTT' },
+      hint: 'Off stops this node\'s local mic/speaker and physical PTT button. Browser-based web PTT is unaffected either way.' },
     { label: 'PTT Mode', key: 'voice_ptt_mode', type: 'select', options: [
       {v:'openvlm',l:'OpenVLM HID'},{v:'gpio',l:'GPIO Button'},{v:'always',l:'Always On'},{v:'vox',l:'VOX (auto)'}
     ], voiceKey: 'ptt_mode', fallback: 'openvlm' },
