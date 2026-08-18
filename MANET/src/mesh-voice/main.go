@@ -41,6 +41,23 @@ type voicePeer struct {
 	lastSeen time.Time
 }
 
+// voiceEnabled defaults to true (matches every other boolean mesh.conf key
+// in this file, e.g. voice_beep_tx_start) — voice_enabled=n is an explicit
+// opt-out, not something a fresh mesh.conf needs to set.
+func voiceEnabled() bool {
+	data, err := os.ReadFile(meshConfFile)
+	if err != nil {
+		return true
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if k, v, ok := strings.Cut(line, "="); ok && strings.TrimSpace(k) == "voice_enabled" {
+			return strings.TrimSpace(v) != "n"
+		}
+	}
+	return true
+}
+
 func loadBeepConfig() BeepConfig {
 	bc := BeepConfig{TXStart: true, RXEnd: true, Gain: 3.0}
 	data, err := os.ReadFile(meshConfFile)
@@ -123,6 +140,11 @@ type Config struct {
 }
 
 func main() {
+	if !voiceEnabled() {
+		log.Println("mesh-voice: voice_enabled=n in /etc/mesh.conf — exiting")
+		os.Exit(0)
+	}
+
 	cfg := Config{}
 	flag.StringVar(&cfg.Iface, "iface", "br0", "network interface for multicast")
 	flag.StringVar(&cfg.McastAddr, "addr", "239.69.0.1", "multicast group address")

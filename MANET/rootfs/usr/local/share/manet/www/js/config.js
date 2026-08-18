@@ -229,6 +229,8 @@ function configRenderEdit(panel, cfg) {
     { label: 'Admin Key', key: 'admin_password', type: 'password' },
     { label: 'Require Auth', key: 'require_auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },
     { section: 'Voice' },
+    { label: 'Voice Enabled', key: 'voice_enabled', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}],
+      hint: 'Off stops mesh-voice entirely (no local capture attempts, no web PTT) — leave on if this node has no mic but should still relay web-based PTT' },
     { label: 'PTT Mode', key: 'voice_ptt_mode', type: 'select', options: [
       {v:'openvlm',l:'OpenVLM HID'},{v:'gpio',l:'GPIO Button'},{v:'always',l:'Always On'},{v:'vox',l:'VOX (auto)'}
     ], voiceKey: 'ptt_mode', fallback: 'openvlm' },
@@ -318,7 +320,7 @@ async function configSave() {
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
     'auto_update','update_url',
     'voice_mic_volume','voice_speaker_volume','voice_channel',
-    'voice_beep_tx_start','voice_beep_rx_end','voice_gain'];
+    'voice_beep_tx_start','voice_beep_rx_end','voice_gain','voice_enabled'];
   const config = {};
   meshFields.forEach(f => {
     const el = document.getElementById('cfg-f-' + f);

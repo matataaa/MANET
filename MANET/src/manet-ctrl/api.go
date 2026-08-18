@@ -305,7 +305,15 @@ WantedBy=multi-user.target
 	}
 
 	exec.Command("systemctl", "daemon-reload").Run()
-	exec.Command("systemctl", "restart", "mesh-voice").Run()
+	// mesh-voice exits cleanly on its own when voice_enabled=n, but restarting
+	// a service that's about to immediately exit again is pointless churn —
+	// the Config tab saves this same field via /api/admin/save in parallel
+	// with this call, so mesh.conf may already reflect "disabled" here.
+	if confGet(loadKVFile(MeshConfFile), "voice_enabled", "y") == "n" {
+		exec.Command("systemctl", "stop", "mesh-voice").Run()
+	} else {
+		exec.Command("systemctl", "restart", "mesh-voice").Run()
+	}
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
 }
@@ -766,7 +774,7 @@ var saveableKeys = map[string]bool{
 	"multicast_mode": true,
 	"voice_mic_volume": true, "voice_speaker_volume": true,
 	"voice_channel": true, "voice_rx_channels": true,
-	"voice_ptt_mode": true, "voice_gain": true,
+	"voice_ptt_mode": true, "voice_gain": true, "voice_enabled": true,
 	"voice_beep_tx_start": true, "voice_beep_rx_end": true,
 	"dns_servers": true,
 	"eud_bandwidth": true,
@@ -894,9 +902,22 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		applied["voice_volume_applied"] = true
 	}
 
+	// Apply voice_enabled: stop the daemon outright on disable (mesh-voice
+	// exits cleanly on its own if restarted while disabled, but stopping it
+	// directly avoids a pointless restart cycle and updates the UI's
+	// running-state immediately rather than after RestartSec).
+	if updates["voice_enabled"] != "" {
+		if conf["voice_enabled"] == "n" {
+			runCmd(5*time.Second, "systemctl", "stop", "mesh-voice")
+		} else {
+			runCmd(5*time.Second, "systemctl", "restart", "mesh-voice")
+		}
+		applied["voice_enabled_applied"] = true
+	}
+
 	// Apply voice PTT mode / channel changes
-	if updates["voice_ptt_mode"] != "" || updates["voice_channel"] != "" || updates["voice_gain"] != "" ||
-		updates["voice_beep_tx_start"] != "" || updates["voice_beep_rx_end"] != "" {
+	if conf["voice_enabled"] != "n" && (updates["voice_ptt_mode"] != "" || updates["voice_channel"] != "" || updates["voice_gain"] != "" ||
+		updates["voice_beep_tx_start"] != "" || updates["voice_beep_rx_end"] != "") {
 		txCh := int(voiceTxCh.Load())
 		if txCh <= 0 {
 			txCh = 1
