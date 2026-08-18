@@ -33,9 +33,14 @@ function halowCapacity() {
   return null;
 }
 
-function tpColor(tp) {
+// isHalow: grade against this node's own HaLow channel ceiling (the whole
+// point — 3 Mbps is red on 5 GHz Wi-Fi but excellent on a 1 MHz S1G
+// channel). For a WiFi-backed link that ceiling is meaningless, so it
+// falls through to the same flat 5/2 Mbps thresholds already used when no
+// HaLow capacity is known at all.
+function tpColor(tp, isHalow) {
   if (tp == null || tp <= 0) return '#9aa4b2';
-  var cap = halowCapacity();
+  var cap = isHalow ? halowCapacity() : null;
   var green = cap ? cap * 0.35 : 5;
   var amber = cap ? cap * 0.12 : 2;
   if (tp >= green) return '#22c55e';
@@ -206,7 +211,7 @@ function topoUpdate(data) {
       var s = d.source.id || d.source, t = d.target.id || d.target;
       if (staleIds.has(s) || staleIds.has(t)) return '#6e7681';
       if (d.gw_route) return '#00d4cf';
-      if (d.throughput != null && d.throughput > 0) return tpColor(d.throughput);
+      if (d.throughput != null && d.throughput > 0) return tpColor(d.throughput, isHalowIface(d.iface));
       return tqColor(d.tq);
     })
     .attr('stroke-width', function(d) {
@@ -255,7 +260,7 @@ function topoUpdate(data) {
     })
     .attr('fill', function(d) {
       if (d.gw_route) return '#00d4cf';
-      if (d.throughput != null && d.throughput > 0) return tpColor(d.throughput);
+      if (d.throughput != null && d.throughput > 0) return tpColor(d.throughput, isHalowIface(d.iface));
       return tqColor(d.tq);
     });
 
@@ -363,7 +368,7 @@ function topoUpdate(data) {
     .attr('dy', function(d) { return d.r + 63; })
     .attr('fill', function(d) {
       if (d.stale) return '#ef4444';
-      if (d.best_link && d.best_link.throughput) return tpColor(d.best_link.throughput);
+      if (d.best_link && d.best_link.throughput) return tpColor(d.best_link.throughput, isHalowIface(d.best_link.iface));
       return d.tq != null ? tqColor(d.tq) : '#8b929e';
     });
 
@@ -413,7 +418,17 @@ function topoUpdate(data) {
       if (d.ip) html += '<div class="tt-row"><span class="tt-label">IP</span>' + escHtml(d.ip) + '</div>';
       html += '<div class="tt-row"><span class="tt-label">DNS</span>' + escHtml((d.hostname || '') + '.mesh') + '</div>';
       if (!d.is_me && d.best_link && d.best_link.throughput) {
-        var cap = halowCapacity();
+        // "% of channel" only means something against the HaLow capacity
+        // table — applying it to a WiFi-backed link compared a completely
+        // unrelated ceiling (this node's own HaLow bandwidth setting) and
+        // could claim a WiFi link was "100% of ch" when it was nowhere
+        // near its real capacity (confirmed live: a link showing 38 Mbps
+        // here was actually negotiated at 130+ Mbit/s MCS15 — batman-adv's
+        // throughput figure is a traffic-based estimate, not a PHY-rate
+        // ceiling, and only the HaLow table has a known ceiling to compare
+        // against at all).
+        var isHalow = d.best_link.iface && isHalowIface(d.best_link.iface);
+        var cap = isHalow ? halowCapacity() : null;
         var capNote = cap ? ' <span style="opacity:0.6">(' + Math.min(100, Math.round(d.best_link.throughput / cap * 100)) + '% of ch)</span>' : '';
         html += '<div class="tt-row"><span class="tt-label">Speed</span>' + fmtThroughput(d.best_link.throughput) + capNote + '</div>';
       }
@@ -665,7 +680,7 @@ function topoSetupOrbs(links, staleIds) {
 
     var count = tp > 10 ? 3 : (tp > 2 ? 2 : 1);
     var speed = 0.0012 + Math.min(tp / 50, 1) * 0.003;
-    var color = link.gw_route ? '#00d4cf' : (link.throughput != null ? tpColor(link.throughput) : tqColor(link.tq));
+    var color = link.gw_route ? '#00d4cf' : (link.throughput != null ? tpColor(link.throughput, isHalowIface(link.iface)) : tqColor(link.tq));
 
     for (var i = 0; i < count; i++) {
       var c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
