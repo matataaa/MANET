@@ -457,15 +457,46 @@ func getUptimeSeconds() string {
 	return ""
 }
 
+// battery-reader (src/battery-reader) writes its own status file directly —
+// it doesn't register as a kernel power_supply device, so there's no
+// /sys/class/power_supply/BAT0 on these boards. This previously read that
+// path anyway (a leftover from a generic/laptop assumption), which meant
+// BATTERY_PERCENTAGE was silently empty for every node, always — nothing
+// ever broadcast a peer's battery status to the rest of the mesh.
+//
+// run() ticks every 15s for the rest of the registry (neighbors, uptime,
+// etc.), but battery percentage doesn't need to be that fresh and reading
+// it more often than necessary just adds needless I2C bus traffic on top
+// of battery-reader's own polling — cache it and only re-read every
+// batteryCacheDuration. collectLocal() runs on a single goroutine (the
+// main ticker loop), so no locking is needed for the cache.
+const batteryCacheDuration = 5 * time.Minute
+
+var (
+	batteryCacheVal  string
+	batteryCacheTime time.Time
+)
+
 func getBatteryPct() string {
-	data, err := os.ReadFile("/sys/class/power_supply/BAT0/capacity")
-	if err != nil {
-		data, err = os.ReadFile("/sys/class/power_supply/battery/capacity")
-		if err != nil {
-			return ""
-		}
+	if !batteryCacheTime.IsZero() && time.Since(batteryCacheTime) < batteryCacheDuration {
+		return batteryCacheVal
 	}
-	return strings.TrimSpace(string(data))
+	batteryCacheTime = time.Now()
+
+	data, err := os.ReadFile("/run/battery_status.json")
+	if err != nil {
+		batteryCacheVal = ""
+		return batteryCacheVal
+	}
+	var bs struct {
+		Percentage *int `json:"percentage"`
+	}
+	if json.Unmarshal(data, &bs) != nil || bs.Percentage == nil {
+		batteryCacheVal = ""
+		return batteryCacheVal
+	}
+	batteryCacheVal = strconv.Itoa(*bs.Percentage)
+	return batteryCacheVal
 }
 
 func getCPULoad() string {
