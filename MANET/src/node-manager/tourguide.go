@@ -51,13 +51,20 @@ func maybeRunTourguide(registry map[string]map[string]string, selfMAC, iface24, 
 		return
 	}
 
+	// Capture our real data-channel identity *before* hopping — the hop
+	// below overwrites the tourguide radio's own conf file with the lobby
+	// frequency, so reading it back afterward would report the lobby
+	// channel as "current", not our actual data channel, corrupting the
+	// partition comparison below.
+	myCh24 := getConfFreq(wpaConfPath(iface24))
+	myCh5 := getConfFreq(wpaConfPath(iface5))
+
 	radio := selectTourguideRadio(iface24, iface5)
 	is24 := radio == iface24
 	confPath := wpaConfPath(radio)
-	dataFreq := getConfFreq(confPath)
-	lobbyFreq := lobbyFreq5
+	homeFreq, lobbyFreq := myCh5, lobbyFreq5
 	if is24 {
-		lobbyFreq = lobbyFreq24
+		homeFreq, lobbyFreq = myCh24, lobbyFreq24
 	}
 
 	log.Printf("[acs] tourguide: hopping %s to lobby (%s) for %s", radio, lobbyFreq, tourguideDwell)
@@ -65,14 +72,23 @@ func maybeRunTourguide(registry map[string]map[string]string, selfMAC, iface24, 
 
 	time.Sleep(tourguideDwell)
 
-	myCh24 := getConfFreq(wpaConfPath(iface24))
-	myCh5 := getConfFreq(wpaConfPath(iface5))
+	// Default to going straight back home; a merge below overrides this
+	// with the foreign (winning) channel for whichever band this radio
+	// covers, so the return hop lands on the post-merge frequency instead
+	// of silently reverting the merge that was just applied.
+	returnFreq := homeFreq
 	if foreign := analyzeForeignPartitions(readRegistry(registryFile), selfMAC, myCh24, myCh5); foreign != nil {
-		applyPartitionMerge(foreign, iface24, iface5)
+		if applyPartitionMerge(foreign, iface24, iface5, myCh24, myCh5) {
+			if is24 {
+				returnFreq = foreign.dataCh24
+			} else {
+				returnFreq = foreign.dataCh5
+			}
+		}
 	}
 
-	log.Printf("[acs] tourguide: returning %s to data channel (%s)", radio, dataFreq)
-	hopFrequency(radio, confPath, dataFreq, is24, false)
+	log.Printf("[acs] tourguide: returning %s to data channel (%s)", radio, returnFreq)
+	hopFrequency(radio, confPath, returnFreq, is24, false)
 
 	tourguideState.lastTimestamp = time.Now().Unix()
 	tourguideState.lastRadio = radio
@@ -243,9 +259,14 @@ func analyzeForeignPartitions(registry map[string]map[string]string, selfMAC, my
 // channels if it's the larger side (tie broken by lexicographically lower
 // channel-pair string) — the smaller partition migrates to the larger one
 // rather than the other way around, so a healing mesh converges on
-// whichever side already has more nodes instead of thrashing.
-func applyPartitionMerge(foreign *foreignPartition, iface24, iface5 string) {
-	myConfig := getConfFreq(wpaConfPath(iface24)) + "-" + getConfFreq(wpaConfPath(iface5))
+// whichever side already has more nodes instead of thrashing. Reports
+// whether it actually migrated, so the caller's tourguide-radio return hop
+// can land on the new (not stale pre-merge) frequency. myCh24/myCh5 must be
+// the pre-hop home channels, not read fresh here — during the tourguide's
+// dwell window, one radio's conf file currently holds the lobby frequency,
+// not its real data channel.
+func applyPartitionMerge(foreign *foreignPartition, iface24, iface5, myCh24, myCh5 string) bool {
+	myConfig := myCh24 + "-" + myCh5
 	mySize := uniqueBatmanOriginators() + 1
 	foreignConfig := foreign.dataCh24 + "-" + foreign.dataCh5
 
@@ -253,13 +274,14 @@ func applyPartitionMerge(foreign *foreignPartition, iface24, iface5 string) {
 	if !winnerIsForeign {
 		log.Printf("[acs] partition merge: foreign partition %s on %s (size %d) smaller than ours (size %d) — staying put",
 			foreign.mac, foreignConfig, foreign.size, mySize)
-		return
+		return false
 	}
 
 	log.Printf("[acs] partition merge: migrating to %s from %s (foreign size %d beats ours %d)",
 		foreignConfig, foreign.mac, foreign.size, mySize)
 	setIfaceFrequency(iface24, wpaConfPath(iface24), foreign.dataCh24, "2.4 GHz (partition merge)")
 	setIfaceFrequency(iface5, wpaConfPath(iface5), foreign.dataCh5, "5 GHz (partition merge)")
+	return true
 }
 
 func writePartitionSize() {
