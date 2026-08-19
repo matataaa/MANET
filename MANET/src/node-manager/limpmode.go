@@ -51,10 +51,16 @@ func reconcileLimpMode(registry map[string]map[string]string, iface24, iface5 st
 
 	if ratio > limpModeConsensus {
 		if !currentlyLimp {
-			log.Printf("[acs] limp mode: consensus %.0f%% of active nodes — throttling bitrates", ratio*100)
-			setLegacyBitrates(iface24, iface5)
-			os.WriteFile(limpConsensusStateFile, []byte(strconv.FormatInt(time.Now().Unix(), 10)), 0644)
+			log.Printf("[acs] limp mode: consensus %.0f%% of active nodes — entering, throttling bitrates", ratio*100)
+			writeStateFile(limpConsensusStateFile, strconv.FormatInt(time.Now().Unix(), 10))
 		}
+		// Re-applied every cycle, not just on the entry transition above:
+		// tourguide's lobby-hop return unconditionally clears whichever
+		// radio it used, with no awareness of mesh-wide limp state, so a
+		// persistent limp episode needs the throttle reasserted each
+		// cycle or that radio silently stays un-throttled until the next
+		// consensus-driven entry.
+		setLegacyBitrates(iface24, iface5)
 		return
 	}
 
@@ -81,11 +87,21 @@ func readLimpEntryTime() int64 {
 }
 
 func setLegacyBitrates(iface24, iface5 string) {
-	if iface24 != "" {
-		exec.Command("iw", "dev", iface24, "set", "bitrates", "legacy-2.4", "1", "2", "5.5", "11").Run()
+	setLegacyBitrate(iface24, true)
+	setLegacyBitrate(iface5, false)
+}
+
+// setLegacyBitrate throttles a single radio to legacy/robust rates — the
+// one place both mesh-wide limp-mode entry and tourguide's lobby hop get
+// their rate list from, so the two paths can't drift apart.
+func setLegacyBitrate(iface string, is24 bool) {
+	if iface == "" {
+		return
 	}
-	if iface5 != "" {
-		exec.Command("iw", "dev", iface5, "set", "bitrates", "legacy-5", "6", "9", "12", "18").Run()
+	if is24 {
+		exec.Command("iw", "dev", iface, "set", "bitrates", "legacy-2.4", "1", "2", "5.5", "11").Run()
+	} else {
+		exec.Command("iw", "dev", iface, "set", "bitrates", "legacy-5", "6", "9", "12", "18").Run()
 	}
 }
 

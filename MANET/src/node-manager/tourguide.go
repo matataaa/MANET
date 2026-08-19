@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -22,13 +23,33 @@ const (
 	partitionSizeFile  = "/var/run/mesh_partition_size"
 )
 
-// tourguideState is this node's own record of its last turn — read back by
-// electTourguide (so the rotation is fair) and persisted to
-// tourguideStateFile for mesh-registry to gossip (so *peers'* elections can
-// see it too, via LAST_TOURGUIDE_TIMESTAMP/LAST_TOURGUIDE_RADIO).
-var tourguideState struct {
-	lastTimestamp int64
-	lastRadio     string
+// readTourguideState reads this node's own record of its last turn back
+// from disk — deliberately not cached in memory (matching limpmode.go's
+// readLimpEntryTime pattern): node-manager can restart (crash, systemd
+// restart, deploy) without a reboot, and /var/run survives that. Caching
+// in a package var would reset to zero on every such restart, making
+// electTourguide think this node has never taken a turn and immediately
+// re-electing it — the exact failure mode a persistent on-disk record
+// exists to avoid. Also persisted to tourguideStateFile for mesh-registry
+// to gossip (so *peers'* elections can see it too).
+func readTourguideState() (lastTimestamp int64, lastRadio string) {
+	data, err := os.ReadFile(tourguideStateFile)
+	if err != nil {
+		return 0, ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "LAST_TOURGUIDE_TIME":
+			lastTimestamp, _ = strconv.ParseInt(v, 10, 64)
+		case "LAST_TOURGUIDE_RADIO":
+			lastRadio = v
+		}
+	}
+	return lastTimestamp, lastRadio
 }
 
 // maybeRunTourguide elects a tourguide for this round and, if it's us, hops
@@ -39,8 +60,10 @@ var tourguideState struct {
 // the same cycle here is a reasonable simplification: this fork doesn't
 // have upstream's separate lobby/data *state machine*, just a per-cycle
 // election, so there's no separate clock to synchronize against.
-func maybeRunTourguide(registry map[string]map[string]string, selfMAC, iface24, iface5 string) {
-	winner := electTourguide(registry, selfMAC)
+func maybeRunTourguide(registry map[string]map[string]string, selfMAC, iface24, iface5 string, mySize int) {
+	lastTS, lastRadio := readTourguideState()
+
+	winner := electTourguide(registry, selfMAC, lastTS)
 	if winner != selfMAC {
 		return
 	}
@@ -59,7 +82,7 @@ func maybeRunTourguide(registry map[string]map[string]string, selfMAC, iface24, 
 	myCh24 := getConfFreq(wpaConfPath(iface24))
 	myCh5 := getConfFreq(wpaConfPath(iface5))
 
-	radio := selectTourguideRadio(iface24, iface5)
+	radio := selectTourguideRadio(iface24, iface5, lastRadio)
 	is24 := radio == iface24
 	confPath := wpaConfPath(radio)
 	homeFreq, lobbyFreq := myCh5, lobbyFreq5
@@ -78,7 +101,7 @@ func maybeRunTourguide(registry map[string]map[string]string, selfMAC, iface24, 
 	// of silently reverting the merge that was just applied.
 	returnFreq := homeFreq
 	if foreign := analyzeForeignPartitions(readRegistry(registryFile), selfMAC, myCh24, myCh5); foreign != nil {
-		if applyPartitionMerge(foreign, iface24, iface5, myCh24, myCh5) {
+		if applyPartitionMerge(foreign, iface24, iface5, myCh24, myCh5, mySize) {
 			if is24 {
 				returnFreq = foreign.dataCh24
 			} else {
@@ -90,10 +113,8 @@ func maybeRunTourguide(registry map[string]map[string]string, selfMAC, iface24, 
 	log.Printf("[acs] tourguide: returning %s to data channel (%s)", radio, returnFreq)
 	hopFrequency(radio, confPath, returnFreq, is24, false)
 
-	tourguideState.lastTimestamp = time.Now().Unix()
-	tourguideState.lastRadio = radio
 	writeStateFile(tourguideStateFile,
-		"LAST_TOURGUIDE_TIME="+strconv.FormatInt(tourguideState.lastTimestamp, 10)+"\n"+
+		"LAST_TOURGUIDE_TIME="+strconv.FormatInt(time.Now().Unix(), 10)+"\n"+
 			"LAST_TOURGUIDE_RADIO="+radio+"\n")
 }
 
@@ -106,7 +127,7 @@ func maybeRunTourguide(registry map[string]map[string]string, selfMAC, iface24, 
 // tie-broken by lowest MAC — a fairness rotation, not deterministic-by-MAC
 // alone, so the duty (and the RF cost of hopping off data channel) spreads
 // across the mesh instead of always landing on one node.
-func electTourguide(registry map[string]map[string]string, selfMAC string) string {
+func electTourguide(registry map[string]map[string]string, selfMAC string, selfLastTS int64) string {
 	candidates := []string{selfMAC}
 	for _, mac := range directBatmanNeighbors() {
 		if mac != selfMAC {
@@ -125,7 +146,7 @@ func electTourguide(registry map[string]map[string]string, selfMAC string) strin
 		}
 		var ts int64
 		if mac == selfMAC {
-			ts = tourguideState.lastTimestamp
+			ts = selfLastTS
 		} else if fields, ok := registry[mac]; ok {
 			ts, _ = strconv.ParseInt(fields["LAST_TOURGUIDE_TIMESTAMP"], 10, 64)
 		}
@@ -173,8 +194,8 @@ func directBatmanNeighbors() []string {
 	return macs
 }
 
-func selectTourguideRadio(iface24, iface5 string) string {
-	switch tourguideState.lastRadio {
+func selectTourguideRadio(iface24, iface5, lastRadio string) string {
+	switch lastRadio {
 	case iface24:
 		return iface5
 	default:
@@ -196,11 +217,7 @@ func hopFrequency(iface, confPath, targetFreq string, is24, toLobby bool) {
 	exec.Command("wpa_cli", "-i", iface, "reconfigure").Run()
 	waitForFrequency(iface, targetFreq)
 	if toLobby {
-		if is24 {
-			exec.Command("iw", "dev", iface, "set", "bitrates", "legacy-2.4", "1", "2", "5.5", "11").Run()
-		} else {
-			exec.Command("iw", "dev", iface, "set", "bitrates", "legacy-5", "6", "9", "12", "18").Run()
-		}
+		setLegacyBitrate(iface, is24)
 	} else {
 		clearBitrateLimit(iface)
 	}
@@ -264,10 +281,12 @@ func analyzeForeignPartitions(registry map[string]map[string]string, selfMAC, my
 // can land on the new (not stale pre-merge) frequency. myCh24/myCh5 must be
 // the pre-hop home channels, not read fresh here — during the tourguide's
 // dwell window, one radio's conf file currently holds the lobby frequency,
-// not its real data channel.
-func applyPartitionMerge(foreign *foreignPartition, iface24, iface5, myCh24, myCh5 string) bool {
+// not its real data channel. mySize is likewise the caller's single
+// per-cycle originator count taken before the hop, not recomputed here —
+// measuring it now would undercount whatever this partition can only reach
+// through the radio that's currently sitting in the lobby.
+func applyPartitionMerge(foreign *foreignPartition, iface24, iface5, myCh24, myCh5 string, mySize int) bool {
 	myConfig := myCh24 + "-" + myCh5
-	mySize := uniqueBatmanOriginators() + 1
 	foreignConfig := foreign.dataCh24 + "-" + foreign.dataCh5
 
 	winnerIsForeign := foreign.size > mySize || (foreign.size == mySize && foreignConfig < myConfig)
@@ -284,7 +303,6 @@ func applyPartitionMerge(foreign *foreignPartition, iface24, iface5, myCh24, myC
 	return true
 }
 
-func writePartitionSize() {
-	size := uniqueBatmanOriginators() + 1
-	writeStateFile(partitionSizeFile, strconv.Itoa(size))
+func writePartitionSize(originators int) {
+	writeStateFile(partitionSizeFile, strconv.Itoa(originators+1))
 }

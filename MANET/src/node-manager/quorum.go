@@ -56,8 +56,9 @@ func activeAlfredCount(registry map[string]map[string]string) int {
 // (data plane, "who can I actually reach") vs alfred (gossip, "who does the
 // mesh believe exists") can disagree, and the gap tells you whether this
 // node is genuinely isolated or just a functional minority partition.
-func quorumOK(registry map[string]map[string]string) bool {
-	originators := uniqueBatmanOriginators()
+// originators is the caller's single per-cycle uniqueBatmanOriginators()
+// count, not recomputed here — see runACSTick.
+func quorumOK(registry map[string]map[string]string, originators int) bool {
 	active := activeAlfredCount(registry)
 
 	// Scenario 1 — solo isolation: alfred still remembers other nodes but

@@ -19,8 +19,6 @@ const (
 	radioStateFile  = "/var/lib/mesh_radio_state.json"
 	gwCheckInterval = 60
 	loopInterval    = 15
-	staticFreq24    = "2412"
-	staticFreq5     = "5180"
 )
 
 func main() {
@@ -222,13 +220,17 @@ func ensureStaticIfaceChannel(iface, confPath, staticFreq, band string) {
 	setIfaceFrequency(iface, confPath, staticFreq, band)
 }
 
+// Static mode permanently parks the mesh on the same frequencies ACS uses
+// as its lobby/rendezvous pair (lobbyFreq24/lobbyFreq5, channel_election.go)
+// — there's only one "the fixed, always-known channel" concept in this
+// codebase, not two, so both modes share the same constants.
 func ensureStaticChannels() {
 	iface24, iface5 := meshIfaces()
 	if iface24 != "" {
-		ensureStaticIfaceChannel(iface24, wpaConfPath(iface24), staticFreq24, "2.4 GHz")
+		ensureStaticIfaceChannel(iface24, wpaConfPath(iface24), lobbyFreq24, "2.4 GHz")
 	}
 	if iface5 != "" {
-		ensureStaticIfaceChannel(iface5, wpaConfPath(iface5), staticFreq5, "5 GHz")
+		ensureStaticIfaceChannel(iface5, wpaConfPath(iface5), lobbyFreq5, "5 GHz")
 	}
 }
 
@@ -267,17 +269,38 @@ func runACSTick() {
 		return
 	}
 
+	selfMAC := myRegistryMAC()
+	if selfMAC == "" {
+		// bat0/br0 not up yet (early boot). Running the election under a
+		// blank identity would fail to exclude our own registry entry from
+		// peer aggregation and could let this node win elections (tourguide,
+		// eventually service placement) under a bogus identity — better to
+		// just wait for the next cycle once the interface exists.
+		log.Println("[acs] no bat0/br0 MAC yet, skipping this cycle")
+		return
+	}
+
 	report := performScan(iface24, iface5)
 	writeChannelReport(report)
 
 	registry := readRegistry(registryFile)
 	reports := collectFreshReports(registry, report)
 
+	// Count batman-adv originators once, up front, and reuse it everywhere
+	// this cycle needs a "how big is my partition" answer (quorum, the
+	// gossiped partition size, and tourguide's merge decision). Computing
+	// it separately in each place meant up to three inconsistent snapshots
+	// per cycle — and the one a partition-merge decision used was taken
+	// ~12+ seconds later, after this node's own tourguide radio had
+	// already hopped off to the lobby channel, undercounting reachability
+	// through it.
+	originators := uniqueBatmanOriginators()
+
 	// Quorum failure means this node can't actually reach enough of the
 	// mesh it believes exists — retreat to the lobby regardless of what
 	// the election would otherwise have picked, so it has the best chance
 	// of finding (or being found by) the rest of the mesh again.
-	quorum := quorumOK(registry)
+	quorum := quorumOK(registry, originators)
 
 	limp := false
 
@@ -304,7 +327,7 @@ func runACSTick() {
 
 	setLimpMode(limp)
 
-	writePartitionSize()
+	writePartitionSize(originators)
 	if quorum {
 		// Tourguide duty means briefly hopping off the data channel this
 		// node already just fought to defend — pointless (and disruptive)
@@ -318,7 +341,7 @@ func runACSTick() {
 		// upstream's own stage order (tourguide, then limp-mode
 		// management). Running it the other way around would leave that
 		// radio un-throttled for up to a full ACS cycle.
-		maybeRunTourguide(registry, myRegistryMAC(), iface24, iface5)
+		maybeRunTourguide(registry, selfMAC, iface24, iface5, originators+1)
 	}
 
 	reconcileLimpMode(registry, iface24, iface5)
