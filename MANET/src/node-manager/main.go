@@ -255,29 +255,46 @@ func runACSTick() {
 	registry := readRegistry(registryFile)
 	reports := collectFreshReports(registry, report)
 
+	// Quorum failure means this node can't actually reach enough of the
+	// mesh it believes exists — retreat to the lobby regardless of what
+	// the election would otherwise have picked, so it has the best chance
+	// of finding (or being found by) the rest of the mesh again.
+	quorum := quorumOK(registry)
+
 	limp := false
 
 	if iface24 != "" {
 		cur := getConfFreq(wpaConfPath(iface24))
 		result := electBand(reports, band24Channels, cur, lobbyFreq24, "2.4GHz")
-		setIfaceFrequency(iface24, wpaConfPath(iface24), result.freq, "2.4 GHz (ACS)")
+		freq := result.freq
+		if !quorum {
+			freq = lobbyFreq24
+		}
+		setIfaceFrequency(iface24, wpaConfPath(iface24), freq, "2.4 GHz (ACS)")
 		limp = limp || result.limp
 	}
 	if iface5 != "" {
 		cur := getConfFreq(wpaConfPath(iface5))
 		result := electBand(reports, band5Channels, cur, lobbyFreq5, "5GHz")
-		setIfaceFrequency(iface5, wpaConfPath(iface5), result.freq, "5 GHz (ACS)")
+		freq := result.freq
+		if !quorum {
+			freq = lobbyFreq5
+		}
+		setIfaceFrequency(iface5, wpaConfPath(iface5), freq, "5 GHz (ACS)")
 		limp = limp || result.limp
 	}
 
 	setLimpMode(limp)
+	reconcileLimpMode(registry, iface24, iface5)
 }
 
 // setLimpMode records this node's own read on RF conditions from this
 // tick's election (existence of /var/run/mesh_limp_mode, same file
-// mesh-registry's collectLocal() already checks for the IsLimp field).
-// This is the per-node signal only — Stage 2 adds the mesh-wide consensus
-// check that decides whether to actually throttle bitrates from it.
+// mesh-registry's collectLocal() already checks for the IsLimp field, and
+// what gets gossiped as the IS_IN_LIMP_MODE registry field). This is only
+// this node's own signal — reconcileLimpMode (limpmode.go) is the separate
+// mesh-wide consensus check that decides whether to actually throttle
+// bitrates from the aggregate of everyone's signal, including this one.
 func setLimpMode(limp bool) {
 	const limpFile = "/var/run/mesh_limp_mode"
 	if limp {
