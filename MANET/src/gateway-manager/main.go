@@ -188,6 +188,15 @@ func pollClient(cfg Config) {
 
 	gwMAC := batmanGatewayMAC()
 	if gwMAC == "" {
+		// No node is currently announcing gateway status. A default route
+		// installed on an earlier poll would still point at a node that
+		// stopped NATing — traffic would silently black-hole instead of
+		// failing visibly — so withdraw it rather than leaving it in place.
+		cur := runOut("ip", "route", "show", "default")
+		if strings.Contains(cur, "dev br0") {
+			run("ip", "route", "del", "default", "dev", "br0")
+			log.Println("withdrew stale default route (no gateway announced)")
+		}
 		return
 	}
 
@@ -349,13 +358,32 @@ func pingReachable(ip string) bool {
 }
 
 func internetProbe(iface string) bool {
-	hits := 0
 	for _, target := range probeTargets {
 		if exec.Command("ping", "-c", "1", "-W", "2", "-I", iface, target).Run() == nil {
-			hits++
+			return true
 		}
 	}
-	return hits >= 1
+
+	// Some uplinks filter or rate-limit ICMP to public IPs while TCP/UDP
+	// pass through fine — a ping-only probe flapped gateway mode on and off
+	// on an otherwise working LAN. Fall back to an HTTPS request and finally
+	// a bare TCP connect before concluding the uplink is actually down.
+	// probeTargets doubles as the fallback target list: 1.1.1.1, 8.8.8.8,
+	// and 9.9.9.9 all serve DNS-over-HTTPS on :443, so both checks hit a
+	// real listening service without introducing a DNS dependency.
+	for _, target := range probeTargets {
+		if exec.Command("curl", "--interface", iface, "--connect-timeout", "2",
+			"-s", "-k", "-o", "/dev/null", "https://"+target+"/").Run() == nil {
+			return true
+		}
+	}
+	for _, target := range probeTargets {
+		if exec.Command("curl", "--interface", iface, "--connect-timeout", "2",
+			"-s", "telnet://"+target+":443").Run() == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func ifaceHasCarrier(iface string) bool {
