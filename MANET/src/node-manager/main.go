@@ -286,6 +286,14 @@ func runACSTick() {
 
 	setLimpMode(limp)
 	reconcileLimpMode(registry, iface24, iface5)
+
+	writePartitionSize()
+	if quorum {
+		// Tourguide duty means briefly hopping off the data channel this
+		// node already just fought to defend — pointless (and disruptive)
+		// on a cycle where quorum already forced a retreat to lobby.
+		maybeRunTourguide(registry, myRegistryMAC(), iface24, iface5)
+	}
 }
 
 // setLimpMode records this node's own read on RF conditions from this
