@@ -685,7 +685,7 @@ public class EudActivity extends AppCompatActivity {
             try {
                 String base = nodeUrl.replaceAll("/$", "");
                 String body = "{\"target\":\"" + ip + "\",\"count\":3,\"interval\":0.5}";
-                HttpURLConnection conn = openConnection(base + "/api/ping");
+                HttpURLConnection conn = openConnection(base + "/api/ping/run");
                 conn.setRequestMethod("POST");
                 conn.setRequestProperty("Content-Type", "application/json");
                 conn.setDoOutput(true);
@@ -775,6 +775,16 @@ public class EudActivity extends AppCompatActivity {
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
+                    if (homeDownTime == 0) {
+                        // homeTickRunnable already crossed HOLD_MS while still
+                        // held, navigated to MainActivity, and zeroed
+                        // homeDownTime via resetHomeButton(). Recomputing
+                        // "held" below would then use it as an epoch
+                        // timestamp instead of a duration, trivially exceed
+                        // HOLD_MS, and re-fire startActivity()+finish() on an
+                        // Activity that's already mid-finish — a crash.
+                        return true;
+                    }
                     long held = System.currentTimeMillis() - homeDownTime;
                     resetHomeButton();
                     if (held >= HOLD_MS) {
