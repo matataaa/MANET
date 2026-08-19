@@ -348,6 +348,17 @@ systemctl restart batman-enslave      # re-enslaves interfaces
 systemctl restart alfred              # reconnects gossip
 ```
 
+**Go service binaries need an atomic replace, not a plain overwrite.** `scp`ing or `cp`ing a new binary directly onto `/usr/local/bin/<service>` while that service's process is still running the old one fails with `Text file busy` — and if you don't check the exit code, this fails *silently*: the copy no-ops, `systemctl restart` just re-execs the unchanged old binary, and it looks like the deploy worked. Stage the new binary under a different name in the same directory, then `mv` it over the target — `mv` is a rename, not a write into the running inode, so it works even while the old binary is executing:
+
+```bash
+scp <service> radio@<node>:/usr/local/bin/<service>.new
+ssh radio@<node> "chmod +x /usr/local/bin/<service>.new && \
+  mv /usr/local/bin/<service>.new /usr/local/bin/<service> && \
+  systemctl restart <service>"
+```
+
+Always back up the existing binary first (`cp /usr/local/bin/<service> /usr/local/bin/<service>.bak-<reason>`) so there's a fast manual rollback if the new one misbehaves. After restarting, confirm the new binary actually landed — `md5sum /usr/local/bin/<service>` against the build output, and `systemctl status <service>` should show `NRestarts=0` and a fresh start time, not a crash-restart loop.
+
 ## Parallel Multi-Node Check
 
 When checking multiple nodes, SSH into all of them in parallel (separate shell calls) to compare state side-by-side. Always check that both sides of a mesh link agree on SSID, channel, and SAE key.
