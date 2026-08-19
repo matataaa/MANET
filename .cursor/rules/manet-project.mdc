@@ -54,10 +54,10 @@ The registry drives IP allocation, gateway selection, service elections, channel
 
 ## Node Manager Modes
 
-Controlled by `acs=` in `/etc/mesh.conf`:
+There is a single `node-manager` Go binary (`src/node-manager/`), not separate static/ACS scripts. Mode is controlled by `acs=` in `/etc/mesh.conf` (already wired into provisioning end-to-end; `y`/anything-but-`y` reads back via `loadConf("acs")` in `main.go`):
 
-- **Static** (`node-manager-static.sh`): Simple loop — publish status, build registry, run IP manager and service elections. No RF scanning or channel changes.
-- **ACS** (`node-manager-acs.sh`): Full orchestrator — adds RF scanning, channel elections, tourguide partition healing, limp mode (jamming response), and quorum checking.
+- **Static** (`acs=n`, default): `ensureStaticChannels()` pins both mesh radios to the fixed lobby frequencies (2412/5180) every 15s tick, correcting drift. No RF scanning, no election.
+- **ACS** (`acs=y`, port of upstream in progress on `feat/acs-port`): `runACSTick()` replaces the static enforcement — scans candidate channels (`scan.go`), aggregates self + peer scan reports from the registry (`registry_read.go`, `channel_election.go`), and elects a channel per band, falling back to the lobby frequency (and raising a per-node limp-mode signal) when the RF environment itself is the problem. Election results and scan reports gossip via the existing `mesh-registry` alfred pipe (new `NodeInfo.ChannelReport` field) — no new alfred type. Tourguide-based partition healing and mesh-wide limp-mode consensus are staged follow-ups on the same branch, not yet implemented as of this note.
 
 ## Web Interfaces on Nodes
 

@@ -14,13 +14,13 @@ import (
 )
 
 const (
-	confFile         = "/etc/mesh.conf"
-	meshIfFile       = "/var/lib/mesh_if"
-	radioStateFile   = "/var/lib/mesh_radio_state.json"
-	gwCheckInterval  = 60
-	loopInterval     = 15
-	staticFreq24     = "2412"
-	staticFreq5      = "5180"
+	confFile        = "/etc/mesh.conf"
+	meshIfFile      = "/var/lib/mesh_if"
+	radioStateFile  = "/var/lib/mesh_radio_state.json"
+	gwCheckInterval = 60
+	loopInterval    = 15
+	staticFreq24    = "2412"
+	staticFreq5     = "5180"
 )
 
 func main() {
@@ -28,7 +28,13 @@ func main() {
 	log.SetPrefix("[node-manager] ")
 	log.Println("starting")
 
-	ensureStaticChannels()
+	acsEnabled := loadConf("acs") == "y"
+	if acsEnabled {
+		log.Println("ACS (automatic channel selection) enabled")
+		runACSTick()
+	} else {
+		ensureStaticChannels()
+	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -40,7 +46,11 @@ func main() {
 
 	loop := func() {
 		radioStateSync()
-		ensureStaticChannels()
+		if acsEnabled {
+			runACSTick()
+		} else {
+			ensureStaticChannels()
+		}
 		if time.Since(lastGWCheck) >= gwCheckInterval*time.Second {
 			gatewayReconcile()
 			lastGWCheck = time.Now()
@@ -149,35 +159,42 @@ func getConfFreq(confPath string) string {
 	return ""
 }
 
-func ensureStaticIfaceChannel(iface, confPath, staticFreq, band string) {
+// setIfaceFrequency rewrites confPath's frequency= line to targetFreq (if it
+// isn't already there) and restarts wpa_supplicant for iface. Shared by
+// static-channel enforcement and ACS's election-driven channel changes —
+// the only difference between the two modes is where targetFreq comes from.
+// Returns whether a change was actually made.
+func setIfaceFrequency(iface, confPath, targetFreq, label string) bool {
 	if iface == "" || confPath == "" {
-		return
+		return false
 	}
 	if !fileExists(confPath) {
-		log.Printf("static mesh WPA config not ready for %s: %s", band, confPath)
-		return
+		log.Printf("wpa config not ready for %s: %s", label, confPath)
+		return false
 	}
 	freq := getConfFreq(confPath)
-	if freq == staticFreq {
-		return
+	if freq == targetFreq {
+		return false
 	}
 
-	log.Printf("correcting %s to static channel %s (was %s)", band, staticFreq, freq)
+	log.Printf("setting %s to channel %s (was %s)", label, targetFreq, freq)
 	data, err := os.ReadFile(confPath)
 	if err != nil {
-		return
+		return false
 	}
 	var out strings.Builder
 	for _, line := range strings.Split(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if k, _, ok := strings.Cut(trimmed, "="); ok && strings.TrimSpace(k) == "frequency" {
-			out.WriteString("frequency=" + staticFreq + "\n")
+			out.WriteString("frequency=" + targetFreq + "\n")
 		} else {
 			out.WriteString(line + "\n")
 		}
 	}
 	result := strings.TrimRight(out.String(), "\n") + "\n"
-	os.WriteFile(confPath, []byte(result), 0644)
+	if err := os.WriteFile(confPath, []byte(result), 0644); err != nil {
+		return false
+	}
 
 	if radioIfaceEnabled(iface) {
 		svc := "wpa_supplicant@" + iface + ".service"
@@ -185,17 +202,88 @@ func ensureStaticIfaceChannel(iface, confPath, staticFreq, band string) {
 		exec.Command("systemctl", "restart", svc).Run()
 		time.Sleep(5 * time.Second)
 	}
+	return true
+}
+
+func ensureStaticIfaceChannel(iface, confPath, staticFreq, band string) {
+	setIfaceFrequency(iface, confPath, staticFreq, band)
 }
 
 func ensureStaticChannels() {
 	iface24, iface5 := meshIfaces()
 	if iface24 != "" {
-		conf24 := "/etc/wpa_supplicant/wpa_supplicant-" + iface24 + ".conf"
-		ensureStaticIfaceChannel(iface24, conf24, staticFreq24, "2.4 GHz")
+		ensureStaticIfaceChannel(iface24, wpaConfPath(iface24), staticFreq24, "2.4 GHz")
 	}
 	if iface5 != "" {
-		conf5 := "/etc/wpa_supplicant/wpa_supplicant-" + iface5 + ".conf"
-		ensureStaticIfaceChannel(iface5, conf5, staticFreq5, "5 GHz")
+		ensureStaticIfaceChannel(iface5, wpaConfPath(iface5), staticFreq5, "5 GHz")
+	}
+}
+
+func wpaConfPath(iface string) string {
+	return "/etc/wpa_supplicant/wpa_supplicant-" + iface + ".conf"
+}
+
+// acsCycleInterval matches upstream's scan cadence (its main loop runs
+// scan/publish/registry/election on a clock-synchronized 3-minute cycle).
+// node-manager's own loop ticks every 15s for its other duties (radio-state
+// sync, gateway reconcile, service elections) — runACSTick is called every
+// tick but only actually scans/elects once this interval has passed, so
+// ACS doesn't take radios off-channel far more often than upstream does.
+const acsCycleInterval = 180 * time.Second
+
+var lastACSCycle time.Time
+
+// runACSTick is the ACS-mode replacement for ensureStaticChannels(): scan,
+// publish the result for peers (via mesh-registry picking up
+// channelReportFile), aggregate self + fresh peer reports from the
+// registry, elect a channel per band, and apply it. Every node runs this
+// same deterministic computation independently — there is no coordinator.
+func runACSTick() {
+	if !lastACSCycle.IsZero() && time.Since(lastACSCycle) < acsCycleInterval {
+		return
+	}
+	lastACSCycle = time.Now()
+
+	iface24, iface5 := meshIfaces()
+	if iface24 == "" && iface5 == "" {
+		return
+	}
+
+	report := performScan(iface24, iface5)
+	writeChannelReport(report)
+
+	registry := readRegistry(registryFile)
+	reports := collectFreshReports(registry, report)
+
+	limp := false
+
+	if iface24 != "" {
+		cur := getConfFreq(wpaConfPath(iface24))
+		result := electBand(reports, band24Channels, cur, lobbyFreq24, "2.4GHz")
+		setIfaceFrequency(iface24, wpaConfPath(iface24), result.freq, "2.4 GHz (ACS)")
+		limp = limp || result.limp
+	}
+	if iface5 != "" {
+		cur := getConfFreq(wpaConfPath(iface5))
+		result := electBand(reports, band5Channels, cur, lobbyFreq5, "5GHz")
+		setIfaceFrequency(iface5, wpaConfPath(iface5), result.freq, "5 GHz (ACS)")
+		limp = limp || result.limp
+	}
+
+	setLimpMode(limp)
+}
+
+// setLimpMode records this node's own read on RF conditions from this
+// tick's election (existence of /var/run/mesh_limp_mode, same file
+// mesh-registry's collectLocal() already checks for the IsLimp field).
+// This is the per-node signal only — Stage 2 adds the mesh-wide consensus
+// check that decides whether to actually throttle bitrates from it.
+func setLimpMode(limp bool) {
+	const limpFile = "/var/run/mesh_limp_mode"
+	if limp {
+		os.WriteFile(limpFile, []byte{}, 0644)
+	} else {
+		os.Remove(limpFile)
 	}
 }
 
@@ -229,4 +317,3 @@ func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
-
