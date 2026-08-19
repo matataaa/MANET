@@ -3,7 +3,9 @@ package eu.frosttechnologies.meshctrl;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.DashPathEffect;
 import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.view.MotionEvent;
 import android.view.View;
@@ -35,6 +37,9 @@ public class MeshTopoView extends View {
     private final Paint dimTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint linkTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint linkPlatePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint linkPlateBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final DashPathEffect halowDash = new DashPathEffect(new float[]{14f, 10f}, 0f);
 
     private boolean nvgMode = false;
     private JSONArray nodes;
@@ -133,9 +138,21 @@ public class MeshTopoView extends View {
 
         linkTextPaint.setColor(priBright);
         linkTextPaint.setTextSize(22f);
-        linkTextPaint.setTypeface(Typeface.MONOSPACE);
+        linkTextPaint.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
         linkTextPaint.setTextAlign(Paint.Align.CENTER);
-        linkTextPaint.setShadowLayer(3, 0, 0, pri);
+
+        // A shadow glow alone doesn't hold up against a line or another
+        // label crossing behind small text — a solid backing plate keeps
+        // the throughput figures legible regardless of what's behind them.
+        int bg = nvgMode ? 0xFF0f0a0a : 0xFF0a0f0a;
+        linkPlatePaint.setColor(bg);
+        linkPlatePaint.setAlpha(224);
+        linkPlatePaint.setStyle(Paint.Style.FILL);
+
+        linkPlateBorderPaint.setColor(pri);
+        linkPlateBorderPaint.setAlpha(90);
+        linkPlateBorderPaint.setStyle(Paint.Style.STROKE);
+        linkPlateBorderPaint.setStrokeWidth(1.5f);
     }
 
     public void setData(JSONArray nodes, JSONArray edges, long timestamp, int eudCount) {
@@ -173,7 +190,10 @@ public class MeshTopoView extends View {
             if (nd == null) continue;
             String id = nd.optString("id", nd.optString("mac", ""));
             String hostname = nd.optString("hostname", "?");
-            String label = hostname.length() > 10 ? hostname.substring(0, 10) : hostname;
+            // Hostnames are always "<PREFIX>-MANET-MESH-<mac hex>" — the
+            // node's actual short name is just the prefix, not an arbitrary
+            // 10-char slice (which used to cut mid-way into "-MANET-...").
+            String label = hostname.split("-MANET")[0];
             boolean me = nd.optBoolean("is_me", false);
             boolean gw = nd.optBoolean("is_gateway", false);
 
@@ -235,21 +255,33 @@ public class MeshTopoView extends View {
                 double tp = e.optDouble("throughput", 0);
                 int pri = nvgMode ? 0xCC3333 : 0x33FF33;
                 int dim = nvgMode ? 0x5a1a1a : 0x1a5a1a;
+                // wlan2 is always the HaLow radio in this fork's interface
+                // naming convention; wlan0/wlan1 are the 2.4/5GHz WiFi mesh
+                // radios. Dashed vs. solid lets link type read at a glance
+                // instead of every link looking identical.
+                boolean isHalow = "wlan2".equals(e.optString("iface", ""));
+                linePaint.setPathEffect(isHalow ? halowDash : null);
                 if (tp > 0) {
-                    int alpha = Math.min(255, (int) (tp * 25) + 80);
+                    int alpha = Math.min(255, (int) (tp * 40) + 90);
                     linePaint.setColor((alpha << 24) | pri);
-                    linePaint.setStrokeWidth(Math.min(6f, (float) tp / 2f + 2f));
+                    linePaint.setStrokeWidth(Math.min(3.5f, (float) tp / 14f + 1.2f));
                 } else {
                     linePaint.setColor(0x80000000 | dim);
-                    linePaint.setStrokeWidth(2f);
+                    linePaint.setStrokeWidth(1.2f);
                 }
                 canvas.drawLine(px[fi], py[fi], px[ti], py[ti], linePaint);
 
                 if (tp > 0) {
                     float mx = (px[fi] + px[ti]) / 2f;
-                    float my = (py[fi] + py[ti]) / 2f;
+                    float my = (py[fi] + py[ti]) / 2f - 6;
                     String tpStr = String.format(Locale.US, "%.1f Mb", tp);
-                    canvas.drawText(tpStr, mx, my - 6, linkTextPaint);
+                    float tw = linkTextPaint.measureText(tpStr);
+                    float padX = 8f, padY = 6f;
+                    RectF plate = new RectF(mx - tw / 2f - padX, my - 20f - padY,
+                            mx + tw / 2f + padX, my + 4f + padY);
+                    canvas.drawRoundRect(plate, 6f, 6f, linkPlatePaint);
+                    canvas.drawRoundRect(plate, 6f, 6f, linkPlateBorderPaint);
+                    canvas.drawText(tpStr, mx, my, linkTextPaint);
                 }
             }
         }

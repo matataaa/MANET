@@ -1385,8 +1385,8 @@ public class EudActivity extends AppCompatActivity {
 
     private String formatMesh() {
         StringBuilder sb = new StringBuilder();
-        int total = 0, online = 0;
-        String selfIp = "--", gw = "--", bestTp = "--";
+        int total = 0, online = 0, maxHops = 0;
+        String selfIp = "--", gw = "--", bestTp = "--", worstTp = "--";
         if (apiLocal != null) selfIp = apiLocal.optString("ip", "--");
         if (apiData != null) {
             JSONArray nodes = apiData.optJSONArray("nodes");
@@ -1401,6 +1401,10 @@ public class EudActivity extends AppCompatActivity {
                     if (!ls.isEmpty()) {
                         try { if (now - Long.parseLong(ls) <= 300) online++; } catch (NumberFormatException ignored) {}
                     }
+                    if (!n.isNull("hop_count")) {
+                        int hops = n.optInt("hop_count", 0);
+                        if (hops > maxHops) maxHops = hops;
+                    }
                 }
                 for (int i = 0; i < nodes.length(); i++) {
                     JSONObject n = nodes.optJSONObject(i);
@@ -1411,17 +1415,20 @@ public class EudActivity extends AppCompatActivity {
                 }
             }
             JSONArray edges = apiData.optJSONArray("edges");
-            double maxTp = 0;
+            double maxTp = 0, minTp = Double.MAX_VALUE;
             if (edges != null) {
                 for (int i = 0; i < edges.length(); i++) {
                     JSONObject e = edges.optJSONObject(i);
                     if (e != null && !e.isNull("throughput")) {
                         double tp = e.optDouble("throughput", 0);
+                        if (tp <= 0) continue;
                         if (tp > maxTp) maxTp = tp;
+                        if (tp < minTp) minTp = tp;
                     }
                 }
             }
             if (maxTp > 0) bestTp = String.format(Locale.US, "%.1f Mbit/s", maxTp);
+            if (minTp < Double.MAX_VALUE) worstTp = String.format(Locale.US, "%.1f Mbit/s", minTp);
             String selGw = apiData.optString("selected_gw", "");
             if (!selGw.isEmpty()) gw = selGw;
         }
@@ -1430,10 +1437,11 @@ public class EudActivity extends AppCompatActivity {
         sb.append(cardRow("SELF", selfIp));
         sb.append(cardRow("GW", gw));
         sb.append(cardRow("GWs", apiData != null ? "" + apiData.optInt("gateway_count", 0) : "--"));
+        sb.append(cardRow("HOP", maxHops > 0 ? "" + maxHops : "--"));
         sb.append(" └──────────────────────┘\n");
         sb.append(" ┌─ PERFORMANCE ───────┐\n");
         sb.append(cardRow("BEST", bestTp));
-        sb.append(cardRow("PROTO", "BATMAN_V"));
+        sb.append(cardRow("WORST", worstTp));
         sb.append(cardRow("UPD", lastUpdateTime()));
         sb.append(" └──────────────────────┘\n");
         return sb.toString();
