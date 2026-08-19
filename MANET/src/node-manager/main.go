@@ -303,15 +303,25 @@ func runACSTick() {
 	}
 
 	setLimpMode(limp)
-	reconcileLimpMode(registry, iface24, iface5)
 
 	writePartitionSize()
 	if quorum {
 		// Tourguide duty means briefly hopping off the data channel this
 		// node already just fought to defend — pointless (and disruptive)
 		// on a cycle where quorum already forced a retreat to lobby.
+		//
+		// Must run before reconcileLimpMode: tourguide's return-to-data
+		// hop unconditionally clears that radio's bitrate limit (it
+		// doesn't know whether mesh-wide limp mode is active), so
+		// reconcileLimpMode needs to run after it in the same cycle to
+		// re-throttle immediately if consensus still says limp — matching
+		// upstream's own stage order (tourguide, then limp-mode
+		// management). Running it the other way around would leave that
+		// radio un-throttled for up to a full ACS cycle.
 		maybeRunTourguide(registry, myRegistryMAC(), iface24, iface5)
 	}
+
+	reconcileLimpMode(registry, iface24, iface5)
 }
 
 // setLimpMode records this node's own read on RF conditions from this
