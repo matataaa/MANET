@@ -233,11 +233,16 @@ const acsCycleInterval = 180 * time.Second
 
 var lastACSCycle time.Time
 
-// runACSTick is the ACS-mode replacement for ensureStaticChannels(): scan,
-// publish the result for peers (via mesh-registry picking up
-// channelReportFile), aggregate self + fresh peer reports from the
-// registry, elect a channel per band, and apply it. Every node runs this
-// same deterministic computation independently — there is no coordinator.
+// runACSTick is the ACS-mode replacement for ensureStaticChannels(), and
+// the top-level orchestration for every ACS piece: scan, publish the
+// result for peers (via mesh-registry picking up channelReportFile),
+// aggregate self + fresh peer reports from the registry, elect a channel
+// per band (channel_election.go), override to the lobby frequency if
+// quorum says this node is isolated (quorum.go), reconcile mesh-wide
+// limp-mode consensus (limpmode.go), and — if elected and quorum holds —
+// take a tourguide turn to look for a foreign partition to merge with
+// (tourguide.go). Every node runs this same deterministic computation
+// independently — there is no coordinator.
 func runACSTick() {
 	if !lastACSCycle.IsZero() && time.Since(lastACSCycle) < acsCycleInterval {
 		return
