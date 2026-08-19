@@ -159,16 +159,13 @@ func getConfFreq(confPath string) string {
 	return ""
 }
 
-// setIfaceFrequency rewrites confPath's frequency= line to targetFreq (if it
-// isn't already there) and restarts wpa_supplicant for iface. Shared by
-// static-channel enforcement and ACS's election-driven channel changes —
-// the only difference between the two modes is where targetFreq comes from.
+// rewriteFrequencyLine rewrites confPath's frequency= line to targetFreq,
+// if it isn't already there. Doesn't touch wpa_supplicant itself — callers
+// decide how to make the running process pick it up (a full restart is
+// thorough but slow; wpa_cli reconfigure is faster but lighter-weight).
 // Returns whether a change was actually made.
-func setIfaceFrequency(iface, confPath, targetFreq, label string) bool {
-	if iface == "" || confPath == "" {
-		return false
-	}
-	if !fileExists(confPath) {
+func rewriteFrequencyLine(confPath, targetFreq, label string) bool {
+	if confPath == "" || !fileExists(confPath) {
 		log.Printf("wpa config not ready for %s: %s", label, confPath)
 		return false
 	}
@@ -193,6 +190,22 @@ func setIfaceFrequency(iface, confPath, targetFreq, label string) bool {
 	}
 	result := strings.TrimRight(out.String(), "\n") + "\n"
 	if err := os.WriteFile(confPath, []byte(result), 0644); err != nil {
+		return false
+	}
+	return true
+}
+
+// setIfaceFrequency rewrites the frequency and restarts wpa_supplicant for
+// iface — the thorough path, used by static-channel enforcement and ACS's
+// election-driven channel changes (both infrequent enough to afford a full
+// service restart + settle time). Tourguide's time-boxed lobby hop uses the
+// lighter rewriteFrequencyLine + wpa_cli reconfigure path instead — see
+// tourguide.go's hopFrequency.
+func setIfaceFrequency(iface, confPath, targetFreq, label string) bool {
+	if iface == "" {
+		return false
+	}
+	if !rewriteFrequencyLine(confPath, targetFreq, label) {
 		return false
 	}
 

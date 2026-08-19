@@ -166,15 +166,17 @@ func selectTourguideRadio(iface24, iface5 string) string {
 	}
 }
 
-// hopFrequency rewrites the radio to targetFreq, nudges wpa_supplicant to
-// pick it up immediately (reconfigure, rather than waiting for
-// setIfaceFrequency's own restart+sleep — tourguide duty is time-boxed by
-// tourguideDwell and can't afford the usual 5s pause twice), waits for the
-// interface to actually land on it, then sets bitrates: legacy/robust
-// rates entering the lobby (survives on minimal rates against whatever's
-// there), full-rate on the way back to data.
+// hopFrequency rewrites the radio to targetFreq and nudges wpa_supplicant
+// via `wpa_cli reconfigure` rather than setIfaceFrequency's full
+// systemctl-restart-and-sleep path — tourguide duty is time-boxed by
+// tourguideDwell (there and back, twice this cost) and needs the faster
+// live-reconfigure upstream's tourguide-manager.sh itself uses for exactly
+// this reason. Waits for the interface to actually land on the new
+// frequency, then sets bitrates: legacy/robust rates entering the lobby
+// (survives on minimal rates against whatever's there), full-rate on the
+// way back to data.
 func hopFrequency(iface, confPath, targetFreq string, is24, toLobby bool) {
-	setIfaceFrequency(iface, confPath, targetFreq, "tourguide")
+	rewriteFrequencyLine(confPath, targetFreq, "tourguide")
 	exec.Command("wpa_cli", "-i", iface, "reconfigure").Run()
 	waitForFrequency(iface, targetFreq)
 	if toLobby {
