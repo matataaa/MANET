@@ -687,25 +687,47 @@ func getDirectNeighbors() string {
 	return strings.Join(entries, ",")
 }
 
+// tqLineRE matches a `batctl o` originator row and captures the leading
+// selected-route marker, the originator MAC, and the parenthesised
+// throughput value. A fixed field index doesn't work here for two
+// independent reasons: the "*" marking the batman-selected route shifts
+// every later column right by one, and this batctl version pads the
+// throughput value with a leading space inside the parens
+// ("(        3.1)"), which splits "(" into its own whitespace-delimited
+// field even on unstarred rows — so strings.Fields()[2] never lands on the
+// number either way. A regex on the parenthesised value sidesteps both.
+var tqLineRE = regexp.MustCompile(`^\s*(\*?)\s*([0-9a-fA-F:]{17})\s+[\d.]+s\s*\(\s*([\d.]+)\)`)
+
 func getTQAverage() string {
 	out, err := exec.Command("/usr/sbin/batctl", "o").Output()
 	if err != nil {
 		return "0"
 	}
-	var sum, count float64
-	for _, line := range strings.Split(string(out), "\n")[1:] {
-		fields := strings.Fields(line)
-		if len(fields) >= 3 {
-			if v, err := strconv.ParseFloat(strings.Trim(fields[2], "()"), 64); err == nil {
-				sum += v
-				count++
-			}
+
+	// batctl o lists every candidate next-hop path per originator; only the
+	// "*"-marked row is the one batman actually routes through. Average
+	// just the selected route per originator — averaging in unselected
+	// alternate paths would distort what's meant to be "mean throughput to
+	// reachable neighbors".
+	best := make(map[string]float64)
+	for _, line := range strings.Split(string(out), "\n") {
+		m := tqLineRE.FindStringSubmatch(line)
+		if m == nil || m[1] != "*" {
+			continue
+		}
+		if v, err := strconv.ParseFloat(m[3], 64); err == nil {
+			best[m[2]] = v
 		}
 	}
-	if count > 0 {
-		return fmt.Sprintf("%.2f", sum/count)
+
+	if len(best) == 0 {
+		return "0"
 	}
-	return "0"
+	var sum float64
+	for _, v := range best {
+		sum += v
+	}
+	return fmt.Sprintf("%.2f", sum/float64(len(best)))
 }
 
 func loadKV(path string) map[string]string {
