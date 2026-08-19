@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -595,22 +596,39 @@ func (im *ipManager) run() {
 // Hosts Updater
 // ============================================================
 
+var lastHostsBlock string
+
 func updateHosts() {
 	nodes := parseRegistry()
 	if len(nodes) == 0 {
 		return
 	}
 
+	// Sort by id: map iteration order is randomized, and an unsorted block
+	// would defeat the change-gate below by "changing" on every call even
+	// when the node set is identical.
+	ids := make([]string, 0, len(nodes))
+	for id := range nodes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
 	var block strings.Builder
 	block.WriteString(hostsBegin + "\n")
 	count := 0
-	for _, n := range nodes {
+	for _, id := range ids {
+		n := nodes[id]
 		if n.Hostname != "" && n.IP != "" {
 			fmt.Fprintf(&block, "%s    %s %s.mesh\n", n.IP, n.Hostname, n.Hostname)
 			count++
 		}
 	}
 	block.WriteString(hostsEnd)
+
+	blockStr := block.String()
+	if blockStr == lastHostsBlock {
+		return
+	}
 
 	data, err := os.ReadFile(hostsFile)
 	if err != nil {
@@ -621,12 +639,21 @@ func updateHosts() {
 	if strings.Contains(text, hostsBegin) {
 		// Replace existing block
 		re := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(hostsBegin) + `.*?` + regexp.QuoteMeta(hostsEnd))
-		text = re.ReplaceAllString(text, block.String())
+		text = re.ReplaceAllString(text, blockStr)
 	} else {
-		text = text + "\n" + block.String() + "\n"
+		text = text + "\n" + blockStr + "\n"
 	}
 
-	os.WriteFile(hostsFile, []byte(text), 0644)
+	tmp := hostsFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(text), 0644); err != nil {
+		log.Printf("write hosts: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, hostsFile); err != nil {
+		log.Printf("rename hosts: %v", err)
+		return
+	}
+	lastHostsBlock = blockStr
 	log.Printf("Updated %d mesh host entries", count)
 }
 

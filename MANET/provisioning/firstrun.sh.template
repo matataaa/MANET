@@ -24,7 +24,10 @@ rm -f /usr/lib/raspberrypi-sys-mods/firstboot 2>/dev/null || true
 # Allow apt to function without a correct system date
 echo "APT::Check-Date "false";" >  /etc/apt/apt.conf.d/99no-time-checks.conf
 
-# set up persistent logging, this is not working
+# set up persistent logging: /var/log/journal must exist before journald's
+# "auto" storage mode (the default) will switch from volatile to persistent,
+# and before chown/chmod below have anything to act on.
+mkdir -p /var/log/journal
 chown root:systemd-journal /var/log/journal
 chmod 2755 /var/log/journal
 systemctl restart systemd-journald

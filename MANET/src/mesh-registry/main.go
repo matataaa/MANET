@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -80,6 +81,7 @@ func main() {
 			run()
 		case <-sig:
 			log.Println("shutting down")
+			saveKnownNodes()
 			return
 		}
 	}
@@ -219,6 +221,36 @@ func loadKnownNodes() {
 	}
 }
 
+const knownNodesSaveInterval = 5 * time.Minute
+
+var (
+	lastSavedNodeSet string
+	lastSaveTime     time.Time
+)
+
+// maybeSaveKnownNodes persists knownNodes to disk only when the set of known
+// MACs has changed, or every knownNodesSaveInterval as a fallback so
+// persisted LAST_SEEN timestamps don't go stale for too long across a crash.
+// A per-tick full-content diff isn't useful here: every live node's own
+// Timestamp/Uptime/telemetry fields change on nearly every call, so it would
+// almost never gate anything and this file was hitting the SD card every
+// 15s regardless of whether the mesh actually changed.
+func maybeSaveKnownNodes() {
+	macs := make([]string, 0, len(knownNodes))
+	for mac := range knownNodes {
+		macs = append(macs, mac)
+	}
+	sort.Strings(macs)
+	nodeSet := strings.Join(macs, ",")
+
+	if nodeSet == lastSavedNodeSet && time.Since(lastSaveTime) < knownNodesSaveInterval {
+		return
+	}
+	lastSavedNodeSet = nodeSet
+	lastSaveTime = time.Now()
+	saveKnownNodes()
+}
+
 func saveKnownNodes() {
 	data, err := json.Marshal(knownNodes)
 	if err != nil {
@@ -312,7 +344,7 @@ func writeRegistry(self NodeInfo, peers map[string]NodeInfo) {
 		return
 	}
 	os.Rename(tmp, registryFile)
-	saveKnownNodes()
+	maybeSaveKnownNodes()
 
 	// Emit peer-join / peer-leave events
 	for mac := range liveMACs {

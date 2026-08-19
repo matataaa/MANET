@@ -369,7 +369,11 @@ func saveState() {
 		s.Deleted = append(s.Deleted, id)
 	}
 	data, _ := json.Marshal(s)
-	os.WriteFile(statePath(), data, 0644)
+	tmp := statePath() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return
+	}
+	os.Rename(tmp, statePath())
 }
 
 func addReceipt(msgID, peer string) {
