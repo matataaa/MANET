@@ -255,7 +255,7 @@ func buildCoTEvent(gps *gpsData, uid, callsign string, identity cotIdentity) []b
 			`<point lat="%f" lon="%f"`+
 			` hae="%f" ce="%.1f" le="9999999.0"/>`+
 			`<detail>%s</detail></event>`,
-		html.EscapeString(uid), identity.Type,
+		html.EscapeString(uid), html.EscapeString(identity.Type),
 		isoUTC(now), isoUTC(now),
 		isoUTC(stale),
 		gps.Latitude, gps.Longitude,

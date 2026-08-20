@@ -968,6 +968,7 @@ mesh_ssid=${MESH_SSID}
 mesh_key=${MESH_SAE_KEY}
 ipv4_network=${LAN_CIDR_BLOCK}
 acs=${AUTO_CHANNEL}
+gps=${GPS_ENABLED}
 regulatory_domain=${REGULATORY_DOMAIN}
 halow_regulatory_domain=${HALOW_REGULATORY_DOMAIN}
 admin_password=${ADMIN_PW}

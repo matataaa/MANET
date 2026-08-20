@@ -1799,15 +1799,21 @@ USBAUTO="true"
 GPSD_CONF
     fi
 
-    # Patch chrony configs — add SHM 0 refclock and IPv4 mesh allow if absent.
-    # ethernet-autodetect.sh can replace chrony.conf from these templates, so all
-    # available templates must carry the GPS/mesh-NTP additions too.
-    ensure_chrony_gps_config() {
-        local conf="$1"
-        [ -f "$conf" ] || return 0
+    systemctl enable gps-reader.service
+    systemctl restart gps-reader.service 2>/dev/null || true
+fi
 
-        if ! grep -q 'refclock SHM 0' "$conf"; then
-            cat >> "$conf" <<'CHRONY_GPS'
+# Patch chrony configs — IPv4 mesh NTP-client allow always (GPS presence
+# doesn't gate whether this node can serve time to the mesh over IPv4);
+# GPS SHM refclock only when this node actually has a GPS module.
+# ethernet-autodetect.sh can replace chrony.conf from these templates, so all
+# available templates must carry the mesh-NTP/GPS additions too.
+ensure_chrony_config() {
+    local conf="$1"
+    [ -f "$conf" ] || return 0
+
+    if [[ "${gps:-y}" != "n" ]] && ! grep -q 'refclock SHM 0' "$conf"; then
+        cat >> "$conf" <<'CHRONY_GPS'
 
 # GPS SHM refclock — populated by gpsd when a GPS dongle is present.
 # SHM 0 = NMEA sentences (~100 ms accuracy, stratum 0 source).
@@ -1815,25 +1821,21 @@ GPSD_CONF
 # unreachable and chrony ignores it transparently.
 refclock SHM 0 refid GPS precision 1e-1 delay 0.2 poll 4 offset 0.0
 CHRONY_GPS
-            echo " > chrony: SHM 0 refclock added to $conf"
-        fi
-        if ! grep -q 'allow 10\.30\.2\.' "$conf"; then
-            echo "allow 10.30.2.0/24" >> "$conf"
-            echo " > chrony: allow 10.30.2.0/24 added to $conf"
-        fi
-    }
+        echo " > chrony: SHM 0 refclock added to $conf"
+    fi
+    if ! grep -q 'allow 10\.30\.2\.' "$conf"; then
+        echo "allow 10.30.2.0/24" >> "$conf"
+        echo " > chrony: allow 10.30.2.0/24 added to $conf"
+    fi
+}
 
-    for chrony_conf in \
-        /etc/chrony/chrony.conf \
-        /etc/chrony/chrony-default.conf \
-        /etc/chrony/chrony-server.conf \
-        /etc/chrony/chrony-test.conf; do
-        ensure_chrony_gps_config "$chrony_conf"
-    done
-
-    systemctl enable gps-reader.service
-    systemctl restart gps-reader.service 2>/dev/null || true
-fi
+for chrony_conf in \
+    /etc/chrony/chrony.conf \
+    /etc/chrony/chrony-default.conf \
+    /etc/chrony/chrony-server.conf \
+    /etc/chrony/chrony-test.conf; do
+    ensure_chrony_config "$chrony_conf"
+done
 
 # cot-emitter's relay of peers' CoT to local EUDs is GPS-independent, so it
 # always runs regardless of the gps= toggle above — only its own local

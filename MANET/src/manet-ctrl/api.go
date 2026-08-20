@@ -919,12 +919,17 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 
 	// Apply gps: stop gpsd/gps-reader outright on disable — this hardware
 	// has no GPS module, no point leaving either running. cot-emitter stays
-	// untouched; its EUD relay is GPS-independent.
+	// untouched; its EUD relay is GPS-independent. Enabling on a node that
+	// was originally provisioned with gps=n needs gpsd installed first —
+	// radio-setup.sh only apt-installs it when gps=y at boot.
 	if updates["gps"] != "" {
 		if conf["gps"] == "n" {
 			runCmd(5*time.Second, "systemctl", "stop", "gps-reader")
 			runCmd(5*time.Second, "systemctl", "stop", "gpsd")
 		} else {
+			if _, err := exec.LookPath("gpsd"); err != nil {
+				runCmd(60*time.Second, "apt-get", "install", "-y", "gpsd", "gpsd-clients")
+			}
 			runCmd(5*time.Second, "systemctl", "restart", "gpsd")
 			runCmd(5*time.Second, "systemctl", "restart", "gps-reader")
 		}
@@ -932,9 +937,20 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply CoT identity changes (callsign/type/team/role/icon) — cot-emitter
-	// reads these once at startup, so a live edit needs a restart to take effect.
-	if updates["callsign"] != "" || updates["cot_type"] != "" || updates["cot_team"] != "" ||
-		updates["cot_role"] != "" || updates["cot_icon"] != "" {
+	// reads these once at startup, so a live edit needs a restart to take
+	// effect. configSave() always submits every field on the Config page,
+	// including ones intentionally cleared back to blank (e.g. reverting
+	// cot_team to "no team affiliation"), so check key presence in updates
+	// rather than non-blank value — a blank submission is still a real edit.
+	cotIdentityKeys := []string{"callsign", "cot_type", "cot_team", "cot_role", "cot_icon"}
+	cotIdentityChanged := false
+	for _, k := range cotIdentityKeys {
+		if _, ok := updates[k]; ok {
+			cotIdentityChanged = true
+			break
+		}
+	}
+	if cotIdentityChanged {
 		runCmd(5*time.Second, "systemctl", "restart", "cot-emitter")
 		applied["cot_identity_applied"] = true
 	}
