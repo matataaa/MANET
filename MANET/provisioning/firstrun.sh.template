@@ -727,6 +727,7 @@ echo "lan_ap_channel=100" >> /etc/mesh.conf
 echo "lan_ap_bw=80" >> /etc/mesh.conf
 echo "ipv4_network=__LAN_CIDR_BLOCK__"  >> /etc/mesh.conf
 echo "acs=__AUTO_CHANNEL__" >> /etc/mesh.conf
+echo "gps=__GPS_ENABLED__" >> /etc/mesh.conf
 echo "eud=__EUD_CONNECTION__" >> /etc/mesh.conf
 echo "max_euds_per_node=__MAX_EUDS_PER_NODE__" >> /etc/mesh.conf
 echo "node_hostname=__NODE_HOSTNAME__" >> /etc/mesh.conf
