@@ -109,13 +109,22 @@ func parseSurveyNoise(out string) map[int]int {
 	return noise
 }
 
-// countBSSOnFreq counts scan-dump lines like "freq: 2437.0" for the given
-// frequency — one such line per visible BSS on that channel.
+// countBSSOnFreq counts scan-dump lines reporting the given frequency —
+// one such line per visible BSS on that channel. `iw`'s dotted-decimal
+// suffix (e.g. "freq: 2437.0") only appears for a nonzero frequency
+// offset (6GHz sub-channels / S1G); standard 2.4/5GHz output can be a
+// plain integer ("freq: 2437") depending on iw version. Field-matching
+// (mirroring parseSurveyNoise above) handles both instead of assuming one.
 func countBSSOnFreq(scanOut string, freq int) int {
-	needle := "freq: " + strconv.Itoa(freq) + "."
+	target := strconv.Itoa(freq)
 	count := 0
 	for _, line := range strings.Split(scanOut, "\n") {
-		if strings.Contains(line, needle) {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "freq:" {
+			continue
+		}
+		val := strings.TrimSuffix(fields[1], ".0")
+		if val == target {
 			count++
 		}
 	}

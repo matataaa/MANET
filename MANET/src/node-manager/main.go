@@ -262,7 +262,6 @@ func runACSTick() {
 	if !lastACSCycle.IsZero() && time.Since(lastACSCycle) < acsCycleInterval {
 		return
 	}
-	lastACSCycle = time.Now()
 
 	iface24, iface5 := meshIfaces()
 	if iface24 == "" && iface5 == "" {
@@ -271,14 +270,22 @@ func runACSTick() {
 
 	selfMAC := myRegistryMAC()
 	if selfMAC == "" {
-		// bat0/br0 not up yet (early boot). Running the election under a
-		// blank identity would fail to exclude our own registry entry from
-		// peer aggregation and could let this node win elections (tourguide,
-		// eventually service placement) under a bogus identity — better to
-		// just wait for the next cycle once the interface exists.
+		// bat0/br0 not up yet (early boot, racing batman-enslave — a real
+		// startup condition, not hypothetical). Running the election under
+		// a blank identity would fail to exclude our own registry entry
+		// from peer aggregation and could let this node win elections
+		// (tourguide, eventually service placement) under a bogus
+		// identity — better to just wait for the next cycle once the
+		// interface exists. Deliberately NOT stamping lastACSCycle here:
+		// doing so before this guard used to mean the very first call
+		// (from main(), before bat0 is up) would still arm the 3-minute
+		// cycle gate despite doing nothing, silently delaying the actual
+		// first scan/election by up to 3 minutes on every cold boot.
 		log.Println("[acs] no bat0/br0 MAC yet, skipping this cycle")
 		return
 	}
+
+	lastACSCycle = time.Now()
 
 	report := performScan(iface24, iface5)
 	writeChannelReport(report)

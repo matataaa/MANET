@@ -173,6 +173,12 @@ func isHostingService(registry map[string]map[string]string, mac string) bool {
 	return fields["IS_MEDIAMTX_SERVER"] == "true" || fields["IS_MUMBLE_SERVER"] == "true"
 }
 
+// directBatmanNeighbors returns colon-stripped lowercase MACs — matching
+// myRegistryMAC() and the registry's own NODE_<mac>_... key format
+// (mesh-registry writes keys via the same strip). batctl's own output is
+// colon-separated; normalizing here means every caller (electTourguide's
+// registry/service-host lookups) can compare directly without each having
+// to remember to strip separators itself.
 func directBatmanNeighbors() []string {
 	out, err := exec.Command("/usr/sbin/batctl", "n").Output()
 	if err != nil {
@@ -185,7 +191,7 @@ func directBatmanNeighbors() []string {
 		if m == nil {
 			continue
 		}
-		mac := strings.ToLower(m[1])
+		mac := strings.ReplaceAll(strings.ToLower(m[1]), ":", "")
 		if !seen[mac] {
 			seen[mac] = true
 			macs = append(macs, mac)
@@ -242,11 +248,47 @@ type foreignPartition struct {
 	lastSeen int64
 }
 
+// wifiChannelFreq translates a WiFi channel *number* (as gossiped in
+// DATA_CHANNEL_2_4/DATA_CHANNEL_5_0 — mesh-registry's getChannel() reports
+// the human-readable channel number, e.g. "6", not MHz, because manet-ctrl's
+// UI displays it that way like any WiFi tool would) to the MHz frequency
+// this file otherwise deals in throughout (wpa_supplicant conf, iw, our own
+// candidate channel lists). Only needs to cover our own candidate channels
+// — a healthy peer running the same election would never legitimately
+// report a channel outside that set.
+func wifiChannelFreq(channelNum string) (string, bool) {
+	for _, freq := range band24Channels {
+		if strconv.Itoa(wifiFreqToChannelNum(freq)) == channelNum {
+			return strconv.Itoa(freq), true
+		}
+	}
+	for _, freq := range band5Channels {
+		if strconv.Itoa(wifiFreqToChannelNum(freq)) == channelNum {
+			return strconv.Itoa(freq), true
+		}
+	}
+	return "", false
+}
+
+func wifiFreqToChannelNum(freq int) int {
+	if freq >= 2412 && freq <= 2472 {
+		return (freq - 2407) / 5
+	}
+	if freq == 2484 {
+		return 14
+	}
+	return (freq - 5000) / 5
+}
+
 // analyzeForeignPartitions looks for a registry entry whose data-channel
 // pair differs from ours, is fresh, and isn't already an ACTIVE member of
 // our own mesh (which would mean it's a stale pre-migration leftover, not
 // a genuinely separate partition). Picks the most-recently-seen candidate
-// if several exist.
+// if several exist. myCh24/myCh5 are MHz (getConfFreq); DATA_CHANNEL_2_4/
+// DATA_CHANNEL_5_0 from the registry are channel numbers — translated to
+// MHz here before any comparison, so both sides are the same unit. Skips
+// a peer whose channel number doesn't resolve to one of our own candidate
+// channels rather than risk comparing/migrating onto a bogus value.
 func analyzeForeignPartitions(registry map[string]map[string]string, selfMAC, myCh24, myCh5 string) *foreignPartition {
 	myConfig := myCh24 + "-" + myCh5
 	now := time.Now().Unix()
@@ -256,8 +298,16 @@ func analyzeForeignPartitions(registry map[string]map[string]string, selfMAC, my
 		if mac == selfMAC || fields["NODE_STATE"] == "ACTIVE" {
 			continue
 		}
-		ch24, ch5 := fields["DATA_CHANNEL_2_4"], fields["DATA_CHANNEL_5_0"]
-		if ch24 == "" || ch5 == "" || ch24+"-"+ch5 == myConfig {
+		ch24Num, ch5Num := fields["DATA_CHANNEL_2_4"], fields["DATA_CHANNEL_5_0"]
+		if ch24Num == "" || ch5Num == "" {
+			continue
+		}
+		ch24, ok24 := wifiChannelFreq(ch24Num)
+		ch5, ok5 := wifiChannelFreq(ch5Num)
+		if !ok24 || !ok5 {
+			continue
+		}
+		if ch24+"-"+ch5 == myConfig {
 			continue
 		}
 		ts, err := strconv.ParseInt(fields["LAST_SEEN_TIMESTAMP"], 10, 64)
