@@ -942,7 +942,12 @@ systemctl enable manet-wlan-apply-link-names.service
 
 if [ "$needs_rerun" -eq 1 ]; then
     echo " > Interface renames staged — applying now via swap-safe rename..."
-    if /usr/local/bin/manet-wlan-apply-link-names.sh; then
+    # Role files above were just written using this boot's raw (pre-.link)
+    # names — the one and only context where they need pre_rename_mac
+    # translation. See the RAW_ROLE_FILES comment in
+    # manet-wlan-apply-link-names.sh: every other call to that script
+    # (its own systemd service, on every later boot) must NOT set this.
+    if MANET_WLAN_APPLY_RAW_ROLE_FILES=1 /usr/local/bin/manet-wlan-apply-link-names.sh; then
         echo " > Live rename succeeded — re-detecting interfaces"
         # Re-read role files that the apply script updated
         mapfile -t mesh_ifaces < <(cat /var/lib/mesh_if 2>/dev/null)

@@ -9,6 +9,26 @@ NETDIR=/etc/systemd/network
 declare -A mac_to_target=()
 declare -A pre_rename_mac=()
 
+# Role files (/var/lib/mesh_if etc.) hold *raw*, pre-pinning interface names
+# only immediately after radio-setup.sh writes fresh .link files — that one
+# call sets this to translate them via the pre_rename_mac snapshot below. On
+# every other invocation (the manet-wlan-apply-link-names.service unit, which
+# runs on every subsequent boot), the role files already hold stable target
+# names from a previous successful translation, and by the time this script's
+# remap step runs, apply_renames() has already converged every interface to
+# its correct target name — so those names are trustworthy as-is and must
+# NOT be re-translated. Raw names and target names share the same string
+# pool (wlan0/wlan1/wlan2), so this can't be told apart from file content
+# alone; it has to be an explicit signal from the caller. Getting this wrong
+# is exactly the bug this flag fixes: re-translating an already-stable
+# "wlan1" (the AP radio) through *this boot's* raw pre-rename snapshot can
+# resolve it to whatever device that raw name happened to belong to before a
+# multi-way rotation, silently reassigning it to the wrong radio. Confirmed
+# live: a 3-way wlan0/wlan1/wlan2 rotation between two MT7916 radios and a
+# USB HaLow dongle turned a correct ap_interface=wlan1 into wlan0, crashing
+# hostapd ("Match already configured") for days until caught.
+RAW_ROLE_FILES="${MANET_WLAN_APPLY_RAW_ROLE_FILES:-0}"
+
 read_mac() {
     tr '[:upper:]' '[:lower:]' <"/sys/class/net/$1/address" 2>/dev/null
 }
@@ -128,15 +148,16 @@ remap_lines_by_mac() {
     [[ -f "$f" ]] || return 0
     while read -r line; do
         [[ -z "${line//[$'\t\r\n ']}" ]] && continue
-        # Prefer the pre-rename snapshot over a live sysfs lookup: after a
-        # multi-way swap (e.g. 3 interfaces rotating names), every old name
-        # still exists post-rename, just bound to a *different* device — so
-        # "-e /sys/class/net/$line" is true for the wrong reason and silently
-        # remaps to whichever device now happens to sit at that name instead
-        # of the device this file originally meant. Confirmed live: a 3-way
-        # wlan0/wlan1/wlan2 swap between an MT7916 card and a USB HaLow
-        # dongle left ap_interface pointing at the HaLow radio (which then
-        # got configured as the 5GHz AP) instead of the MT7916 5GHz port.
+        # RAW_ROLE_FILES=0 (every invocation except radio-setup.sh's own
+        # first call): the file already holds a stable target name and
+        # apply_renames() has already converged reality to match it — pass
+        # it through untouched. See the RAW_ROLE_FILES comment at the top
+        # of this file for why re-translating it here regardless of context
+        # is what caused this function to exist as a bug in the first place.
+        if [[ "$RAW_ROLE_FILES" != 1 ]]; then
+            lines+=("$line")
+            continue
+        fi
         if [[ -n "${pre_rename_mac[$line]:-}" ]]; then
             m="${pre_rename_mac[$line]}"
         elif [[ -e "/sys/class/net/$line" ]]; then
@@ -157,8 +178,10 @@ remap_single_line() {
     [[ -f "$f" ]] || return 0
     line=$(head -1 "$f" | tr -d '\r')
     [[ -z "${line// }" ]] && return 0
-    # See remap_lines_by_mac: pre-rename snapshot must win over a live
-    # sysfs lookup, or a multi-way name swap resolves to the wrong device.
+    # See remap_lines_by_mac / the RAW_ROLE_FILES comment at the top.
+    if [[ "$RAW_ROLE_FILES" != 1 ]]; then
+        return 0
+    fi
     if [[ -n "${pre_rename_mac[$line]:-}" ]]; then
         m="${pre_rename_mac[$line]}"
     elif [[ -e "/sys/class/net/$line" ]]; then
@@ -178,9 +201,10 @@ remap_iface_map() {
         [[ -z "${line// }" ]] && continue
         left="${line%%:*}"
         right="${line#*:}"
-        # See remap_lines_by_mac: pre-rename snapshot must win over a live
-        # sysfs lookup, or a multi-way name swap resolves to the wrong device.
-        if [[ -n "${pre_rename_mac[$left]:-}" ]]; then
+        # See remap_lines_by_mac / the RAW_ROLE_FILES comment at the top.
+        if [[ "$RAW_ROLE_FILES" != 1 ]]; then
+            nl="$left"
+        elif [[ -n "${pre_rename_mac[$left]:-}" ]]; then
             m="${pre_rename_mac[$left]}"
             nl=$(iface_for_mac "$m") || nl="$left"
         elif [[ -e "/sys/class/net/$left" ]]; then
@@ -188,7 +212,9 @@ remap_iface_map() {
         else
             nl="$left"
         fi
-        if [[ -n "${pre_rename_mac[$right]:-}" ]]; then
+        if [[ "$RAW_ROLE_FILES" != 1 ]]; then
+            nr="$right"
+        elif [[ -n "${pre_rename_mac[$right]:-}" ]]; then
             m="${pre_rename_mac[$right]}"
             nr=$(iface_for_mac "$m") || nr="$right"
         elif [[ -e "/sys/class/net/$right" ]]; then
