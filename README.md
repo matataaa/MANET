@@ -2,7 +2,7 @@
 
 A complete software suite for provisioning, configuring, and orchestrating Mobile Ad-hoc Network (MANET) nodes on Single Board Computers (SBCs).
 
-The project transforms a Raspberry Pi CM4, Pi 5, Radxa Rock 3A, or x86 gateway into a self-forming, self-healing mesh node using **B.A.T.M.A.N. Advanced** (Layer 2 routing) over **802.11s / 802.11ah HaLow** (sub-GHz, long range) and standard **802.11ax/ac/n** radios. It features zero-configuration addressing, cooperative gateway election, partition healing, push-to-talk voice, a full web UI, installable applets, fleet management, and an Android companion app.
+The project transforms a Raspberry Pi CM4, Pi 5, or x86 gateway into a self-forming, self-healing mesh node using **B.A.T.M.A.N. Advanced** (Layer 2 routing) over **802.11s / 802.11ah HaLow** (sub-GHz, long range) and standard **802.11ax/ac/n** radios. It features zero-configuration addressing, cooperative gateway election, partition healing, push-to-talk voice, a full web UI, installable applets, fleet management, and an Android companion app.
 
 ## Key Features
 
@@ -63,7 +63,7 @@ MANET/
 │   ├── applet-hooks/      Pre-install/post-remove hook runner
 │   └── mesh-ctrl-android/ Android KDU companion app
 ├── binaries_arm64/        Pre-compiled ARM64 binaries (alfred, batctl, wpa_supplicant_s1g)
-├── packaging/             Build scripts for CM4, RPi5, Rock 3A, x86, tools, and applet tarballs
+├── packaging/             Build scripts for CM4, RPi5, x86, tools, and applet tarballs
 └── install_packages/      Pre-built install tarballs
 ```
 
@@ -73,7 +73,6 @@ MANET/
 | :--- | :--- | :--- |
 | **Compute Module 4 (CM4)** | Primary target | 802.11ax + HaLow (SPI) |
 | **Raspberry Pi 5** | Functional | 802.11ax + HaLow (SPI) |
-| **Radxa Rock 3A** | Functional | 802.11ax + HaLow (SPI) |
 | **x86 (gateway)** | Functional | HaLow via USB (Lunpid MM8108) |
 
 ## Getting Started
