@@ -1121,6 +1121,48 @@ EOF
         AP_CHANNEL="${lan_ap_channel:-11}"
         AP_80211AC=""
     fi
+    # 20/40/80 MHz channel width for the 5 GHz AP. Without this, ieee80211ac=1
+    # alone leaves hostapd on 20 MHz VHT — the width mesh.conf's lan_ap_bw
+    # is provisioned to request is otherwise never applied.
+    AP_BW="${lan_ap_bw:-80}"
+
+    # hostapd needs an explicit VHT center-channel index for 40/80 MHz; map
+    # each channel to its 80 MHz block center (falls back to itself outside
+    # the known non-DFS/DFS ranges).
+    vht_seg0_idx() {
+        case "$1" in
+            36|40|44|48) echo 42 ;;
+            52|56|60|64) echo 58 ;;
+            100|104|108|112) echo 106 ;;
+            116|120|124|128) echo 122 ;;
+            132|136|140|144) echo 138 ;;
+            149|153|157|161) echo 155 ;;
+            *) echo "$1" ;;
+        esac
+    }
+
+    # HT40 secondary-channel offset for 5 GHz, standard 20 MHz step mapping.
+    ht40_capab() {
+        case "$1" in
+            36|44|52|60|100|108|116|124|132|140|149|157) echo "[HT40+]" ;;
+            40|48|56|64|104|112|120|128|136|144|153|161) echo "[HT40-]" ;;
+            *) echo "" ;;
+        esac
+    }
+
+    AP_VHT_LINES=""
+    if [[ "$AP_HW_MODE" == "a" ]]; then
+        if [[ "$AP_BW" == "40" || "$AP_BW" == "80" ]]; then
+            _ht40_cap="$(ht40_capab "$AP_CHANNEL")"
+            [[ -n "$_ht40_cap" ]] && AP_VHT_LINES+=$'\n'"ht_capab=$_ht40_cap"
+        fi
+        if [[ "$AP_BW" == "80" ]]; then
+            AP_VHT_LINES+=$'\n'"vht_oper_chwidth=1"
+            AP_VHT_LINES+=$'\n'"vht_oper_centr_freq_seg0_idx=$(vht_seg0_idx "$AP_CHANNEL")"
+        else
+            AP_VHT_LINES+=$'\n'"vht_oper_chwidth=0"
+        fi
+    fi
 
     cat <<-EOF > /etc/hostapd/hostapd.conf
 interface=$AP_INTERFACE
@@ -1134,7 +1176,7 @@ ieee80211d=1
 hw_mode=$AP_HW_MODE
 channel=$AP_CHANNEL
 ieee80211n=1
-$AP_80211AC
+$AP_80211AC$AP_VHT_LINES
 wmm_enabled=1
 
 # WPA2 security
