@@ -861,6 +861,13 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 			runCmd(5*time.Second, "systemctl", "start", "hostapd")
 		} else if eud == "wired" || eud == "none" {
 			runCmd(5*time.Second, "systemctl", "stop", "hostapd")
+			// The radio that was AP just got reclassified as mesh in
+			// /var/lib/mesh_if, but never had a wpa_supplicant config
+			// generated (that only happens once, at first provisioning)
+			// and ap-txpower.service still holds its txpower fixed low —
+			// reconcile both now rather than leaving it a non-functional
+			// mesh radio until the node is fully re-provisioned.
+			runCmd(10*time.Second, "manet-wlan-reconcile.sh")
 		}
 		applied["eud_mode_applied"] = true
 	}
