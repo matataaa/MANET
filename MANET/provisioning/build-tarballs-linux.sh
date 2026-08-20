@@ -9,10 +9,8 @@
 # install_packages/.
 #
 # Usage:
-#   ./build-tarballs-linux.sh [cm4|rpi5|r3a|all]
-#   (default: all — builds cm4 and rpi5; r3a is skipped unless requested,
-#   since it requires an external kernel/firmware overlay — see
-#   packaging/README.md)
+#   ./build-tarballs-linux.sh [cm4|rpi5|all]
+#   (default: all — builds cm4 and rpi5)
 #
 set -euo pipefail
 
@@ -195,17 +193,11 @@ PLATFORM="${1:-all}"
 case "$PLATFORM" in
     cm4)  build_one "cm4-tools.tar.gz"  "build-cm4-tarball.sh" ;;
     rpi5) build_one "rpi5-tools.tar.gz" "build-rpi5-tarball.sh" ;;
-    r3a)
-        if [ -z "${SBC_OVERLAY_DIR:-}" ] && [ ! -d "$REPO_ROOT/../kernel-work/packages/r3a-sbc-overlay" ]; then
-            die "r3a build requires an SBC overlay. Set SBC_OVERLAY_DIR or see packaging/README.md."
-        fi
-        build_one "r3a-tools.tar.gz" "build-r3a-tarball.sh"
-        ;;
     all)
         build_one "cm4-tools.tar.gz"  "build-cm4-tarball.sh"
         build_one "rpi5-tools.tar.gz" "build-rpi5-tarball.sh"
         ;;
-    *) die "Unknown platform '$PLATFORM'. Usage: $0 [cm4|rpi5|r3a|all]" ;;
+    *) die "Unknown platform '$PLATFORM'. Usage: $0 [cm4|rpi5|all]" ;;
 esac
 
 log "Done. Output in $INSTALL_DIR/"

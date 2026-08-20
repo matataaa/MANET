@@ -352,7 +352,6 @@ load_config() {
 select_hardware() {
     echo ""
     echo "--- 1. Select Hardware ---"
-    echo "(Rock 3A not supported by this script — use linux.sh to flash a Rock 3A directly)"
     echo ""
     echo "Select hardware model:"
     select hw_choice in "Raspberry Pi 5" "Raspberry Pi 4B" "Compute Module 4 (CM4)"; do

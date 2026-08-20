@@ -135,7 +135,6 @@
 |----------|--------|-------|
 | Raspberry Pi CM4 | Primary target | 802.11ax + HaLow (SPI) |
 | Raspberry Pi 5 | Functional | 802.11ax + HaLow (SPI) |
-| Radxa Rock 3A | Functional | 802.11ax + HaLow (SPI) |
 | x86 (gateway) | Functional | HaLow via USB (Lunpid MM8108) |
 
 ## Power Management

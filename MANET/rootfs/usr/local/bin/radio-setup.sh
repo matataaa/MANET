@@ -1956,7 +1956,8 @@ if [[ "$FIRST_BOOT_UNIT_ENABLED" -eq 1 && ! -f "$FIRST_BOOT_STAGE_MARKER" ]]; th
     touch "$FIRST_BOOT_STAGE_MARKER"
 fi
 
-# networkd-dispatcher hardening (two stock-default issues, both bite Rock 3A).
+# networkd-dispatcher hardening (two stock-default issues that bite boards
+# with a USB HaLow radio slow to come up at boot).
 #
 # 1) The stock unit has no ordering dependency, so at boot it can start before
 #    systemd-networkd and dbus. Its constructor runs `networkctl list`; with no
