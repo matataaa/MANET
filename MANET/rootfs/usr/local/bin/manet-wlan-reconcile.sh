@@ -2,19 +2,23 @@
 # Live fixup for an already-provisioned node whose eud= just changed away
 # from wireless/auto (see the eud apply-block in manet-ctrl's api.go).
 #
-# radio-setup.sh's per-interface wpa_supplicant setup and its ap-txpower.service
-# generation both only ever run once, at first-ever provisioning
-# (radio-setup-run-once, which never re-fires) — using whichever interface
-# was classified mesh/AP *at that time*. Editing eud= later correctly
-# updates /var/lib/mesh_if (see radio-setup.sh's classification), but
-# leaves two things stale for a radio that just stopped being the AP:
-#   1. It never had a mesh wpa_supplicant config generated (it was AP then).
-#   2. ap-txpower.service still targets it, holding its txpower fixed at a
-#      low AP-appropriate value (radio-setup.sh bakes the interface name
-#      literally into that unit's ExecStart line at generation time).
+# radio-setup.sh's classification (which interface is AP vs mesh) and its
+# per-interface wpa_supplicant/ap-txpower.service generation all only ever
+# run once, at first-ever provisioning (radio-setup-run-once, which never
+# re-fires) — nothing else updates /var/lib/mesh_if or /var/lib/ap_interface
+# in response to a later eud= edit. Confirmed live: setting eud=wired and
+# rebooting is NOT enough on its own — /var/lib/ap_interface still names
+# the original AP radio, /var/lib/mesh_if never gained it, and journalctl
+# shows radio-setup.sh never re-ran that boot (only fires again if an
+# unrelated interface-rename mismatch happens to trigger radio-setup-rerun).
+# So a stopped-hostapd node can still be sitting on entirely stale role
+# files, not just a stale wpa_supplicant/txpower config for a radio
+# mesh_if already lists.
 #
-# This script is idempotent — safe to run any time, does nothing if
-# everything already matches /var/lib/mesh_if and /var/lib/ap_interface.
+# This script closes both gaps and is idempotent — safe to run any time,
+# does nothing once /var/lib/mesh_if, /var/lib/ap_interface, and every
+# mesh interface's wpa_supplicant config/txpower all agree with the
+# current eud=.
 set -u
 export PATH="/usr/sbin:/sbin:/usr/bin:/bin:${PATH:-}"
 
@@ -48,8 +52,22 @@ MESH_NAME=$(grep '^mesh_ssid=' /etc/mesh.conf 2>/dev/null | cut -d= -f2-)
 KEY=$(grep '^mesh_key=' /etc/mesh.conf 2>/dev/null | cut -d= -f2-)
 CFG80211_REGDOM=$(grep '^regulatory_domain=' /etc/mesh.conf 2>/dev/null | cut -d= -f2-)
 CFG80211_REGDOM="${CFG80211_REGDOM:-US}"
+EUD=$(grep '^eud=' /etc/mesh.conf 2>/dev/null | cut -d= -f2-)
 AP_INTERFACE=""
 [ -f "$AP_IF_FILE" ] && AP_INTERFACE=$(head -1 "$AP_IF_FILE" | tr -d '\r')
+
+# --- 0. If eud= no longer needs an AP radio but /var/lib/ap_interface
+#        still names one, that radio was never actually reclassified —
+#        move it into /var/lib/mesh_if and clear ap_interface, so step 1
+#        below (and every other consumer of these files) sees it as mesh.
+if { [ "$EUD" = "wired" ] || [ "$EUD" = "none" ]; } && [ -n "$AP_INTERFACE" ]; then
+    echo "manet-wlan-reconcile: eud=$EUD, reclassifying former AP interface $AP_INTERFACE as mesh"
+    if ! grep -qx "$AP_INTERFACE" "$MESH_IF_FILE" 2>/dev/null; then
+        echo "$AP_INTERFACE" >> "$MESH_IF_FILE"
+    fi
+    : > "$AP_IF_FILE"
+    AP_INTERFACE=""
+fi
 
 # --- 1. Generate a missing mesh wpa_supplicant config for any interface
 #        /var/lib/mesh_if now claims but never got one written for.
