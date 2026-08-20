@@ -419,10 +419,28 @@ fi
 CFG80211_REGDOM="$REGULATORY_DOMAIN"
 
 
+iface_driver() {
+    local iface="$1"
+    local driver
+
+    driver="$(basename "$(readlink -f /sys/class/net/$iface/device/driver 2>/dev/null)")"
+    if [[ -z "$driver" || "$driver" == "." ]]; then
+        driver="$(ethtool -i "$iface" 2>/dev/null | awk -F': ' '$1 == "driver" {print $2; exit}')"
+    fi
+
+    echo "$driver"
+}
+
+iface_phy() {
+    local iface="$1"
+    iw dev "$iface" info 2>/dev/null | awk '/wiphy/ {print "phy"$2; exit}'
+}
+
 # Wait for wireless drivers to load
 echo "Waiting for wireless drivers to load..."
 DRIVER_WAIT_COUNT=0
 MAX_DRIVER_WAIT=30  # 60 seconds total
+PHY_COUNT=0
 
 while [ $DRIVER_WAIT_COUNT -lt $MAX_DRIVER_WAIT ]; do
     PHY_COUNT=$(iw dev 2>/dev/null | grep -c "^phy#")
@@ -446,6 +464,52 @@ if [ "$PHY_COUNT" -eq 0 ]; then
     echo "⚠ WARNING: No wireless interfaces found after $((MAX_DRIVER_WAIT * 2)) seconds"
     echo "  This is normal for wired-only configurations"
     echo "  If you expect wireless: check 'dmesg | grep -i firmware'"
+else
+    # A phy showing up doesn't mean its netdev and driver binding are done —
+    # on CM4 boards with two AX mesh radios plus onboard brcmfmac, the onboard
+    # radio's netdev/driver can still be settling here. Classifying against a
+    # netdev list that's still growing, or a driver name that's still empty,
+    # is exactly how brcmfmac has ended up misclassified as a mesh radio
+    # instead of the non-mesh AP radio it must be. Wait for both the netdev
+    # count and every interface's driver name to hold steady for two
+    # consecutive checks before classifying anything below.
+    STABLE_ROUNDS=0
+    LAST_IFACE_COUNT=-1
+    STABLE_MAX=30
+    for ((stable_i = 0; stable_i < STABLE_MAX; stable_i++)); do
+        mapfile -t _wifi_ifaces < <(iw dev 2>/dev/null | awk '$1 == "Interface" {print $2}')
+        _n=${#_wifi_ifaces[@]}
+        _all_drivers=1
+        for _iface in "${_wifi_ifaces[@]}"; do
+            _d="$(iface_driver "$_iface")"
+            if [[ -z "$_d" || "$_d" == "." ]]; then
+                _all_drivers=0
+                break
+            fi
+        done
+        if [[ "$_all_drivers" -eq 1 && "$_n" -gt 0 ]]; then
+            if [[ "$_n" -eq "$LAST_IFACE_COUNT" ]]; then
+                STABLE_ROUNDS=$((STABLE_ROUNDS + 1))
+                if [[ "$STABLE_ROUNDS" -ge 2 ]]; then
+                    echo "Wireless interfaces stable (count=$_n, drivers bound)."
+                    break
+                fi
+            else
+                STABLE_ROUNDS=1
+            fi
+            LAST_IFACE_COUNT="$_n"
+        else
+            STABLE_ROUNDS=0
+            LAST_IFACE_COUNT="$_n"
+        fi
+        if [[ $((stable_i % 5)) -eq 4 ]]; then
+            echo "Waiting for wireless enumerate to stabilize... ($((stable_i + 1))/${STABLE_MAX})"
+        fi
+        sleep 2
+    done
+    if [[ "$STABLE_ROUNDS" -lt 2 ]]; then
+        echo "WARNING: Wireless interfaces did not reach stability before timeout; continuing."
+    fi
 fi
 
 # mt76 (mt7915e/MT7916) LED devices come up with the "phyNtpt" throughput-
@@ -470,18 +534,6 @@ done
 mesh_ifaces=()
 halow_ifaces=()
 nonmesh_ifaces=()
-
-iface_driver() {
-    local iface="$1"
-    local driver
-
-    driver="$(basename "$(readlink -f /sys/class/net/$iface/device/driver 2>/dev/null)")"
-    if [[ -z "$driver" || "$driver" == "." ]]; then
-        driver="$(ethtool -i "$iface" 2>/dev/null | awk -F': ' '$1 == "driver" {print $2; exit}')"
-    fi
-
-    echo "$driver"
-}
 
 is_halow_iface() {
     local iface="$1"
@@ -514,11 +566,6 @@ is_nonmesh_wifi() {
     # but on this platform it is reserved for the EUD AP/hotspot. Keep it out
     # of mesh_if so rerunning setup cannot enslave the AP radio to bat0.
     [[ "$driver" == brcmfmac ]]
-}
-
-iface_phy() {
-    local iface="$1"
-    iw dev "$iface" info 2>/dev/null | awk '/wiphy/ {print "phy"$2; exit}'
 }
 
 iface_supports_mesh() {
@@ -563,6 +610,23 @@ for iface in $(iw dev | awk '$1 == "Interface" {print $2}'); do
         nonmesh_ifaces+=("$iface")
     fi
 done
+
+# Belt-and-suspenders on top of the stability wait above: brcmfmac must never
+# stay classified as a mesh radio. If its driver still wasn't resolvable at
+# classification time it falls through to iface_supports_mesh's phy check,
+# which can be a false positive on some kernels — and that radio would then
+# get enslaved to bat0 as a "mesh" interface, silently taking the CM4's
+# onboard AP radio away from hostapd.
+_mesh_ifaces_kept=()
+for iface in "${mesh_ifaces[@]}"; do
+    if [[ "$(iface_driver "$iface")" == brcmfmac ]]; then
+        echo " > Rescue: $iface (brcmfmac) was classified as mesh — moving to non-mesh"
+        nonmesh_ifaces+=("$iface")
+    else
+        _mesh_ifaces_kept+=("$iface")
+    fi
+done
+mesh_ifaces=("${_mesh_ifaces_kept[@]}")
 
 # Order standard mesh interfaces by role, not by volatile wlanX name. The first
 # interface receives the 2.4 GHz lobby config and the second receives the 5 GHz
