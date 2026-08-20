@@ -436,6 +436,11 @@ ask_questions() {
                 if [ "$AUTO_CHANNEL" = "y" ] || [ "$AUTO_CHANNEL" = "Y" ]; then AUTO_CHANNEL="y"; else AUTO_CHANNEL="n"; fi
         fi
 
+        # GPS presence — some hardware in the fleet has no GPS module at all.
+        read -p "Does this node have a GPS module? (Y/n): " GPS_ENABLED
+        GPS_ENABLED=${GPS_ENABLED:-y}
+        if [ "$GPS_ENABLED" = "y" ] || [ "$GPS_ENABLED" = "Y" ]; then GPS_ENABLED="y"; else GPS_ENABLED="n"; fi
+
         echo "----------------------------------"
 }
 
@@ -465,6 +470,7 @@ MESH_SSID="$MESH_SSID"
 MESH_SAE_KEY="$MESH_SAE_KEY"
 LAN_CIDR_BLOCK="$LAN_CIDR_BLOCK"
 AUTO_CHANNEL="$AUTO_CHANNEL"
+GPS_ENABLED="$GPS_ENABLED"
 RADIO_PW="$RADIO_PW"
 ADMIN_PW="$ADMIN_PW"
 AUTO_UPDATE="$AUTO_UPDATE"
@@ -482,6 +488,7 @@ load_config() {
         # Source the file to load the variables into this script
         source "$CONFIG_FILE"
         HALOW_REGULATORY_DOMAIN=${HALOW_REGULATORY_DOMAIN:-$(halow_regulatory_domain_for_wifi_domain "$REGULATORY_DOMAIN")}
+        GPS_ENABLED=${GPS_ENABLED:-y}
 
         # Display the loaded settings
         echo "--- Loaded Configuration ---"
@@ -498,6 +505,7 @@ load_config() {
         echo "  Mesh SAE Key: $MESH_SAE_KEY"
         echo "  LAN CIDR Block: $LAN_CIDR_BLOCK"
         echo "  Auto Channel: $AUTO_CHANNEL"
+        echo "  GPS Enabled: $GPS_ENABLED"
         echo "  User password: $RADIO_PW"
         echo "  Admin password: ${ADMIN_PW:-(not set)}"
         echo "  Auto Update: ${AUTO_UPDATE:-n}"
@@ -1131,6 +1139,7 @@ flash_rpi() {
             -e "s|__MESH_SAE_KEY__|${MESH_SAE_KEY}|g" \
             -e "s|__LAN_CIDR_BLOCK__|${LAN_CIDR_BLOCK}|g" \
             -e "s|__AUTO_CHANNEL__|${AUTO_CHANNEL}|g" \
+            -e "s|__GPS_ENABLED__|${GPS_ENABLED}|g" \
             -e "s|__RADIO_PW__|${RADIO_PW}|g" \
             -e "s|__REGULATORY_DOMAIN__|${REGULATORY_DOMAIN}|g" \
             -e "s|__HALOW_REGULATORY_DOMAIN__|${HALOW_REGULATORY_DOMAIN}|g" \

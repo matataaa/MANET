@@ -780,6 +780,8 @@ var saveableKeys = map[string]bool{
 	"eud_bandwidth": true,
 	"qos_enabled": true, "qos_voice_band": true, "qos_cot_band": true, "qos_chat_band": true,
 	"auto_update": true, "update_url": true,
+	"gps": true,
+	"callsign": true, "cot_type": true, "cot_team": true, "cot_role": true, "cot_icon": true,
 }
 
 func apiAdminSave(w http.ResponseWriter, r *http.Request) {
@@ -913,6 +915,28 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 			runCmd(5*time.Second, "systemctl", "restart", "mesh-voice")
 		}
 		applied["voice_enabled_applied"] = true
+	}
+
+	// Apply gps: stop gpsd/gps-reader outright on disable — this hardware
+	// has no GPS module, no point leaving either running. cot-emitter stays
+	// untouched; its EUD relay is GPS-independent.
+	if updates["gps"] != "" {
+		if conf["gps"] == "n" {
+			runCmd(5*time.Second, "systemctl", "stop", "gps-reader")
+			runCmd(5*time.Second, "systemctl", "stop", "gpsd")
+		} else {
+			runCmd(5*time.Second, "systemctl", "restart", "gpsd")
+			runCmd(5*time.Second, "systemctl", "restart", "gps-reader")
+		}
+		applied["gps_applied"] = true
+	}
+
+	// Apply CoT identity changes (callsign/type/team/role/icon) — cot-emitter
+	// reads these once at startup, so a live edit needs a restart to take effect.
+	if updates["callsign"] != "" || updates["cot_type"] != "" || updates["cot_team"] != "" ||
+		updates["cot_role"] != "" || updates["cot_icon"] != "" {
+		runCmd(5*time.Second, "systemctl", "restart", "cot-emitter")
+		applied["cot_identity_applied"] = true
 	}
 
 	// Apply voice PTT mode / channel changes

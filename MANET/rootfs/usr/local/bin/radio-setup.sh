@@ -1746,59 +1746,68 @@ systemctl enable battery-reader.service
 #   - No election logic change needed — existing is_ntp_server flag stays
 #     tied to the ethernet gateway; GPS just silently improves time quality.
 
-if have_package_network; then
-    provision_try "apt install failed: gpsd gpsd-clients" \
-        apt-get install -y gpsd gpsd-clients
+# gps=n means this hardware has no GPS module at all — skip gpsd/gps-reader
+# setup entirely and make sure both stay stopped (a prior boot may have had
+# gps=y). cot-emitter stays enabled regardless (see below): its relay of
+# peers' CoT to local EUDs is GPS-independent and must keep working here.
+if [[ "${gps:-y}" == "n" ]]; then
+    echo "GPS disabled (gps=n) — skipping gpsd/gps-reader setup"
+    systemctl disable --now gpsd.service 2>/dev/null || true
+    systemctl disable --now gps-reader.service 2>/dev/null || true
 else
-    provision_fail "no network: cannot install gpsd gpsd-clients"
-fi
-
-# Detect UART GPS (e.g. Quectel L76K on WM1302 Pi Hat).
-# The hat connects GPS TX/RX to GPIO 14/15 (/dev/ttyAMA0).
-# GPIO 12 = GPS_WAKE_UP (active high brings GPS out of standby).
-UART_GPS_DEV=""
-if [ -e /dev/ttyAMA0 ]; then
-    # Wake the GPS module
-    echo 12 > /sys/class/gpio/export 2>/dev/null || true
-    echo out > /sys/class/gpio/gpio12/direction 2>/dev/null || true
-    echo 1 > /sys/class/gpio/gpio12/value 2>/dev/null || true
-    sleep 1
-
-    # Check for NMEA data on the UART (L76K defaults to 9600 baud)
-    stty -F /dev/ttyAMA0 9600 raw -echo 2>/dev/null || true
-    if timeout 3 cat /dev/ttyAMA0 2>/dev/null | grep -q '^\$G'; then
-        UART_GPS_DEV="/dev/ttyAMA0"
-        echo " > UART GPS detected on /dev/ttyAMA0"
+    if have_package_network; then
+        provision_try "apt install failed: gpsd gpsd-clients" \
+            apt-get install -y gpsd gpsd-clients
+    else
+        provision_fail "no network: cannot install gpsd gpsd-clients"
     fi
-fi
 
-# /etc/default/gpsd — configure for detected GPS device or USB hotplug.
-if [ -n "$UART_GPS_DEV" ]; then
-    cat > /etc/default/gpsd <<GPSD_CONF
+    # Detect UART GPS (e.g. Quectel L76K on WM1302 Pi Hat).
+    # The hat connects GPS TX/RX to GPIO 14/15 (/dev/ttyAMA0).
+    # GPIO 12 = GPS_WAKE_UP (active high brings GPS out of standby).
+    UART_GPS_DEV=""
+    if [ -e /dev/ttyAMA0 ]; then
+        # Wake the GPS module
+        echo 12 > /sys/class/gpio/export 2>/dev/null || true
+        echo out > /sys/class/gpio/gpio12/direction 2>/dev/null || true
+        echo 1 > /sys/class/gpio/gpio12/value 2>/dev/null || true
+        sleep 1
+
+        # Check for NMEA data on the UART (L76K defaults to 9600 baud)
+        stty -F /dev/ttyAMA0 9600 raw -echo 2>/dev/null || true
+        if timeout 3 cat /dev/ttyAMA0 2>/dev/null | grep -q '^\$G'; then
+            UART_GPS_DEV="/dev/ttyAMA0"
+            echo " > UART GPS detected on /dev/ttyAMA0"
+        fi
+    fi
+
+    # /etc/default/gpsd — configure for detected GPS device or USB hotplug.
+    if [ -n "$UART_GPS_DEV" ]; then
+        cat > /etc/default/gpsd <<GPSD_CONF
 DEVICES="$UART_GPS_DEV"
 GPSD_OPTIONS="-n"
 START_DAEMON="true"
 USBAUTO="true"
 GPSD_CONF
-    echo " > gpsd configured for UART GPS: $UART_GPS_DEV"
-else
-    cat > /etc/default/gpsd <<'GPSD_CONF'
+        echo " > gpsd configured for UART GPS: $UART_GPS_DEV"
+    else
+        cat > /etc/default/gpsd <<'GPSD_CONF'
 DEVICES=""
 GPSD_OPTIONS="-n"
 START_DAEMON="true"
 USBAUTO="true"
 GPSD_CONF
-fi
+    fi
 
-# Patch chrony configs — add SHM 0 refclock and IPv4 mesh allow if absent.
-# ethernet-autodetect.sh can replace chrony.conf from these templates, so all
-# available templates must carry the GPS/mesh-NTP additions too.
-ensure_chrony_gps_config() {
-    local conf="$1"
-    [ -f "$conf" ] || return 0
+    # Patch chrony configs — add SHM 0 refclock and IPv4 mesh allow if absent.
+    # ethernet-autodetect.sh can replace chrony.conf from these templates, so all
+    # available templates must carry the GPS/mesh-NTP additions too.
+    ensure_chrony_gps_config() {
+        local conf="$1"
+        [ -f "$conf" ] || return 0
 
-    if ! grep -q 'refclock SHM 0' "$conf"; then
-        cat >> "$conf" <<'CHRONY_GPS'
+        if ! grep -q 'refclock SHM 0' "$conf"; then
+            cat >> "$conf" <<'CHRONY_GPS'
 
 # GPS SHM refclock — populated by gpsd when a GPS dongle is present.
 # SHM 0 = NMEA sentences (~100 ms accuracy, stratum 0 source).
@@ -1806,24 +1815,30 @@ ensure_chrony_gps_config() {
 # unreachable and chrony ignores it transparently.
 refclock SHM 0 refid GPS precision 1e-1 delay 0.2 poll 4 offset 0.0
 CHRONY_GPS
-        echo " > chrony: SHM 0 refclock added to $conf"
-    fi
-    if ! grep -q 'allow 10\.30\.2\.' "$conf"; then
-        echo "allow 10.30.2.0/24" >> "$conf"
-        echo " > chrony: allow 10.30.2.0/24 added to $conf"
-    fi
-}
+            echo " > chrony: SHM 0 refclock added to $conf"
+        fi
+        if ! grep -q 'allow 10\.30\.2\.' "$conf"; then
+            echo "allow 10.30.2.0/24" >> "$conf"
+            echo " > chrony: allow 10.30.2.0/24 added to $conf"
+        fi
+    }
 
-for chrony_conf in \
-    /etc/chrony/chrony.conf \
-    /etc/chrony/chrony-default.conf \
-    /etc/chrony/chrony-server.conf \
-    /etc/chrony/chrony-test.conf; do
-    ensure_chrony_gps_config "$chrony_conf"
-done
+    for chrony_conf in \
+        /etc/chrony/chrony.conf \
+        /etc/chrony/chrony-default.conf \
+        /etc/chrony/chrony-server.conf \
+        /etc/chrony/chrony-test.conf; do
+        ensure_chrony_gps_config "$chrony_conf"
+    done
 
-systemctl enable gps-reader.service
-systemctl restart gps-reader.service 2>/dev/null || true
+    systemctl enable gps-reader.service
+    systemctl restart gps-reader.service 2>/dev/null || true
+fi
+
+# cot-emitter's relay of peers' CoT to local EUDs is GPS-independent, so it
+# always runs regardless of the gps= toggle above — only its own local
+# position emission silently no-ops without a fix (see readGPS() in
+# src/cot-emitter/main.go).
 systemctl enable cot-emitter.service
 systemctl restart cot-emitter.service 2>/dev/null || true
 systemctl restart chrony 2>/dev/null || true

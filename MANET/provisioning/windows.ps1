@@ -35,6 +35,7 @@ $Script:MESH_SSID         = ""
 $Script:MESH_SAE_KEY      = ""
 $Script:LAN_CIDR_BLOCK    = ""
 $Script:AUTO_CHANNEL      = ""
+$Script:GPS_ENABLED       = "y"
 $Script:RADIO_PW          = ""
 $Script:ADMIN_PW          = ""
 $Script:AUTO_UPDATE       = ""
@@ -668,6 +669,9 @@ function Ask-Questions {
         $Script:AUTO_CHANNEL = if ([string]::IsNullOrWhiteSpace($r) -or $r -match "^[Yy]") { "y" } else { "n" }
     }
 
+    $gr = Read-Host "Does this node have a GPS module? (Y/n)"
+    $Script:GPS_ENABLED = if ([string]::IsNullOrWhiteSpace($gr) -or $gr -match "^[Yy]") { "y" } else { "n" }
+
     Write-Host "----------------------------------"
 }
 
@@ -692,6 +696,7 @@ MESH_SSID="$($Script:MESH_SSID)"
 MESH_SAE_KEY="$($Script:MESH_SAE_KEY)"
 LAN_CIDR_BLOCK="$($Script:LAN_CIDR_BLOCK)"
 AUTO_CHANNEL="$($Script:AUTO_CHANNEL)"
+GPS_ENABLED="$($Script:GPS_ENABLED)"
 RADIO_PW="$($Script:RADIO_PW)"
 ADMIN_PW="$($Script:ADMIN_PW)"
 AUTO_UPDATE="$($Script:AUTO_UPDATE)"
@@ -718,6 +723,7 @@ function Load-Config {
                 "MESH_SAE_KEY"            { $Script:MESH_SAE_KEY              = $Matches[2] }
                 "LAN_CIDR_BLOCK"          { $Script:LAN_CIDR_BLOCK            = $Matches[2] }
                 "AUTO_CHANNEL"            { $Script:AUTO_CHANNEL              = $Matches[2] }
+                "GPS_ENABLED"             { $Script:GPS_ENABLED               = $Matches[2] }
                 "RADIO_PW"                { $Script:RADIO_PW                  = $Matches[2] }
                 "ADMIN_PW"                { $Script:ADMIN_PW                  = $Matches[2] }
                 "AUTO_UPDATE"             { $Script:AUTO_UPDATE               = $Matches[2] }
@@ -743,6 +749,7 @@ function Load-Config {
     Write-Host "  Mesh SAE Key: $($Script:MESH_SAE_KEY)"
     Write-Host "  LAN CIDR Block: $($Script:LAN_CIDR_BLOCK)"
     Write-Host "  Auto Channel: $($Script:AUTO_CHANNEL)"
+    Write-Host "  GPS Enabled: $($Script:GPS_ENABLED)"
     Write-Host "  User password: $($Script:RADIO_PW)"
     Write-Host "  Admin password: $(if ($Script:ADMIN_PW) { $Script:ADMIN_PW } else { '(not set)' })"
     Write-Host "  Auto Update: $(if ($Script:AUTO_UPDATE) { $Script:AUTO_UPDATE } else { 'n' })"
@@ -1159,6 +1166,7 @@ WantedBy=multi-user.target
         -replace '__MESH_SAE_KEY__',            $Script:MESH_SAE_KEY `
         -replace '__LAN_CIDR_BLOCK__',          $Script:LAN_CIDR_BLOCK `
         -replace '__AUTO_CHANNEL__',            $Script:AUTO_CHANNEL `
+        -replace '__GPS_ENABLED__',             $Script:GPS_ENABLED `
         -replace '__RADIO_PW__',                $Script:RADIO_PW `
         -replace '__REGULATORY_DOMAIN__',       $Script:REGULATORY_DOMAIN `
         -replace '__HALOW_REGULATORY_DOMAIN__', $Script:HALOW_REGULATORY_DOMAIN `

@@ -105,6 +105,14 @@ function configRenderView(panel, cfg) {
       { label: 'Auto Update', key: 'auto_update', yesno: true },
       { label: 'Update URL', key: 'update_url' },
     ]},
+    { title: 'GPS / CoT', fields: [
+      { label: 'GPS Enabled', key: 'gps', fmt: function(v) { return (v||'').toLowerCase() === 'n' ? 'Disabled' : 'Enabled'; } },
+      { label: 'Callsign', key: 'callsign' },
+      { label: 'CoT Type', key: 'cot_type', fmt: function(v) { return v || 'a-f-G-E (equipment, default)'; } },
+      { label: 'CoT Team', key: 'cot_team', fmt: function(v) { return v || '(none — equipment identity)'; } },
+      { label: 'CoT Role', key: 'cot_role', fmt: function(v) { return v || 'Team Member'; } },
+      { label: 'CoT Icon', key: 'cot_icon', fmt: function(v) { return v || '(default for type)'; } },
+    ]},
     { title: 'Access Point', fields: [
       { label: 'EUD Mode', key: 'eud' },
       { label: 'AP SSID', key: 'lan_ap_ssid' },
@@ -195,6 +203,14 @@ function configRenderEdit(panel, cfg) {
       {v:'flood',l:'Flood (recommended ≤10 nodes)'},
       {v:'optimized',l:'Optimized IGMP (10+ nodes)'}
     ], hint: 'Flood sends all multicast to all peers; IGMP uses snooping for selective delivery' },
+    { section: 'GPS / CoT' },
+    { label: 'GPS Enabled', key: 'gps', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}],
+      hint: 'No on hardware with no GPS module — stops gpsd/gps-reader instead of leaving them polling for a fix that will never come.' },
+    { label: 'Callsign', key: 'callsign', type: 'text', hint: 'Blank = hostname' },
+    { label: 'CoT Type', key: 'cot_type', type: 'text', hint: 'Blank = a-f-G-E (equipment, no team). CoT/2525 type code.' },
+    { label: 'CoT Team', key: 'cot_team', type: 'text', hint: 'Blank = no team affiliation shown. Set to give this node a team-member identity instead.' },
+    { label: 'CoT Role', key: 'cot_role', type: 'text', hint: 'Blank = Team Member. Only shown when CoT Team is set.' },
+    { label: 'CoT Icon', key: 'cot_icon', type: 'text', hint: 'Blank = default icon for the type. Optional iconset path override.' },
     { section: 'Access Point' },
     { label: 'EUD Mode', key: 'eud', type: 'select', options: ['wired', 'wireless', 'both', 'auto', 'none'] },
     { label: 'AP SSID', key: 'lan_ap_ssid', type: 'text' },
@@ -320,6 +336,7 @@ async function configSave() {
     'ipv4_network','regulatory_domain','halow_bw','multicast_mode','battery_monitor','admin_password','require_auth',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
     'auto_update','update_url',
+    'gps','callsign','cot_type','cot_team','cot_role','cot_icon',
     'voice_mic_volume','voice_speaker_volume','voice_channel',
     'voice_beep_tx_start','voice_beep_rx_end','voice_gain','voice_enabled'];
   const config = {};
