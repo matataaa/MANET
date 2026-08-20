@@ -313,7 +313,7 @@ func runACSTick() {
 
 	if iface24 != "" {
 		cur := getConfFreq(wpaConfPath(iface24))
-		result := electBand(reports, band24Channels, cur, lobbyFreq24, "2.4GHz")
+		result := electBand(reports, registry, band24Channels, cur, lobbyFreq24, "2.4GHz")
 		freq := result.freq
 		if !quorum {
 			freq = lobbyFreq24
@@ -323,7 +323,7 @@ func runACSTick() {
 	}
 	if iface5 != "" {
 		cur := getConfFreq(wpaConfPath(iface5))
-		result := electBand(reports, band5Channels, cur, lobbyFreq5, "5GHz")
+		result := electBand(reports, registry, band5Channels, cur, lobbyFreq5, "5GHz")
 		freq := result.freq
 		if !quorum {
 			freq = lobbyFreq5
