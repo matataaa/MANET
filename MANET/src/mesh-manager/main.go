@@ -922,10 +922,17 @@ func setupVoiceQoS() {
 // Main
 // ============================================================
 
+var Version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(Version)
+		return
+	}
+
 	log.SetFlags(0)
 	log.SetPrefix("[mesh-manager] ")
-	log.Println("Starting mesh manager")
+	log.Printf("Starting mesh manager (version %s)", Version)
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup

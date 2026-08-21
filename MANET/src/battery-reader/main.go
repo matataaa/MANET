@@ -413,9 +413,17 @@ func readMeshConf(key string) string {
 	return ""
 }
 
+var Version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(Version)
+		return
+	}
+
 	log.SetFlags(0)
 	log.SetPrefix("[battery-reader] ")
+	log.Printf("starting (version %s)", Version)
 
 	if readMeshConf("battery_monitor") != "y" {
 		log.Printf("battery_monitor not enabled in /etc/mesh.conf — exiting")

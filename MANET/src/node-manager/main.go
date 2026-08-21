@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -21,10 +22,17 @@ const (
 	loopInterval    = 15
 )
 
+var Version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(Version)
+		return
+	}
+
 	log.SetFlags(log.Ldate | log.Ltime)
 	log.SetPrefix("[node-manager] ")
-	log.Println("starting")
+	log.Printf("starting (version %s)", Version)
 
 	acsEnabled := loadConf("acs") == "y"
 	if acsEnabled {

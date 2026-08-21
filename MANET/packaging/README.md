@@ -46,3 +46,37 @@ hooks, dashboard files, or generated config from a live node.
 tarball with numeric owner/group `0/0`.
 
 The generated tarball is the artifact that gets attached to CI-created releases.
+
+## Bumping the SBC overlay version
+
+`rootfs/etc/manet_version.txt` is **not** a version we invent — it mirrors the
+version stamp that ships inside the externally vendored SBC overlay itself.
+`build-tools-tarball.sh` copies it verbatim into the tools tarball; nothing
+generates or bumps it automatically. Format is two lines: `<version>` then
+`<MM/YYYY>` (e.g. `0.530` / `08/2026`).
+
+This is intentionally separate from the rest of the stack's versioning (see
+[`MANET/docs/VERSIONING.md`](../docs/VERSIONING.md)), which is git-tag/
+`git describe` driven — the overlay doesn't correspond to our commits, so it
+can't be derived from git history.
+
+**Pi4/CM4 is the actively supported board today; RPi5 is a later-stage
+target.** Keep this in mind when deciding how much time to spend keeping the
+RPi5 section below current.
+
+**CM4**: the overlay is vendored from `https://www.colorado-governor.com/manet/cm4-install.tar.gz`
+— an externally-hosted tarball not published in the very-srs/MANET GitHub
+repo. Run `packaging/fetch-cm4-overlay.sh` (optionally pointing it at a local
+copy of that tarball). It writes a `Bundled version` line into the generated
+`kernel-work/packages/cm4-sbc-overlay/VENDORED_FROM.md`. Copy that value
+verbatim into `MANET/rootfs/etc/manet_version.txt`, then rebuild the tools
+tarball. That file has no lightweight version endpoint of its own (the
+version only lives inside the tarball) — to check for an update without
+downloading the full ~46MB, compare the current `curl -sI` `Last-Modified`
+header against the value already recorded in `VENDORED_FROM.md`.
+
+**RPi5**: the overlay comes from the `rpi5-sbc-overlay-current` GitHub
+release asset consumed by `.github/workflows/rpi5-release.yml`. There is no
+local fetch/vendoring script for this board today, so the version has to be
+obtained from whoever publishes updates to that release asset and copied in
+by hand.

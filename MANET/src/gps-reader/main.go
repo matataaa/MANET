@@ -82,10 +82,17 @@ func writeStatus(s gpsStatus) {
 	os.Rename(tmp, gpsStatusPath)
 }
 
+var Version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(Version)
+		return
+	}
+
 	log.SetFlags(0)
 	log.SetPrefix("[gps-reader] ")
-	log.Println("Starting GPS reader daemon.")
+	log.Printf("Starting GPS reader daemon (version %s).", Version)
 
 	for {
 		tpv := queryGPSD()

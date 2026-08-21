@@ -420,7 +420,15 @@ func main() {
 	tlsKey := flag.String("tls-key", "/etc/manet/tls/key.pem", "TLS key file")
 	webRoot := flag.String("webroot", "/usr/local/share/manet/www", "static files directory")
 	tlsSkipVerify := flag.Bool("tls-skip-verify", true, "skip TLS verification for peer connections")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(Version)
+		return
+	}
+
+	log.Printf("starting (version %s)", Version)
 
 	peerTLSConfig = &tls.Config{InsecureSkipVerify: *tlsSkipVerify}
 
