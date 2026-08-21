@@ -14,8 +14,11 @@ Separately (not a rename — a rewrite, so git can't bridge it), several
 Python/bash components were replaced with compiled Go services under
 `MANET/src/`: the web server (`manet-ctrl`), `node-manager`, `node-update`,
 `battery-reader`, `gps-reader`, `halow-mcs-summary`, `mesh-radio-state`,
-`mesh-registry`, `gateway-manager`, `cot-emitter`. Upstream still has these
-as `.py`/`.sh` under `node_tools/`.
+`mesh-registry`, `gateway-manager`, `cot-emitter`, `mesh-voice`. Upstream
+still has these as `.py`/`.sh` under `node_tools/` (upstream's voice PTT
+daemon is `node_tools/mesh-voice.py`, Python/GStreamer/Lyra — architecturally
+unrelated to the fork's compiled Go `mesh-voice`, so upstream voice fixes
+need a manual read-and-translate, not a cherry-pick).
 
 Because of this, `origin/main` and `upstream/main` can't be diffed directly
 — paths (and for the Go pieces, languages) differ. But since both restructure
@@ -52,8 +55,21 @@ git fetch upstream
 
 ## Last reviewed
 
-Upstream commit reviewed up to: `9fea978` (2026-08-16) — "Take provisioning
-completion time from the done marker, not the state file"
+Upstream commit reviewed up to: `695ca46` (2026-08-20) — "Back off pipeline
+restarts and stop logging the same error for ever"
+
+2026-08-21 pass found one actionable, mechanically-portable fix not yet in
+the fork: `70dc3c6` "Fix mesh time sync and wire GPS in as a time source"
+fixes real bugs also present in the fork's `provision-mesh.sh` /
+`ethernet-autodetect.sh` / `one-shot-time-sync.sh` — invalid `offline`
+directive in chrony-default.conf, chrony-default.conf written to the wrong
+path (`/etc/chrony-default.conf` vs `/etc/chrony/chrony-default.conf`),
+`one-shot-time-sync.service` never actually enabled, and
+`one-shot-time-sync.sh` bursting a source chronyd was never told about. Not
+yet ported — see conversation from that date. Everything else in the range
+(the voice PTT/Lyra feature set, journald persistence — already fixed
+independently in the fork's own `journald.conf.d/manet.conf`) needs no
+action.
 
 Update this line after each review pass so `git log upstream/main --oneline
 <last-reviewed-sha>..upstream/main` shows only what's new.
