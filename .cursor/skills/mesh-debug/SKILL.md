@@ -17,7 +17,7 @@ Read `.cursor/mesh-nodes.env` for the current list of node IPs, SSH user, and pa
 
 ## Related documentation
 
-For **host-side flashing**, **first-boot flow** (Raspberry Pi vs Rock 3A), **provisioning-time options** (EUD wired/wireless/auto, mesh SSID and SAE key, CIDR, DHCP sizing, regulatory domain), **reserved service addresses** (e.g. MediaMTX / Mumble), **default credentials**, and **provisioning troubleshooting** (Ethernet, timeouts, log locations in prose), read `MANET/provisioning/README.md` in this repository.
+For **host-side flashing**, **first-boot flow**, **provisioning-time options** (EUD wired/wireless/auto, mesh SSID and SAE key, CIDR, DHCP sizing, regulatory domain), **reserved service addresses** (e.g. MediaMTX / Mumble), **default credentials**, and **provisioning troubleshooting** (Ethernet, timeouts, log locations in prose), read `MANET/provisioning/README.md` in this repository.
 
 For **repository layout** and where provisioning sources of truth live, see `MANET/README.md`.
 
@@ -202,9 +202,6 @@ cat /var/log/radio-setup.log
 # Provisioning log (RPi)
 cat /boot/firmware/provision.log
 
-# Provisioning log (Rock 3A)
-cat /var/log/mesh-provision.log
-
 # Kernel messages for WiFi/mesh
 dmesg | grep -iE 'morse|wifi|wlan|bat0|mesh|mt7915|brcmfmac' | tail -30
 ```
@@ -296,15 +293,14 @@ batctl meshif bat0 o
 
 ## Provisioning Verification
 
-Pi vs Rock 3A first-boot stages and host flashing are documented in `MANET/provisioning/README.md`. After a node's first boot, verify all three phases completed:
+First-boot stages and host flashing are documented in `MANET/provisioning/README.md`. After a node's first boot, verify all three phases completed:
 
 ```bash
-# Phase 1: firstrun (RPi only) — should exist and show completion
+# Phase 1: firstrun — should exist and show completion
 tail -5 /boot/firmware/firstrun.log
 
 # Phase 2: provision-mesh — should show "Provisioning complete"
-tail -5 /boot/firmware/provision.log       # RPi
-tail -5 /var/log/mesh-provision.log        # Rock 3A
+tail -5 /boot/firmware/provision.log
 
 # Phase 3: radio-setup — should show interface detection and service setup
 tail -20 /var/log/radio-setup.log

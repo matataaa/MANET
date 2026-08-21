@@ -7,7 +7,7 @@ alwaysApply: true
 
 ## What This Is
 
-A complete software suite that turns ARM64 SBCs (Rock 3A, Raspberry Pi 5, CM4) into self-forming mesh network nodes using **batman-adv** (Layer 2) over **802.11ax/s/ah** radios. Nodes coordinate via **Alfred** gossip to handle IP allocation, channel selection, service elections, and partition healing — all without central infrastructure.
+A complete software suite that turns ARM64 SBCs (Raspberry Pi 5, CM4) into self-forming mesh network nodes using **batman-adv** (Layer 2) over **802.11ax/s/ah** radios. Nodes coordinate via **Alfred** gossip to handle IP allocation, channel selection, service elections, and partition healing — all without central infrastructure.
 
 ## Hardware & Radio Architecture
 
@@ -57,7 +57,7 @@ The registry drives IP allocation, gateway selection, service elections, channel
 There is a single `node-manager` Go binary (`src/node-manager/`), not separate static/ACS scripts. Mode is controlled by `acs=` in `/etc/mesh.conf` (already wired into provisioning end-to-end; `y`/anything-but-`y` reads back via `loadConf("acs")` in `main.go`):
 
 - **Static** (`acs=n`, default): `ensureStaticChannels()` pins both mesh radios to the fixed lobby frequencies (2412/5180) every 15s tick, correcting drift. No RF scanning, no election.
-- **ACS** (`acs=y`, port of upstream in progress on `feat/acs-port`): `runACSTick()` replaces the static enforcement — scans candidate channels (`scan.go`), aggregates self + peer scan reports from the registry (`registry_read.go`, `channel_election.go`), and elects a channel per band, falling back to the lobby frequency (and raising a per-node limp-mode signal) when the RF environment itself is the problem. Election results and scan reports gossip via the existing `mesh-registry` alfred pipe (new `NodeInfo.ChannelReport` field) — no new alfred type. Tourguide-based partition healing and mesh-wide limp-mode consensus are staged follow-ups on the same branch, not yet implemented as of this note.
+- **ACS** (`acs=y`): `runACSTick()` replaces the static enforcement — scans candidate channels (`scan.go`), aggregates self + peer scan reports from the registry (`registry_read.go`, `channel_election.go`), and elects a channel per band, falling back to the lobby frequency (and raising a per-node limp-mode signal) when the RF environment itself is the problem. Election results and scan reports gossip via the existing `mesh-registry` alfred pipe (new `NodeInfo.ChannelReport` field) — no new alfred type. Tourguide-based partition healing (`tourguide.go`) and mesh-wide limp-mode consensus (`limpmode.go`, gated by `quorum.go`) are implemented and run every `runACSTick()` cycle via `maybeRunTourguide()` and `reconcileLimpMode()`.
 
 ## Web Interfaces on Nodes
 
@@ -78,7 +78,6 @@ There is a single `node-manager` Go binary (`src/node-manager/`), not separate s
 | `/etc/mesh_ipv4_state` | Persistent IP chunk allocation |
 | `/var/log/radio-setup.log` | radio-setup.sh output |
 | `/boot/firmware/provision.log` | RPi provisioning log |
-| `/var/log/mesh-provision.log` | Rock 3A provisioning log |
 
 ## Repo Structure
 
@@ -94,7 +93,6 @@ There is a single `node-manager` Go binary (`src/node-manager/`), not separate s
 | Account | Username | Password |
 | --- | --- | --- |
 | SSH / node user | `radio` | Set during provisioning |
-| Armbian root (Rock 3A) | `root` | `1234` |
 
 ## SSH Notes
 
