@@ -72,6 +72,29 @@ function themeColor(light, dark) {
   return isDarkTheme() ? dark : light;
 }
 
+// Fleet hostnames are generated as {prefix}-{mesh_ssid}-{mac_suffix} (see
+// config.js's hostname preview) and the SSID is the same across every node
+// on the mesh, so displaying it per-node is pure repetition — drop the
+// middle segment(s) and keep just the prefix and MAC suffix.
+function shortHostname(h) {
+  if (!h) return h;
+  var parts = h.split('-');
+  if (parts.length < 3) return h;
+  return parts[0] + '-' + parts[parts.length - 1];
+}
+
+// Interface naming is pinned fleet-wide by radio-setup.sh's .link rules
+// (wlan0=2.4GHz mesh, wlan1=5GHz mesh, wlan2=HaLow — see the comment above
+// write_link_file there), so a raw kernel name like "wlan1" is safe to
+// translate straight to a human label everywhere in the UI.
+var RADIO_LABELS = { wlan0: '2.4 Mesh', wlan1: '5 Mesh', wlan2: 'HaLow' };
+function radioLabel(iface) {
+  if (!iface) return iface;
+  if (RADIO_LABELS[iface]) return RADIO_LABELS[iface];
+  if (iface.indexOf('halow') === 0) return 'HaLow';
+  return iface;
+}
+
 function escHtml(str) {
   const d = document.createElement('div');
   d.textContent = str;

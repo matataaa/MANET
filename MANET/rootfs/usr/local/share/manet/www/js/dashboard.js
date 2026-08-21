@@ -71,6 +71,10 @@ function renderDashAirtime() {
   html += '<div class="topo-fleet-ack-bar" style="margin-bottom:8px"><div class="topo-fleet-ack-fill" style="width:' + pct + '%;background:' + pctColor + '"></div></div>';
   html += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px">';
   html += '<span>' + escHtml(a.mesh_iface || '') + ' air total</span><span>&uarr; ' + fmtBps(a.total_tx_bps) + ' &nbsp; &darr; ' + fmtBps(a.total_rx_bps) + '</span></div>';
+  if (a.wifi_ifaces && a.wifi_ifaces.length) {
+    html += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px">';
+    html += '<span>' + escHtml(a.wifi_ifaces.join('+')) + ' air total</span><span>&uarr; ' + fmtBps(a.wifi_tx_bps) + ' &nbsp; &darr; ' + fmtBps(a.wifi_rx_bps) + '</span></div>';
+  }
   if (a.services && a.services.length) {
     a.services.forEach(function(s) {
       var active = (s.tx_bps + s.rx_bps) >= 1;
@@ -326,8 +330,10 @@ function renderDashNodeList(nodes) {
 
     const delBtn = (!n.is_me && n.id) ? '<button class="node-del-btn" data-node-id="' + escHtml(n.id) + '" title="Remove from registry">&times;</button>' : '';
 
+    const shortName = shortHostname(n.hostname) || n.mac;
+
     return '<div class="' + cls + '">' +
-      '<div class="node-name">' + (n.ip ? '<a href="https://' + encodeURI(n.ip) + '/" target="_blank" class="node-link">' + escHtml(n.hostname || n.mac) + '</a>' : escHtml(n.hostname || n.mac)) + ' ' + tqBadge + delBtn + '</div>' +
+      '<div class="node-name">' + (n.ip ? '<a href="https://' + encodeURI(n.ip) + '/" target="_blank" class="node-link">' + escHtml(shortName) + '</a>' : escHtml(shortName)) + ' ' + tqBadge + delBtn + '</div>' +
       '<div class="node-ip">' + ipLine + (uptimeLine && ipLine ? ' &middot; ' : '') + uptimeLine + '</div>' +
       '<div class="node-meta">' + badges.join('') + offline + '</div>' +
       bar +

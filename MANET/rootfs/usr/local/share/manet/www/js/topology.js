@@ -338,7 +338,7 @@ function topoUpdate(data) {
     .attr('fill', function(d) { return d.is_gateway ? '#7c3aed' : '#00928f'; });
 
   nodeAll.select('.topo-label')
-    .text(function(d) { return d.hostname || d.id; })
+    .text(function(d) { return shortHostname(d.hostname) || d.id; })
     .attr('dy', function(d) { return d.r + 36; })
     .attr('fill', function(d) { return d.ip ? '#00928f' : '#fff'; }).style('font-size', '11px');
 
@@ -347,16 +347,14 @@ function topoUpdate(data) {
     .attr('dy', function(d) { return d.r + 50; })
     .attr('fill', '#8b929e');
 
+  // Throughput/TQ already appear on the connecting link's own label right
+  // next to this node — repeating it here just duplicates the line, so the
+  // sublabel sticks to info the link label doesn't carry.
   nodeAll.select('.topo-sublabel')
     .text(function(d) {
       if (d.is_me) return '';
       if (d.stale) return 'OFFLINE';
       var parts = [];
-      if (d.best_link && d.best_link.throughput) {
-        parts.push(fmtThroughput(d.best_link.throughput));
-      } else if (d.tq != null) {
-        parts.push(tqPct(d.tq) + '%');
-      }
       if (d.hop_count != null && d.hop_count > 0)
         parts.push(d.hop_count + (d.hop_count === 1 ? ' hop' : ' hops'));
       if (d.last_seen && ts) {
@@ -366,11 +364,7 @@ function topoUpdate(data) {
       return parts.join(' · ');
     })
     .attr('dy', function(d) { return d.r + 63; })
-    .attr('fill', function(d) {
-      if (d.stale) return '#ef4444';
-      if (d.best_link && d.best_link.throughput) return tpColor(d.best_link.throughput, isHalowIface(d.best_link.iface));
-      return d.tq != null ? tqColor(d.tq) : '#8b929e';
-    });
+    .attr('fill', function(d) { return d.stale ? '#ef4444' : '#8b929e'; });
 
   // Gateway uplink indicator
   nodeAll.select('.topo-uplink-stem')

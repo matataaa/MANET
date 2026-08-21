@@ -120,8 +120,10 @@ function nodesRender() {
       stale ? '<span style="color:var(--bad)">' + fmtAge(n.last_seen, DATA.timestamp) + '</span>' :
       (n.last_seen ? '<span style="color:var(--good)">' + fmtAge(n.last_seen, DATA.timestamp) + '</span>' : '--');
 
+    const shortName = shortHostname(n.hostname) || n.id;
+
     return '<tr>' +
-      '<td class="col-host">' + (n.ip ? '<a href="https://' + encodeURI(n.ip) + '/" target="_blank" class="node-link">' + escHtml(n.hostname || n.id) + '</a>' : escHtml(n.hostname || n.id)) + '</td>' +
+      '<td class="col-host">' + (n.ip ? '<a href="https://' + encodeURI(n.ip) + '/" target="_blank" class="node-link">' + escHtml(shortName) + '</a>' : escHtml(shortName)) + '</td>' +
       '<td>' + escHtml(n.ip || '--') + '</td>' +
       '<td style="color:var(--muted)">' + escHtml((n.hostname || '') + '.mesh') + '</td>' +
       '<td class="col-tq">' + tqCell + '</td>' +
@@ -132,12 +134,12 @@ function nodesRender() {
       '<td>' + lastSeen + '</td>' +
       '<td class="col-actions">' +
         (n.ip ? '<button class="node-act-btn" onclick="window.open(\'https://\' + \'' + escHtml(n.ip) + '\' + \'/\', \'_blank\')">Portal</button>' : '') +
-        '<button class="node-act-btn" onclick="openNodeConfig(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\')">Config</button>' +
+        '<button class="node-act-btn" onclick="openNodeConfig(\'' + escHtml(n.ip) + '\',\'' + escHtml(shortName) + '\')">Config</button>' +
         (n.is_me ? '' :
-        '<button class="node-act-btn" onclick="openNodeTerminal(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\',\'terminal\')">Shell</button>' +
-        '<button class="node-act-btn" onclick="openNodeTerminal(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\',\'logs\')">Logs</button>' +
-        '<button class="node-act-btn" onclick="openNodeStream(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\',\'ping\')">Ping</button>' +
-        '<button class="node-act-btn" onclick="openNodeStream(\'' + escHtml(n.ip) + '\',\'' + escHtml(n.hostname || n.ip) + '\',\'traceroute\')">Trace</button>') +
+        '<button class="node-act-btn" onclick="openNodeTerminal(\'' + escHtml(n.ip) + '\',\'' + escHtml(shortName) + '\',\'terminal\')">Shell</button>' +
+        '<button class="node-act-btn" onclick="openNodeTerminal(\'' + escHtml(n.ip) + '\',\'' + escHtml(shortName) + '\',\'logs\')">Logs</button>' +
+        '<button class="node-act-btn" onclick="openNodeStream(\'' + escHtml(n.ip) + '\',\'' + escHtml(shortName) + '\',\'ping\')">Ping</button>' +
+        '<button class="node-act-btn" onclick="openNodeStream(\'' + escHtml(n.ip) + '\',\'' + escHtml(shortName) + '\',\'traceroute\')">Trace</button>') +
       '</td>' +
       '</tr>';
   }).join('');

@@ -65,6 +65,9 @@ type AirtimeInfo struct {
 	CapacityMbps float64       `json:"capacity_mbps"`
 	MeshIface    string        `json:"mesh_iface"`
 	CountersOK   bool          `json:"counters_ok"`
+	WifiTxBps    float64       `json:"wifi_tx_bps,omitempty"`
+	WifiRxBps    float64       `json:"wifi_rx_bps,omitempty"`
+	WifiIfaces   []string      `json:"wifi_ifaces,omitempty"`
 }
 
 var (
@@ -154,9 +157,42 @@ func meshAirIface() string {
 	return "bat0"
 }
 
+// wifiMeshIfaces returns whichever of the standard-WiFi mesh radios are
+// present on this node. Interface naming is pinned fleet-wide by
+// radio-setup.sh's .link rules: wlan0/wlan1 are always WiFi mesh, never AP
+// or HaLow, so their combined byte counters are safe to sum as one total.
+func wifiMeshIfaces() []string {
+	var out []string
+	for _, i := range []string{"wlan0", "wlan1"} {
+		if _, err := os.Stat("/sys/class/net/" + i); err == nil {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// readIfacesBytes sums byte counters across multiple interfaces, e.g. to
+// get a combined wlan0+wlan1 total. Fails closed (ok=false) if any listed
+// interface can't be read, so a partial sum is never reported as real.
+func readIfacesBytes(ifaces []string) (rx, tx int64, ok bool) {
+	if len(ifaces) == 0 {
+		return 0, 0, false
+	}
+	for _, i := range ifaces {
+		r, t, iok := readIfaceBytes(i)
+		if !iok {
+			return 0, 0, false
+		}
+		rx += r
+		tx += t
+	}
+	return rx, tx, true
+}
+
 func airtimeLoop() {
 	countersOK := ensureAirtimeTable()
 	iface := meshAirIface()
+	wifiIfaces := wifiMeshIfaces()
 
 	services := []struct{ name, in, out string }{
 		{"Voice", "voice_in", "voice_out"},
@@ -167,6 +203,7 @@ func airtimeLoop() {
 
 	var prevCounters map[string]int64
 	var prevRx, prevTx int64
+	var prevWifiRx, prevWifiTx int64
 	var prevAt time.Time
 
 	const interval = 5 * time.Second
@@ -184,6 +221,7 @@ func airtimeLoop() {
 			}
 		}
 		rx, tx, ifOK := readIfaceBytes(iface)
+		wifiRx, wifiTx, wifiOK := readIfacesBytes(wifiIfaces)
 
 		if !prevAt.IsZero() {
 			dt := now.Sub(prevAt).Seconds()
@@ -192,6 +230,7 @@ func airtimeLoop() {
 					CapacityMbps: meshRefThroughput(),
 					MeshIface:    iface,
 					CountersOK:   countersOK && counters != nil && prevCounters != nil,
+					WifiIfaces:   wifiIfaces,
 				}
 				if info.CountersOK {
 					for _, s := range services {
@@ -216,6 +255,16 @@ func airtimeLoop() {
 						info.TotalTxBps = 0
 					}
 				}
+				if wifiOK && prevWifiRx > 0 {
+					info.WifiRxBps = float64(wifiRx-prevWifiRx) * 8 / dt
+					info.WifiTxBps = float64(wifiTx-prevWifiTx) * 8 / dt
+					if info.WifiRxBps < 0 {
+						info.WifiRxBps = 0
+					}
+					if info.WifiTxBps < 0 {
+						info.WifiTxBps = 0
+					}
+				}
 				airtimeMu.Lock()
 				airtimeInfo = info
 				airtimeMu.Unlock()
@@ -226,6 +275,7 @@ func airtimeLoop() {
 			prevCounters = counters
 		}
 		prevRx, prevTx, prevAt = rx, tx, now
+		prevWifiRx, prevWifiTx = wifiRx, wifiTx
 
 		<-ticker.C
 	}

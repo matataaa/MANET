@@ -21,7 +21,7 @@ async function meshFetch() {
 }
 
 function meshNodeLabel(entry) {
-  var label = entry.hostname ? escHtml(entry.hostname) : '<span class="mono">' + escHtml(entry.mac) + '</span>';
+  var label = entry.hostname ? escHtml(shortHostname(entry.hostname)) : '<span class="mono">' + escHtml(entry.mac) + '</span>';
   if (entry.ip) return '<a href="https://' + encodeURI(entry.ip) + '/" target="_blank" class="node-link">' + label + '</a>';
   return label;
 }
@@ -70,7 +70,7 @@ function meshRender() {
   html += '<div class="card mesh-overview">';
   html += '<div class="card-header">LOCAL NODE</div>';
   html += '<div class="mesh-kv">';
-  html += meshKV('Hostname', d.hostname || '--');
+  html += meshKV('Hostname', shortHostname(d.hostname) || '--');
   html += meshKV('State', bat0StateLabel(d.bat0.state));
   html += meshKV('Address', (d.bat0.addrs || []).join(', ') || '--');
   html += meshKV('Algorithm', d.bat0.algo || '--');
@@ -98,7 +98,7 @@ function meshRender() {
   if (lbNeigh.length) {
     html += '<div class="card mesh-table-card mesh-wide">';
     html += '<div class="card-header">LINK BUDGET' + (d.halow_bw ? ' — ' + escHtml(d.halow_bw) + ' CHANNEL' : '') + '</div>';
-    html += '<table class="mesh-table"><thead><tr><th>Node</th><th>Signal</th><th>MCS</th><th>PHY Rate</th><th>Floor</th><th>Margin</th><th>Retry %</th></tr></thead><tbody>';
+    html += '<table class="mesh-table"><thead><tr><th>Node</th><th>Signal</th><th>MCS</th><th>PHY Rate</th><th>Real Rate</th><th>Floor</th><th>Margin</th><th>Retry %</th></tr></thead><tbody>';
     lbNeigh.forEach(function(n) {
       var L = n.link;
       var marginHtml = '<span class="badge badge-tq-none">n/a</span>';
@@ -111,10 +111,12 @@ function meshRender() {
         var rc = L.retry_pct < 10 ? 'var(--good)' : L.retry_pct < 30 ? 'var(--warn)' : 'var(--bad)';
         retryHtml = '<span style="color:' + rc + '">' + L.retry_pct.toFixed(0) + '%</span>';
       }
-      html += '<tr><td>' + meshNodeLabel(n) + meshNodeSub(n) + '</td>';
+      var radioTag = n.iface ? ' <span class="badge badge-svc">' + escHtml(radioLabel(n.iface)) + '</span>' : '';
+      html += '<tr><td>' + meshNodeLabel(n) + radioTag + meshNodeSub(n) + '</td>';
       html += '<td>' + L.signal + ' dBm</td>';
       html += '<td>' + (L.mcs >= 0 ? 'MCS ' + L.mcs : '--') + '</td>';
       html += '<td>' + (L.phy_mbps ? L.phy_mbps.toFixed(1) + ' Mbps' : '--') + '</td>';
+      html += '<td>' + (L.expected_mbps ? L.expected_mbps.toFixed(1) + ' Mbps' : '--') + '</td>';
       html += '<td>' + (L.floor != null ? L.floor + ' dBm' : '--') + '</td>';
       html += '<td>' + marginHtml + '</td>';
       html += '<td>' + retryHtml + '</td></tr>';
@@ -128,10 +130,10 @@ function meshRender() {
   html += '<div class="card mesh-table-card">';
   html += '<div class="card-header">DIRECT NEIGHBORS (' + nCount + ')</div>';
   if (d.neighbors && d.neighbors.length) {
-    html += '<table class="mesh-table"><thead><tr><th>Node</th><th>Interface</th><th>TQ</th><th>Last Seen</th></tr></thead><tbody>';
+    html += '<table class="mesh-table"><thead><tr><th>Node</th><th>Radio</th><th>TQ</th><th>Last Seen</th></tr></thead><tbody>';
     d.neighbors.forEach(function(n) {
       html += '<tr><td>' + meshNodeLabel(n) + meshNodeSub(n) + '</td>';
-      html += '<td>' + escHtml(n.iface || '') + '</td>';
+      html += '<td>' + escHtml(radioLabel(n.iface) || '') + '</td>';
       html += '<td><span class="badge ' + tqClass(n.tq) + '">' + (n.tq != null ? n.tq : '?') + '</span></td>';
       html += '<td>' + meshLastSeen(n) + '</td></tr>';
     });
@@ -162,14 +164,14 @@ function meshRender() {
   html += '<div class="card mesh-table-card mesh-wide">';
   html += '<div class="card-header">REACHABLE NODES (' + oCount + ')</div>';
   if (d.originators && d.originators.length) {
-    html += '<table class="mesh-table"><thead><tr><th>Node</th><th>TQ</th><th>Via</th><th>Interface</th><th>Last Seen</th></tr></thead><tbody>';
+    html += '<table class="mesh-table"><thead><tr><th>Node</th><th>TQ</th><th>Via</th><th>Radio</th><th>Last Seen</th></tr></thead><tbody>';
     d.originators.forEach(function(o) {
-      var via = o.nexthop_hostname ? escHtml(o.nexthop_hostname) : '<span class="mono">' + escHtml(o.nexthop) + '</span>';
+      var via = o.nexthop_hostname ? escHtml(shortHostname(o.nexthop_hostname)) : '<span class="mono">' + escHtml(o.nexthop) + '</span>';
       if (o.nexthop === o.mac) via = '<span style="color:var(--muted)">direct</span>';
       html += '<tr><td>' + meshNodeLabel(o) + meshNodeSub(o) + '</td>';
       html += '<td><span class="badge ' + tqClass(o.tq) + '">' + o.tq + '</span></td>';
       html += '<td>' + via + '</td>';
-      html += '<td>' + escHtml(o.iface) + '</td>';
+      html += '<td>' + escHtml(radioLabel(o.iface)) + '</td>';
       html += '<td>' + meshLastSeen(o) + '</td></tr>';
     });
     html += '</tbody></table>';

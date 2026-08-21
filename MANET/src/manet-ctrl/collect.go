@@ -189,7 +189,12 @@ func buildLinkBudget(st *StationLink, iface, halowBW string) map[string]interfac
 		"tx_failed":  st.TxFailed,
 	}
 	if st.ExpectedMbps > 0 {
-		m["expected_mbps"] = st.ExpectedMbps
+		// Unlike tx/rx bitrate, the driver's "expected throughput" is not
+		// subject to the 20x S1G-as-5GHz alias (confirmed live: on a 2MHz
+		// HaLow link reporting a 150 MBit/s tx bitrate — i.e. 7.5 real
+		// after the /20 above — "expected throughput" already reads
+		// ~7.5Mbps raw, not ~150Mbps). Use it as-is.
+		m["expected_mbps"] = round1(st.ExpectedMbps)
 	}
 	if st.TxPackets > 0 {
 		m["retry_pct"] = round1(float64(st.TxRetries) * 100 / float64(st.TxPackets))
