@@ -863,7 +863,13 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 			// wpa_supplicant on it — must run before hostapd is
 			// (re)started so it picks up a config that actually
 			// targets the current AP interface, not a stale one.
-			if out, err := runCmd(10*time.Second, "manet-wlan-reconcile.sh"); err != nil {
+			// 60s budget: on this path the script itself restarts 4
+			// services sequentially, two of them oneshot units with a
+			// 2s ExecStartPre sleep each — a shorter timeout risks
+			// SIGKILLing it mid-sequence, leaving e.g. ap-txpower.service
+			// never applied while api.go's own follow-up calls still
+			// report success.
+			if out, err := runCmd(60*time.Second, "manet-wlan-reconcile.sh"); err != nil {
 				log.Printf("manet-wlan-reconcile: %v (%s)", err, strings.TrimSpace(out))
 			} else if strings.TrimSpace(out) != "" {
 				log.Printf("manet-wlan-reconcile: %s", strings.TrimSpace(out))
@@ -878,7 +884,7 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 			// and ap-txpower.service still holds its txpower fixed low —
 			// reconcile both now rather than leaving it a non-functional
 			// mesh radio until the node is fully re-provisioned.
-			if out, err := runCmd(10*time.Second, "manet-wlan-reconcile.sh"); err != nil {
+			if out, err := runCmd(60*time.Second, "manet-wlan-reconcile.sh"); err != nil {
 				log.Printf("manet-wlan-reconcile: %v (%s)", err, strings.TrimSpace(out))
 			} else if strings.TrimSpace(out) != "" {
 				log.Printf("manet-wlan-reconcile: %s", strings.TrimSpace(out))
@@ -944,16 +950,22 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	// untouched; its EUD relay is GPS-independent. Enabling on a node that
 	// was originally provisioned with gps=n needs gpsd installed first —
 	// radio-setup.sh only apt-installs it when gps=y at boot.
+	//
+	// enable/disable alongside stop/restart: radio-setup.sh sets the
+	// boot-time enabled state once, at first provisioning, and never
+	// re-runs on a live gps= change — a stop/restart-only toggle here
+	// looks like it worked but silently reverts on the node's next
+	// reboot in both directions.
 	if updates["gps"] != "" {
 		if conf["gps"] == "n" {
-			runCmd(5*time.Second, "systemctl", "stop", "gps-reader")
-			runCmd(5*time.Second, "systemctl", "stop", "gpsd")
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gps-reader")
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd")
 		} else {
 			if _, err := exec.LookPath("gpsd"); err != nil {
 				runCmd(60*time.Second, "apt-get", "install", "-y", "gpsd", "gpsd-clients")
 			}
-			runCmd(5*time.Second, "systemctl", "restart", "gpsd")
-			runCmd(5*time.Second, "systemctl", "restart", "gps-reader")
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gpsd")
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gps-reader")
 		}
 		applied["gps_applied"] = true
 	}

@@ -31,6 +31,15 @@ iface_phy() {
     iw dev "$iface" info 2>/dev/null | awk '/wiphy/ {print "phy"$2; exit}'
 }
 
+iface_driver() {
+    local iface="$1" driver
+    driver="$(basename "$(readlink -f /sys/class/net/$iface/device/driver 2>/dev/null)")"
+    if [[ -z "$driver" || "$driver" == "." ]]; then
+        driver="$(ethtool -i "$iface" 2>/dev/null | awk -F': ' '$1 == "driver" {print $2; exit}')"
+    fi
+    echo "$driver"
+}
+
 phys_iface() {
     local logical="$1" phys
     phys=$(grep "^${logical}:" /var/lib/iface_map 2>/dev/null | cut -d: -f2)
@@ -79,7 +88,18 @@ if { [ "$EUD" = "wired" ] || [ "$EUD" = "none" ]; } && [ -n "$AP_INTERFACE" ]; t
         echo "manet-wlan-reconcile: stopping hostapd (still bound to $AP_INTERFACE)"
         systemctl disable --now hostapd.service 2>/dev/null || true
     fi
-    if ! grep -qx "$AP_INTERFACE" "$MESH_IF_FILE" 2>/dev/null; then
+    # radio-setup.sh never classifies brcmfmac as mesh-capable (see its own
+    # "brcmfmac must never stay classified as a mesh radio" rescue) — it's
+    # the AP radio on reference platforms precisely because it can't do
+    # 802.11s. Route it back to no_mesh_if instead, matching that same
+    # rule, rather than handing step 1 below an interface it'll generate a
+    # doomed mode=5 wpa_supplicant config for.
+    if [ "$(iface_driver "$AP_INTERFACE")" = "brcmfmac" ]; then
+        echo "manet-wlan-reconcile: $AP_INTERFACE is brcmfmac, not mesh-capable — routing to no_mesh_if instead"
+        if ! grep -qx "$AP_INTERFACE" /var/lib/no_mesh_if 2>/dev/null; then
+            echo "$AP_INTERFACE" >> /var/lib/no_mesh_if
+        fi
+    elif ! grep -qx "$AP_INTERFACE" "$MESH_IF_FILE" 2>/dev/null; then
         echo "$AP_INTERFACE" >> "$MESH_IF_FILE"
     fi
     : > "$AP_IF_FILE"
