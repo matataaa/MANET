@@ -66,9 +66,16 @@ type NodeInfo struct {
 	PartitionSize          string `json:"partition_size,omitempty"`
 }
 
+var Version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(Version)
+		return
+	}
+
 	log.SetFlags(log.Ldate | log.Ltime)
-	log.Println("mesh-registry starting")
+	log.Printf("mesh-registry starting (version %s)", Version)
 
 	loadKnownNodes()
 

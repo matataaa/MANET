@@ -66,9 +66,10 @@ GO_SERVICES=(
 )
 
 for svc in "${GO_SERVICES[@]}"; do
-    echo "Building $svc for linux/arm64..."
+    VER="$(git -C "$REPO_ROOT" describe --tags --always --dirty --match "${svc}-v*" 2>/dev/null || echo dev)"
+    echo "Building $svc for linux/arm64 (version $VER)..."
     (cd "$SRC/$svc" && \
-        GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "$svc" .)
+        GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VER" -o "$svc" .)
     install -m 0755 "$SRC/$svc/$svc" "$STAGE/usr/local/bin/$svc"
 done
 

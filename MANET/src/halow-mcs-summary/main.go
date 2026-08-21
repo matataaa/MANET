@@ -86,10 +86,18 @@ func parseStationDump(text string) []peer {
 	return peers
 }
 
+var Version = "dev"
+
 func main() {
 	iface := flag.String("iface", "wlan2", "wireless interface")
 	shell := flag.Bool("shell", false, "output shell variables")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(Version)
+		return
+	}
 
 	out, _ := exec.Command("/usr/sbin/iw", "dev", *iface, "station", "dump").CombinedOutput()
 	peers := parseStationDump(string(out))
