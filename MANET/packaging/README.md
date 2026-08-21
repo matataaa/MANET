@@ -60,6 +60,10 @@ This is intentionally separate from the rest of the stack's versioning (see
 `git describe` driven — the overlay doesn't correspond to our commits, so it
 can't be derived from git history.
 
+**Pi4/CM4 is the actively supported board today; RPi5 is a later-stage
+target.** Keep this in mind when deciding how much time to spend keeping the
+RPi5 section below current.
+
 **CM4**: the overlay is vendored from `https://www.colorado-governor.com/manet/cm4-install.tar.gz`
 — an externally-hosted tarball not published in the very-srs/MANET GitHub
 repo. Run `packaging/fetch-cm4-overlay.sh` (optionally pointing it at a local
