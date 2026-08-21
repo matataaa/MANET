@@ -489,10 +489,19 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
 }
 
+var Version = "dev"
+
 func main() {
 	port := flag.Int("port", 9821, "HTTP port")
 	configFile := flag.String("config", "/etc/atak-overlay.conf", "config file")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(Version)
+		return
+	}
+	log.Printf("starting (version %s)", Version)
 
 	cfg = loadConfig(*configFile)
 	hostname, _ = os.Hostname()

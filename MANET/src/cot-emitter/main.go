@@ -414,9 +414,17 @@ func relayLoop(uid string) {
 	}
 }
 
+var Version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(Version)
+		return
+	}
+
 	log.SetFlags(0)
 	log.SetPrefix("[cot-emitter] ")
+	log.Printf("starting (version %s)", Version)
 
 	callsign := getCallsign()
 	uid := getUID()

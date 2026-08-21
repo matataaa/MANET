@@ -69,9 +69,17 @@ func loadConfig() Config {
 	return cfg
 }
 
+var Version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(Version)
+		return
+	}
+
 	log.SetFlags(0)
 	log.SetPrefix("")
+	log.Printf("starting (version %s)", Version)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -1535,11 +1535,20 @@ func loadConfig(path string) Config {
 	return c
 }
 
+var Version = "dev"
+
 func main() {
 	port := flag.Int("port", 9800, "HTTP/WebSocket port")
 	iface := flag.String("iface", "br0", "network interface")
 	configFile := flag.String("config", "/etc/mesh-chat.conf", "config file")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(Version)
+		return
+	}
+	log.Printf("starting (version %s)", Version)
 
 	cfg = loadConfig(*configFile)
 	if *port != 9800 {

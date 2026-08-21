@@ -2,6 +2,26 @@ plugins {
     id 'com.android.application'
 }
 
+def gitDescribe = { prefix ->
+    try {
+        def proc = ["git", "describe", "--tags", "--always", "--dirty", "--match", "${prefix}-v*"].execute(null, rootDir)
+        proc.waitFor()
+        return proc.exitValue() == 0 ? proc.text.trim() : "dev"
+    } catch (Exception e) {
+        return "dev"
+    }
+}
+
+def gitCommitCount = {
+    try {
+        def proc = ["git", "rev-list", "--count", "HEAD"].execute(null, rootDir)
+        proc.waitFor()
+        return proc.exitValue() == 0 ? proc.text.trim().toInteger() : 1
+    } catch (Exception e) {
+        return 1
+    }
+}
+
 android {
     namespace 'eu.frosttechnologies.meshctrl'
     compileSdk 34
@@ -10,8 +30,8 @@ android {
         applicationId "eu.frosttechnologies.meshctrl"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode gitCommitCount()
+        versionName gitDescribe("android")
     }
 
     buildTypes {
