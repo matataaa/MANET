@@ -55,6 +55,7 @@ CFG80211_REGDOM="${CFG80211_REGDOM:-US}"
 EUD=$(grep '^eud=' /etc/mesh.conf 2>/dev/null | cut -d= -f2-)
 AP_INTERFACE=""
 [ -f "$AP_IF_FILE" ] && AP_INTERFACE=$(head -1 "$AP_IF_FILE" | tr -d '\r')
+CHANGED=0
 
 # --- 0. If eud= no longer needs an AP radio but /var/lib/ap_interface
 #        still names one, that radio was never actually reclassified —
@@ -67,6 +68,7 @@ if { [ "$EUD" = "wired" ] || [ "$EUD" = "none" ]; } && [ -n "$AP_INTERFACE" ]; t
     fi
     : > "$AP_IF_FILE"
     AP_INTERFACE=""
+    CHANGED=1
 fi
 
 # --- 1. Generate a missing mesh wpa_supplicant config for any interface
@@ -82,6 +84,7 @@ for WLAN in $(cat "$MESH_IF_FILE"); do
         continue
     fi
 
+    CHANGED=1
     echo "manet-wlan-reconcile: generating mesh config for $WLAN (${FREQ} MHz)"
 
     cat <<-EOF > "/etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf"
@@ -130,6 +133,23 @@ if [ -f "$AP_TXPOWER_UNIT" ]; then
         fi
         systemctl disable --now ap-txpower.service 2>/dev/null || true
     fi
+fi
+
+# --- 3. batman-enslave.service is ALSO a first-boot-only oneshot unit
+#        (radio-setup.sh's generated ExecStart=/usr/local/bin/batman-if-setup.sh
+#        start, WantedBy=multi-user.target, never re-fires) — a radio can end
+#        up with a real working 802.11s mesh-point peer link (steps 1-2 above)
+#        and still never actually carry mesh traffic, because batman-adv was
+#        never told to add it to bat0. Confirmed live: wlan1 had an
+#        established mesh plink on both sides while `batctl bat0 if` still
+#        only listed the two radios enslaved at first boot.
+#        batman-if-setup.sh's own start() is idempotent — it re-reads
+#        /var/lib/mesh_if/halow_if fresh every call and only adds interfaces
+#        not already enslaved — so it's safe to re-run any time something
+#        here actually changed.
+if [ "$CHANGED" -eq 1 ] && [ -x /usr/local/bin/batman-if-setup.sh ]; then
+    echo "manet-wlan-reconcile: re-running batman-if-setup.sh to enslave newly-configured interfaces"
+    /usr/local/bin/batman-if-setup.sh start
 fi
 
 exit 0
