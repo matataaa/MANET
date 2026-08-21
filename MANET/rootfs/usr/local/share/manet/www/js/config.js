@@ -107,10 +107,15 @@ function configRenderView(panel, cfg) {
     ]},
     { title: 'GPS / CoT', fields: [
       { label: 'GPS Enabled', key: 'gps', fmt: function(v) { return (v||'').toLowerCase() === 'n' ? 'Disabled' : 'Enabled'; } },
+      { label: 'GPS Source', key: 'gps_source', fmt: function(v) { return v === 'static' ? 'Static (fixed location)' : 'Receiver (hardware GPS)'; },
+        showIf: [{key:'gps', equals:'y'}] },
+      { label: 'Latitude', key: 'gps_static_lat', showIf: [{key:'gps', equals:'y'}, {key:'gps_source', equals:'static'}] },
+      { label: 'Longitude', key: 'gps_static_lon', showIf: [{key:'gps', equals:'y'}, {key:'gps_source', equals:'static'}] },
+      { label: 'Altitude', key: 'gps_static_alt', showIf: [{key:'gps', equals:'y'}, {key:'gps_source', equals:'static'}] },
       { label: 'Callsign', key: 'callsign' },
       { label: 'CoT Type', key: 'cot_type', fmt: function(v) { return v || 'a-f-G-E (equipment, default)'; } },
       { label: 'CoT Team', key: 'cot_team', fmt: function(v) { return v || '(none — equipment identity)'; } },
-      { label: 'CoT Role', key: 'cot_role', fmt: function(v) { return v || 'Team Member'; } },
+      { label: 'CoT Role', key: 'cot_role', fmt: function(v) { return v || 'Team Member'; }, showIf: [{key:'cot_team', notEmpty:true}] },
       { label: 'CoT Icon', key: 'cot_icon', fmt: function(v) { return v || '(default for type)'; } },
     ]},
     { title: 'Access Point', fields: [
@@ -152,6 +157,10 @@ function configRenderView(panel, cfg) {
   sections.forEach(sec => {
     html += '<div class="card cfg-section"><div class="cfg-section-title">' + sec.title + '</div>';
     sec.fields.forEach(f => {
+      if (f.showIf && !f.showIf.every(cond => {
+        const v = cfg[cond.key] || '';
+        return cond.notEmpty ? v !== '' : v === cond.equals;
+      })) return;
       let val;
       if (f.voiceKey) {
         val = (configVoiceData && configVoiceData[f.voiceKey]) || f.fallback || '--';
