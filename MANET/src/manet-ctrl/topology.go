@@ -285,6 +285,13 @@ func assembleStatusData() StatusData {
 			lastSeen = nowTS
 		}
 
+		var gps GPS
+		if isMe {
+			gps = getGPS(rn)
+		} else {
+			gps = registryGPS(rn)
+		}
+
 		node := Node{
 			ID:           rn["id"],
 			Hostname:     rn["HOSTNAME"],
@@ -295,6 +302,7 @@ func assembleStatusData() StatusData {
 			IsDirect:     isDirect,
 			IsGateway:    isGW,
 			IsSelectedGW: isSelectedGW,
+			GPS:          gps,
 			Uptime:       uptimeStr,
 			CPU:          cpuStr,
 			Battery:      bat,
@@ -326,6 +334,7 @@ func assembleStatusData() StatusData {
 			MAC:      myMAC,
 			IP:       myIP,
 			IsMe:     true,
+			GPS:      getGPS(RegistryNode{}),
 			Battery:  myBattery,
 			Uptime:   selfUptime,
 			AllMACs:  []string{myMAC},

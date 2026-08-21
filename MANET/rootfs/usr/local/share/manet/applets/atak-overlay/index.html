@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ATAK Topology Overlay</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--text:#e4e4e7;--muted:#6b7280;--accent:#3b82f6;--ok:#6ee7b7;--warn:#fca5a5}
+body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text);padding:24px}
+h2{font-size:16px;margin-bottom:16px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px}
+.row{display:flex;justify-content:space-between;padding:6px 0;font-size:13px;border-bottom:1px solid var(--border)}
+.row:last-child{border-bottom:none}
+.row .k{color:var(--muted)}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.badge.ok{background:#064e3b;color:var(--ok)}
+.badge.warn{background:#7f1d1d;color:var(--warn)}
+.actions{display:flex;gap:8px;margin-top:8px}
+button,a.btn{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;border:none;background:var(--accent);color:#fff;text-decoration:none;display:inline-block}
+.hint{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.5}
+</style>
+</head>
+<body>
+<h2>ATAK Topology Overlay</h2>
+<div class="card">
+  <div class="row"><span class="k">GPS source</span><span id="source">-</span></div>
+  <div class="row"><span class="k">Position</span><span id="position">-</span></div>
+  <div class="row"><span class="k">Status</span><span id="status"><span class="badge" id="badge">-</span></span></div>
+  <div class="row"><span class="k">Refresh interval</span><span id="interval">-</span></div>
+</div>
+<div class="card">
+  <div class="actions">
+    <a class="btn" id="download-btn" href="#">Download ATAK overlay package</a>
+  </div>
+  <div class="hint">
+    Import this in ATAK (Import Manager → this file) once. It installs a self-refreshing
+    Network Link that pulls node positions and signal-quality links from this node.
+    Configure the GPS source (own receiver / manual / take over an EUD's position) in the
+    applet's config page first. The refresh interval is baked into this download at the
+    time you get it — if you change it later, re-download and re-import to apply it.
+  </div>
+</div>
+<script>
+(function() {
+  var base = '/api/applets/atak-overlay';
+
+  document.getElementById('download-btn').onclick = function(e) {
+    e.preventDefault();
+    // manet-ctrl's applet proxy strips query strings before forwarding, so
+    // the host has to travel as a header instead — plain navigation can't
+    // set one, hence fetch + blob download rather than a simple <a href>.
+    fetch(base + '/proxy/atak-package.zip', {
+      headers: {'X-Overlay-Host': location.host}
+    }).then(function(r){ return r.blob(); }).then(function(blob) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'manet-topology-overlay.zip';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }).catch(function(err) {
+      alert('Download failed: ' + err);
+    });
+  };
+
+  function load() {
+    fetch(base + '/config').then(function(r){return r.json()}).then(function(d) {
+      document.getElementById('source').textContent = d.gps_source;
+      document.getElementById('interval').textContent = d.refresh_interval + 's';
+      if (d.resolved) {
+        document.getElementById('position').textContent = d.resolved_lat.toFixed(6) + ', ' + d.resolved_lon.toFixed(6);
+        document.getElementById('badge').textContent = 'resolved';
+        document.getElementById('badge').className = 'badge ok';
+      } else {
+        document.getElementById('position').textContent = '-';
+        document.getElementById('badge').textContent = d.status || 'no fix';
+        document.getElementById('badge').className = 'badge warn';
+      }
+    }).catch(function(){});
+  }
+
+  load();
+  setInterval(load, 5000);
+})();
+</script>
+</body>
+</html>

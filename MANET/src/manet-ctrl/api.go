@@ -780,6 +780,8 @@ var saveableKeys = map[string]bool{
 	"eud_bandwidth": true,
 	"qos_enabled": true, "qos_voice_band": true, "qos_cot_band": true, "qos_chat_band": true,
 	"auto_update": true, "update_url": true,
+	"gps": true,
+	"callsign": true, "cot_type": true, "cot_team": true, "cot_role": true, "cot_icon": true,
 }
 
 func apiAdminSave(w http.ResponseWriter, r *http.Request) {
@@ -855,10 +857,38 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	if updates["eud"] != "" {
 		eud := conf["eud"]
 		if eud == "wireless" || eud == "both" || eud == "auto" {
+			// The reconcile script itself selects/regenerates the AP
+			// interface (hostapd.conf, ap-interface-setup.service,
+			// ap-txpower.service) and stops any stale mesh
+			// wpa_supplicant on it — must run before hostapd is
+			// (re)started so it picks up a config that actually
+			// targets the current AP interface, not a stale one.
+			// 60s budget: on this path the script itself restarts 4
+			// services sequentially, two of them oneshot units with a
+			// 2s ExecStartPre sleep each — a shorter timeout risks
+			// SIGKILLing it mid-sequence, leaving e.g. ap-txpower.service
+			// never applied while api.go's own follow-up calls still
+			// report success.
+			if out, err := runCmd(60*time.Second, "manet-wlan-reconcile.sh"); err != nil {
+				log.Printf("manet-wlan-reconcile: %v (%s)", err, strings.TrimSpace(out))
+			} else if strings.TrimSpace(out) != "" {
+				log.Printf("manet-wlan-reconcile: %s", strings.TrimSpace(out))
+			}
 			runCmd(5*time.Second, "systemctl", "enable", "hostapd")
 			runCmd(5*time.Second, "systemctl", "start", "hostapd")
 		} else if eud == "wired" || eud == "none" {
 			runCmd(5*time.Second, "systemctl", "stop", "hostapd")
+			// The radio that was AP just got reclassified as mesh in
+			// /var/lib/mesh_if, but never had a wpa_supplicant config
+			// generated (that only happens once, at first provisioning)
+			// and ap-txpower.service still holds its txpower fixed low —
+			// reconcile both now rather than leaving it a non-functional
+			// mesh radio until the node is fully re-provisioned.
+			if out, err := runCmd(60*time.Second, "manet-wlan-reconcile.sh"); err != nil {
+				log.Printf("manet-wlan-reconcile: %v (%s)", err, strings.TrimSpace(out))
+			} else if strings.TrimSpace(out) != "" {
+				log.Printf("manet-wlan-reconcile: %s", strings.TrimSpace(out))
+			}
 		}
 		applied["eud_mode_applied"] = true
 	}
@@ -913,6 +943,50 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 			runCmd(5*time.Second, "systemctl", "restart", "mesh-voice")
 		}
 		applied["voice_enabled_applied"] = true
+	}
+
+	// Apply gps: stop gpsd/gps-reader outright on disable — this hardware
+	// has no GPS module, no point leaving either running. cot-emitter stays
+	// untouched; its EUD relay is GPS-independent. Enabling on a node that
+	// was originally provisioned with gps=n needs gpsd installed first —
+	// radio-setup.sh only apt-installs it when gps=y at boot.
+	//
+	// enable/disable alongside stop/restart: radio-setup.sh sets the
+	// boot-time enabled state once, at first provisioning, and never
+	// re-runs on a live gps= change — a stop/restart-only toggle here
+	// looks like it worked but silently reverts on the node's next
+	// reboot in both directions.
+	if updates["gps"] != "" {
+		if conf["gps"] == "n" {
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gps-reader")
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd")
+		} else {
+			if _, err := exec.LookPath("gpsd"); err != nil {
+				runCmd(60*time.Second, "apt-get", "install", "-y", "gpsd", "gpsd-clients")
+			}
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gpsd")
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gps-reader")
+		}
+		applied["gps_applied"] = true
+	}
+
+	// Apply CoT identity changes (callsign/type/team/role/icon) — cot-emitter
+	// reads these once at startup, so a live edit needs a restart to take
+	// effect. configSave() always submits every field on the Config page,
+	// including ones intentionally cleared back to blank (e.g. reverting
+	// cot_team to "no team affiliation"), so check key presence in updates
+	// rather than non-blank value — a blank submission is still a real edit.
+	cotIdentityKeys := []string{"callsign", "cot_type", "cot_team", "cot_role", "cot_icon"}
+	cotIdentityChanged := false
+	for _, k := range cotIdentityKeys {
+		if _, ok := updates[k]; ok {
+			cotIdentityChanged = true
+			break
+		}
+	}
+	if cotIdentityChanged {
+		runCmd(5*time.Second, "systemctl", "restart", "cot-emitter")
+		applied["cot_identity_applied"] = true
 	}
 
 	// Apply voice PTT mode / channel changes

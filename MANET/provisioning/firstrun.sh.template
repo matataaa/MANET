@@ -236,13 +236,6 @@ chown root:root /etc/sudoers.d /etc/sudoers.d/* 2>/dev/null || true
 chmod 750 /etc/sudoers.d 2>/dev/null || true
 chmod 440 /etc/sudoers.d/* 2>/dev/null || true
 
-# Platform-specific post-extraction steps
-if [ "__HARDWARE_MODEL__" = "r3a" ]; then
-	# Kernel and firmware are in the tarball; just fix up Armbian boot config.
-	sed -i '/^extraargs=/ s/$/ net.ifnames=0/' /boot/armbianEnv.txt
-fi
-
-
 # Installed but not being used now
 systemctl stop dnsmasq
 systemctl disable dnsmasq
@@ -308,7 +301,7 @@ done
 
 # Load the morse driver with options to allow the interface to be picked up
 # This will be re-written by radio-setup and become specific to the chosen region
-if [ "__HARDWARE_MODEL__" = "r3a" ] || [ "$_halow_on_spi" -eq 0 ]; then
+if [ "$_halow_on_spi" -eq 0 ]; then
 cat << EOF > /etc/modprobe.d/morse.conf
 options morse country=US
 options morse enable_mcast_whitelist=0 enable_mcast_rate_control=1
@@ -734,6 +727,7 @@ echo "lan_ap_channel=36" >> /etc/mesh.conf
 echo "lan_ap_bw=80" >> /etc/mesh.conf
 echo "ipv4_network=__LAN_CIDR_BLOCK__"  >> /etc/mesh.conf
 echo "acs=__AUTO_CHANNEL__" >> /etc/mesh.conf
+echo "gps=__GPS_ENABLED__" >> /etc/mesh.conf
 echo "eud=__EUD_CONNECTION__" >> /etc/mesh.conf
 echo "max_euds_per_node=__MAX_EUDS_PER_NODE__" >> /etc/mesh.conf
 echo "node_hostname=__NODE_HOSTNAME__" >> /etc/mesh.conf

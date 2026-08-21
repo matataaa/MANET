@@ -1,0 +1,21 @@
+{
+  "name": "atak-overlay",
+  "label": "ATAK Topology Overlay",
+  "version": "1.0.0",
+  "description": "Self-refreshing KML overlay of mesh node positions and signal-quality links for ATAK",
+  "author": "Frost Technologies",
+  "type": "go",
+  "backend": {
+    "binary": "atak-overlay",
+    "port": 9821,
+    "args": ["-port", "9821"],
+    "service": "atak-overlay.service"
+  },
+  "frontend": {
+    "entrypoint": "index.html"
+  },
+  "config": {
+    "page": "config.html",
+    "file": "/etc/atak-overlay.conf"
+  }
+}

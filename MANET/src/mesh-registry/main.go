@@ -31,35 +31,39 @@ const (
 )
 
 type NodeInfo struct {
-	Hostname     string `json:"hostname"`
-	MAC          string `json:"mac"`
-	MACAddresses string `json:"mac_addresses"`
-	IPv4         string `json:"ipv4"`
-	IPv4Chunk    string `json:"ipv4_chunk"`
-	Uptime       string `json:"uptime_seconds"`
-	Battery      string `json:"battery_percentage"`
-	CPULoad      string `json:"cpu_load"`
-	IsGateway    string `json:"is_gateway"`
-	GatewayIface string `json:"gateway_iface"`
-	IsNTP        string `json:"is_ntp"`
-	GPSLat       string `json:"gps_lat"`
-	GPSLon       string `json:"gps_lon"`
-	GPSAlt       string `json:"gps_alt"`
-	Ch2G         string `json:"ch_2g"`
-	Ch5G         string `json:"ch_5g"`
-	IsLimp       string `json:"is_limp"`
-	Timestamp    string `json:"timestamp"`
-	Applets      string `json:"applets,omitempty"`
-	HalowTxMCS   string `json:"halow_tx_mcs,omitempty"`
-	HalowRxMCS   string `json:"halow_rx_mcs,omitempty"`
-	HalowMCSPeer string `json:"halow_mcs_peer,omitempty"`
-	Wifi24TxMCS  string `json:"wifi_24_tx_mcs,omitempty"`
-	Wifi24RxMCS  string `json:"wifi_24_rx_mcs,omitempty"`
-	Wifi5TxMCS   string `json:"wifi_5_tx_mcs,omitempty"`
-	Wifi5RxMCS   string `json:"wifi_5_rx_mcs,omitempty"`
-	TQAverage    string `json:"tq_average,omitempty"`
-	Neighbors    string `json:"neighbors,omitempty"`
-	ConfigAck    string `json:"config_ack,omitempty"`
+	Hostname               string `json:"hostname"`
+	MAC                    string `json:"mac"`
+	MACAddresses           string `json:"mac_addresses"`
+	IPv4                   string `json:"ipv4"`
+	IPv4Chunk              string `json:"ipv4_chunk"`
+	Uptime                 string `json:"uptime_seconds"`
+	Battery                string `json:"battery_percentage"`
+	CPULoad                string `json:"cpu_load"`
+	IsGateway              string `json:"is_gateway"`
+	GatewayIface           string `json:"gateway_iface"`
+	IsNTP                  string `json:"is_ntp"`
+	GPSLat                 string `json:"gps_lat"`
+	GPSLon                 string `json:"gps_lon"`
+	GPSAlt                 string `json:"gps_alt"`
+	Ch2G                   string `json:"ch_2g"`
+	Ch5G                   string `json:"ch_5g"`
+	IsLimp                 string `json:"is_limp"`
+	Timestamp              string `json:"timestamp"`
+	Applets                string `json:"applets,omitempty"`
+	HalowTxMCS             string `json:"halow_tx_mcs,omitempty"`
+	HalowRxMCS             string `json:"halow_rx_mcs,omitempty"`
+	HalowMCSPeer           string `json:"halow_mcs_peer,omitempty"`
+	Wifi24TxMCS            string `json:"wifi_24_tx_mcs,omitempty"`
+	Wifi24RxMCS            string `json:"wifi_24_rx_mcs,omitempty"`
+	Wifi5TxMCS             string `json:"wifi_5_tx_mcs,omitempty"`
+	Wifi5RxMCS             string `json:"wifi_5_rx_mcs,omitempty"`
+	TQAverage              string `json:"tq_average,omitempty"`
+	Neighbors              string `json:"neighbors,omitempty"`
+	ConfigAck              string `json:"config_ack,omitempty"`
+	ChannelReport          string `json:"channel_report,omitempty"`
+	LastTourguideTimestamp string `json:"last_tourguide_timestamp,omitempty"`
+	LastTourguideRadio     string `json:"last_tourguide_radio,omitempty"`
+	PartitionSize          string `json:"partition_size,omitempty"`
 }
 
 func main() {
@@ -106,36 +110,41 @@ func collectLocal() NodeInfo {
 	gpsLat, gpsLon, gpsAlt := getGPS()
 
 	mcs := collectMCS()
+	tourguideState := loadKV("/var/run/tourguide_state")
 
 	return NodeInfo{
-		Hostname:     hostname,
-		MAC:          mac,
-		MACAddresses: allMACs,
-		IPv4:         ip,
-		Uptime:       uptime,
-		Battery:      battery,
-		CPULoad:      cpu,
-		IsGateway:    isGW,
-		GatewayIface: gwIface,
-		IsNTP:        boolStr(serviceActive("ntp") || serviceActive("chrony") || serviceActive("systemd-timesyncd")),
-		GPSLat:       gpsLat,
-		GPSLon:       gpsLon,
-		GPSAlt:       gpsAlt,
-		Ch2G:         getChannel("2.4"),
-		Ch5G:         getChannel("5"),
-		IsLimp:       boolStr(fileExists("/var/run/mesh_limp_mode")),
-		Timestamp:    fmt.Sprintf("%d", time.Now().Unix()),
-		Applets:      scanApplets(),
-		HalowTxMCS:   mcs["WLAN2_TX_MCS"],
-		HalowRxMCS:   mcs["WLAN2_RX_MCS"],
-		HalowMCSPeer: mcs["WLAN2_MCS_PEER"],
-		Wifi24TxMCS:  mcs["WLAN0_TX_MCS"],
-		Wifi24RxMCS:  mcs["WLAN0_RX_MCS"],
-		Wifi5TxMCS:   mcs["WLAN1_TX_MCS"],
-		Wifi5RxMCS:   mcs["WLAN1_RX_MCS"],
-		TQAverage:    getTQAverage(),
-		Neighbors:    getDirectNeighbors(),
-		ConfigAck:    readFileStr("/var/run/mesh_config_ack_version"),
+		Hostname:               hostname,
+		MAC:                    mac,
+		MACAddresses:           allMACs,
+		IPv4:                   ip,
+		Uptime:                 uptime,
+		Battery:                battery,
+		CPULoad:                cpu,
+		IsGateway:              isGW,
+		GatewayIface:           gwIface,
+		IsNTP:                  boolStr(serviceActive("ntp") || serviceActive("chrony") || serviceActive("systemd-timesyncd")),
+		GPSLat:                 gpsLat,
+		GPSLon:                 gpsLon,
+		GPSAlt:                 gpsAlt,
+		Ch2G:                   getChannel("2.4"),
+		Ch5G:                   getChannel("5"),
+		IsLimp:                 boolStr(fileExists("/var/run/mesh_limp_mode")),
+		Timestamp:              fmt.Sprintf("%d", time.Now().Unix()),
+		Applets:                scanApplets(),
+		HalowTxMCS:             mcs["WLAN2_TX_MCS"],
+		HalowRxMCS:             mcs["WLAN2_RX_MCS"],
+		HalowMCSPeer:           mcs["WLAN2_MCS_PEER"],
+		Wifi24TxMCS:            mcs["WLAN0_TX_MCS"],
+		Wifi24RxMCS:            mcs["WLAN0_RX_MCS"],
+		Wifi5TxMCS:             mcs["WLAN1_TX_MCS"],
+		Wifi5RxMCS:             mcs["WLAN1_RX_MCS"],
+		TQAverage:              getTQAverage(),
+		Neighbors:              getDirectNeighbors(),
+		ConfigAck:              readFileStr("/var/run/mesh_config_ack_version"),
+		ChannelReport:          readFileStr("/var/run/mesh_channel_report.json"),
+		LastTourguideTimestamp: tourguideState["LAST_TOURGUIDE_TIME"],
+		LastTourguideRadio:     tourguideState["LAST_TOURGUIDE_RADIO"],
+		PartitionSize:          readFileStr("/var/run/mesh_partition_size"),
 	}
 }
 
@@ -412,6 +421,10 @@ func writeNodeWithState(b *strings.Builder, n NodeInfo, isLive bool) {
 	w("TQ_AVERAGE", n.TQAverage)
 	w("DIRECT_NEIGHBORS", n.Neighbors)
 	w("CONFIG_ACK_VERSION", n.ConfigAck)
+	w("CHANNEL_REPORT_JSON", n.ChannelReport)
+	w("LAST_TOURGUIDE_TIMESTAMP", n.LastTourguideTimestamp)
+	w("LAST_TOURGUIDE_RADIO", n.LastTourguideRadio)
+	w("PARTITION_SIZE", n.PartitionSize)
 	fmt.Fprintln(b)
 }
 

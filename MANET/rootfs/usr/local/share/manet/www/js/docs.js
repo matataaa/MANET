@@ -71,7 +71,7 @@ DOCS_TABS.overview = [
 '</tbody></table>',
 
 '<h3>Architecture</h3>',
-'<p>Each mesh node is an ARM64 SBC (CM4, RPi5, Rock3A) running a Morse Micro HaLow radio (802.11ah, SPI) and optionally a standard WiFi radio (SDIO/USB). The mesh uses batman-adv in BATMAN_V mode over the HaLow link. An ethernet bridge (<code>br0</code>) joins <code>bat0</code> with wired interfaces for EUD connectivity.</p>',
+'<p>Each mesh node is an ARM64 SBC (CM4, RPi5) running a Morse Micro HaLow radio (802.11ah, SPI) and optionally a standard WiFi radio (SDIO/USB). The mesh uses batman-adv in BATMAN_V mode over the HaLow link. An ethernet bridge (<code>br0</code>) joins <code>bat0</code> with wired interfaces for EUD connectivity.</p>',
 '<p>Configuration is stored in <code>/etc/mesh.conf</code> as key=value pairs. The <code>radio-setup.sh</code> script reads this file on boot to configure interfaces, WPA supplicant, hostapd, and all dependent services.</p>',
 ].join('\n');
 

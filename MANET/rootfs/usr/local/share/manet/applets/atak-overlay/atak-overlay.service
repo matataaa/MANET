@@ -1,0 +1,13 @@
+[Unit]
+Description=ATAK Topology Overlay Applet
+After=network-online.target manet-ctrl.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/share/manet/applets/atak-overlay/atak-overlay -port 9821
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -53,6 +53,7 @@ find "$STAGE/usr/local/bin" -type f \
 #  Cross-compile Go services for linux/arm64
 # ---------------------------------------------------------------------------
 GO_SERVICES=(
+    atak-overlay
     battery-reader
     cot-emitter
     gateway-manager
@@ -85,11 +86,15 @@ done
 install_file 0755 "$SRC/mesh-voice/bin/mesh-voice-linux-arm64" "$STAGE/usr/local/bin/mesh-voice"
 
 # ---------------------------------------------------------------------------
-#  Applets — copy mesh-chat binary into its applet dir
+#  Applets — copy applet binaries into their applet dirs
 # ---------------------------------------------------------------------------
 APPLET_CHAT="$STAGE/usr/local/share/manet/applets/mesh-chat"
 if [ -d "$APPLET_CHAT" ]; then
     install -m 0755 "$SRC/mesh-chat/mesh-chat" "$APPLET_CHAT/mesh-chat"
+fi
+APPLET_ATAK="$STAGE/usr/local/share/manet/applets/atak-overlay"
+if [ -d "$APPLET_ATAK" ]; then
+    install -m 0755 "$SRC/atak-overlay/atak-overlay" "$APPLET_ATAK/atak-overlay"
 fi
 
 # ---------------------------------------------------------------------------

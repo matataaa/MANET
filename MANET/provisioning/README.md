@@ -17,7 +17,7 @@ The provisioning process has two phases:
 ## PREREQUISITES
 
 You will need:
-- A supported SBC. The **Compute Module 4 (CM4) is the current reference platform**; Raspberry Pi 5 and Radxa Rock 3A are also supported, though both are currently deprioritized because of thermal limits in enclosed builds. See the main README for the hardware support table.
+- A supported SBC. The **Compute Module 4 (CM4) is the current reference platform**; Raspberry Pi 5 is also supported, though currently deprioritized because of thermal limits in enclosed builds. See the main README for the hardware support table.
 - A Linux or Windows computer to flash from
 - An SD card or cm4 eMMC, appropriate for your hardware
 - Ethernet internet access on the node during its first boot
@@ -28,27 +28,20 @@ You will need:
 |------|---------|---------|
 | `rpi-imager` | Flashing Raspberry Pi boards | `sudo apt install rpi-imager` |
 | `rpiboot` | Mounting CM4 eMMC | `sudo apt install rpiboot` |
-| `losetup` | Mounting Armbian image for Rock 3A | included in `util-linux` |
-| `xz` | Decompressing downloaded Armbian images | `sudo apt install xz-utils` |
 | `bc` | Network CIDR calculations | `sudo apt install bc` |
 | `openssl` | Generating SAE keys | usually pre-installed |
 
 > **CM4 on Linux:** `rpi-imager` and `rpiboot` are both required.
 
-> **Raspberry Pi (5 / 4B) on Linux:** `rpi-imager` is required. `losetup` and `xz` are not required.
-
-> **Rock 3A on Linux:** `rpi-imager` is not needed. `rpiboot` is not needed. You do need `losetup`, `xz`, `bc`, and `openssl`.
+> **Raspberry Pi (5 / 4B) on Linux:** `rpi-imager` is required.
 
 ### Required tools (Windows host)
 
 | Tool | Purpose | Install |
 |------|---------|---------|
 | `rpi-imager` | Flashing Raspberry Pi boards | [Download Installer](https://downloads.raspberrypi.com/imager/imager_latest.exe) |
-| Ext2Fsd | Mounting ext4 partitions for Rock 3A | Required for Rock 3A provisioning |
 
 > **CM4 on Windows:** You must manually run `rpiboot` before running `windows.ps1` to mount the eMMC. The script will not do this for you. On Linux, the script handles this interactively.
-
-> **Rock 3A on Windows — password hashing:** The script pre-creates the `radio` user by writing directly to `/etc/shadow`, which requires generating a Linux SHA-512 password hash on your Windows machine. The script tries `openssl` (available if Git for Windows is installed), then WSL, then Python. If none of these are available the `radio` account will be created with a locked password — you can still log in as `root` (password `1234`) and run `passwd radio` to set it manually. Having Git for Windows installed is the easiest way to satisfy this.
 
 ### Files needed from this directory
 
@@ -57,15 +50,12 @@ Clone or download the entire `provisioning/` directory to your working folder. T
 - `linux.sh` — flashing script for Linux hosts
 - `windows.ps1` — flashing script for Windows hosts
 - `firstrun.sh.template` — Raspberry Pi first-boot script template
-- `rock3a-provision.sh.template` — Rock 3A first-boot provisioning script template
 
 ### OS Images
 
 **You do not need to download OS images manually.** The scripts handle this automatically:
 
 - **Raspberry Pi (all models, including CM4):** `rpi-imager` downloads the correct Raspberry Pi OS Lite image directly from the Raspberry Pi Foundation's servers and caches it locally.
-
-- **Rock 3A:** The script will offer to download the correct Armbian image automatically. If you already have an Armbian `.img` or `.img.xz` file locally, you can point the script to it instead. The expected image is Armbian Trixie (Debian 13) minimal for the Rock 3A — do not use a generic ARM64 image, it must be the board-specific build.
 
 ---
 
@@ -82,7 +72,7 @@ On the CM4 reference platform the HaLow radio can be attached two ways, and the 
 
 For the SPI path, provisioning handles the hardware setup automatically: it enables SPI, loads the `mm610x-spi` device-tree overlay, drives the Morse power/reset GPIOs (3, 7, 17) high at boot, and — for the PCIe-attached MT7916 — adds the `pcie-32bit-dma` overlay. No manual `config.txt` editing is required.
 
-The Raspberry Pi 5 and Rock 3A platforms use an MM8108 USB HaLow adapter (e.g. Gateworks GW16167 or Lunpid) rather than the SPI module.
+The Raspberry Pi 5 platform uses an MM8108 USB HaLow adapter (e.g. Gateworks GW16167 or Lunpid) rather than the SPI module.
 
 ---
 
@@ -99,7 +89,7 @@ bash linux.sh
 ```
 
 The script will:
-1. Ask you to select your hardware platform (Rock 3A, Pi 5, Pi 4B, or CM4 — **select CM4 for the current reference build**)
+1. Ask you to select your hardware platform (Pi 5, Pi 4B, or CM4 — **select CM4 for the current reference build**)
 2. Offer to load a saved configuration or create a new one
 3. Acquire the OS image (download automatically or use a local file)
 4. Ask you to select the target device
@@ -187,26 +177,11 @@ After a reboot, `provision-mesh.sh` runs once network is available. It:
 
 The full process takes a few minutes and involves two reboots.
 
-### Rock 3A
-
-The provisioning script and all configuration are embedded directly into the Armbian image during flashing. No `rpi-imager` first-run injection is involved.
-
-On first boot, a `mesh-provision` systemd service (triggered by the presence of a `/root/.mesh-not-provisioned` flag file) runs `provision-mesh.sh`. The `radio` user account is pre-created during image preparation, so there is no interactive setup wizard to bypass.
-
-The provisioning script:
-
-1. Waits for internet connectivity
-2. Installs required packages
-3. Configures interfaces and mesh settings
-4. Removes the trigger flag file and reboots
-
-After the reboot the node is fully operational.
-
 ---
 
 ## FINAL SETUP — `radio-setup.sh`
 
-`radio-setup.sh` is the last provisioning stage and does most of the node-specific radio and service configuration. The earlier stages enable it to run once on the following boot (via `radio-setup-run-once.service`, after a short delay) — by then the wireless drivers have loaded and the radio interfaces actually exist, which is what this stage depends on. It is the "final mesh configuration" the boot flow above reboots into, and runs on both the Raspberry Pi / CM4 and Rock 3A platforms.
+`radio-setup.sh` is the last provisioning stage and does most of the node-specific radio and service configuration. The earlier stages enable it to run once on the following boot (via `radio-setup-run-once.service`, after a short delay) — by then the wireless drivers have loaded and the radio interfaces actually exist, which is what this stage depends on. It is the "final mesh configuration" the boot flow above reboots into.
 
 It performs:
 
@@ -226,7 +201,6 @@ When it finishes — and after any pending interface rename has settled — it d
 | Account | Username | Default Password |
 |---------|----------|-----------------|
 | SSH / radio user | `radio` | Set during provisioning |
-| Armbian root (Rock 3A) | `root` | `1234` (Armbian default — change this) |
 
 ---
 
@@ -236,9 +210,5 @@ When it finishes — and after any pending interface rename has settled — it d
 - Phase 1 (firstrun): `/boot/firmware/firstrun.log`
 - Phase 2 (mesh provisioning): `/boot/firmware/provision.log`
 - Radio setup: `/var/log/radio-setup.log`
-
-**Provisioning logs (Rock 3A):**
-- `/var/log/mesh-provision.log`
-- `/var/log/radio-setup.log`
 
 **Node hasn't provisioned after 10 minutes:** Check that Ethernet is connected and has a working internet connection. The provisioning script waits up to 5 minutes for connectivity before timing out.

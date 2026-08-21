@@ -134,8 +134,6 @@ func boardType() string {
 	}
 	model := strings.TrimRight(string(data), "\x00")
 	switch {
-	case strings.Contains(model, "ROCK3"):
-		return "r3a"
 	case strings.Contains(model, "Raspberry Pi 5"):
 		return "rpi5"
 	case strings.Contains(model, "Raspberry Pi 4"),

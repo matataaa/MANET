@@ -9,7 +9,7 @@ Your node's hostname is used as your identity.
 Cross-compile for the target architecture:
 
 ```bash
-# ARM64 (Raspberry Pi, Rock 3A)
+# ARM64 (Raspberry Pi)
 cd MANET/applets/mesh-chat
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o mesh-chat .
 

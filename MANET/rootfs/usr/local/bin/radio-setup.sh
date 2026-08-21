@@ -419,10 +419,28 @@ fi
 CFG80211_REGDOM="$REGULATORY_DOMAIN"
 
 
+iface_driver() {
+    local iface="$1"
+    local driver
+
+    driver="$(basename "$(readlink -f /sys/class/net/$iface/device/driver 2>/dev/null)")"
+    if [[ -z "$driver" || "$driver" == "." ]]; then
+        driver="$(ethtool -i "$iface" 2>/dev/null | awk -F': ' '$1 == "driver" {print $2; exit}')"
+    fi
+
+    echo "$driver"
+}
+
+iface_phy() {
+    local iface="$1"
+    iw dev "$iface" info 2>/dev/null | awk '/wiphy/ {print "phy"$2; exit}'
+}
+
 # Wait for wireless drivers to load
 echo "Waiting for wireless drivers to load..."
 DRIVER_WAIT_COUNT=0
 MAX_DRIVER_WAIT=30  # 60 seconds total
+PHY_COUNT=0
 
 while [ $DRIVER_WAIT_COUNT -lt $MAX_DRIVER_WAIT ]; do
     PHY_COUNT=$(iw dev 2>/dev/null | grep -c "^phy#")
@@ -446,6 +464,52 @@ if [ "$PHY_COUNT" -eq 0 ]; then
     echo "⚠ WARNING: No wireless interfaces found after $((MAX_DRIVER_WAIT * 2)) seconds"
     echo "  This is normal for wired-only configurations"
     echo "  If you expect wireless: check 'dmesg | grep -i firmware'"
+else
+    # A phy showing up doesn't mean its netdev and driver binding are done —
+    # on CM4 boards with two AX mesh radios plus onboard brcmfmac, the onboard
+    # radio's netdev/driver can still be settling here. Classifying against a
+    # netdev list that's still growing, or a driver name that's still empty,
+    # is exactly how brcmfmac has ended up misclassified as a mesh radio
+    # instead of the non-mesh AP radio it must be. Wait for both the netdev
+    # count and every interface's driver name to hold steady for two
+    # consecutive checks before classifying anything below.
+    STABLE_ROUNDS=0
+    LAST_IFACE_COUNT=-1
+    STABLE_MAX=30
+    for ((stable_i = 0; stable_i < STABLE_MAX; stable_i++)); do
+        mapfile -t _wifi_ifaces < <(iw dev 2>/dev/null | awk '$1 == "Interface" {print $2}')
+        _n=${#_wifi_ifaces[@]}
+        _all_drivers=1
+        for _iface in "${_wifi_ifaces[@]}"; do
+            _d="$(iface_driver "$_iface")"
+            if [[ -z "$_d" || "$_d" == "." ]]; then
+                _all_drivers=0
+                break
+            fi
+        done
+        if [[ "$_all_drivers" -eq 1 && "$_n" -gt 0 ]]; then
+            if [[ "$_n" -eq "$LAST_IFACE_COUNT" ]]; then
+                STABLE_ROUNDS=$((STABLE_ROUNDS + 1))
+                if [[ "$STABLE_ROUNDS" -ge 2 ]]; then
+                    echo "Wireless interfaces stable (count=$_n, drivers bound)."
+                    break
+                fi
+            else
+                STABLE_ROUNDS=1
+            fi
+            LAST_IFACE_COUNT="$_n"
+        else
+            STABLE_ROUNDS=0
+            LAST_IFACE_COUNT="$_n"
+        fi
+        if [[ $((stable_i % 5)) -eq 4 ]]; then
+            echo "Waiting for wireless enumerate to stabilize... ($((stable_i + 1))/${STABLE_MAX})"
+        fi
+        sleep 2
+    done
+    if [[ "$STABLE_ROUNDS" -lt 2 ]]; then
+        echo "WARNING: Wireless interfaces did not reach stability before timeout; continuing."
+    fi
 fi
 
 # mt76 (mt7915e/MT7916) LED devices come up with the "phyNtpt" throughput-
@@ -470,18 +534,6 @@ done
 mesh_ifaces=()
 halow_ifaces=()
 nonmesh_ifaces=()
-
-iface_driver() {
-    local iface="$1"
-    local driver
-
-    driver="$(basename "$(readlink -f /sys/class/net/$iface/device/driver 2>/dev/null)")"
-    if [[ -z "$driver" || "$driver" == "." ]]; then
-        driver="$(ethtool -i "$iface" 2>/dev/null | awk -F': ' '$1 == "driver" {print $2; exit}')"
-    fi
-
-    echo "$driver"
-}
 
 is_halow_iface() {
     local iface="$1"
@@ -514,11 +566,6 @@ is_nonmesh_wifi() {
     # but on this platform it is reserved for the EUD AP/hotspot. Keep it out
     # of mesh_if so rerunning setup cannot enslave the AP radio to bat0.
     [[ "$driver" == brcmfmac ]]
-}
-
-iface_phy() {
-    local iface="$1"
-    iw dev "$iface" info 2>/dev/null | awk '/wiphy/ {print "phy"$2; exit}'
 }
 
 iface_supports_mesh() {
@@ -563,6 +610,23 @@ for iface in $(iw dev | awk '$1 == "Interface" {print $2}'); do
         nonmesh_ifaces+=("$iface")
     fi
 done
+
+# Belt-and-suspenders on top of the stability wait above: brcmfmac must never
+# stay classified as a mesh radio. If its driver still wasn't resolvable at
+# classification time it falls through to iface_supports_mesh's phy check,
+# which can be a false positive on some kernels — and that radio would then
+# get enslaved to bat0 as a "mesh" interface, silently taking the CM4's
+# onboard AP radio away from hostapd.
+_mesh_ifaces_kept=()
+for iface in "${mesh_ifaces[@]}"; do
+    if [[ "$(iface_driver "$iface")" == brcmfmac ]]; then
+        echo " > Rescue: $iface (brcmfmac) was classified as mesh — moving to non-mesh"
+        nonmesh_ifaces+=("$iface")
+    else
+        _mesh_ifaces_kept+=("$iface")
+    fi
+done
+mesh_ifaces=("${_mesh_ifaces_kept[@]}")
 
 # Order standard mesh interfaces by role, not by volatile wlanX name. The first
 # interface receives the 2.4 GHz lobby config and the second receives the 5 GHz
@@ -878,7 +942,12 @@ systemctl enable manet-wlan-apply-link-names.service
 
 if [ "$needs_rerun" -eq 1 ]; then
     echo " > Interface renames staged — applying now via swap-safe rename..."
-    if /usr/local/bin/manet-wlan-apply-link-names.sh; then
+    # Role files above were just written using this boot's raw (pre-.link)
+    # names — the one and only context where they need pre_rename_mac
+    # translation. See the RAW_ROLE_FILES comment in
+    # manet-wlan-apply-link-names.sh: every other call to that script
+    # (its own systemd service, on every later boot) must NOT set this.
+    if MANET_WLAN_APPLY_RAW_ROLE_FILES=1 /usr/local/bin/manet-wlan-apply-link-names.sh; then
         echo " > Live rename succeeded — re-detecting interfaces"
         # Re-read role files that the apply script updated
         mapfile -t mesh_ifaces < <(cat /var/lib/mesh_if 2>/dev/null)
@@ -1057,6 +1126,48 @@ EOF
         AP_CHANNEL="${lan_ap_channel:-11}"
         AP_80211AC=""
     fi
+    # 20/40/80 MHz channel width for the 5 GHz AP. Without this, ieee80211ac=1
+    # alone leaves hostapd on 20 MHz VHT — the width mesh.conf's lan_ap_bw
+    # is provisioned to request is otherwise never applied.
+    AP_BW="${lan_ap_bw:-80}"
+
+    # hostapd needs an explicit VHT center-channel index for 40/80 MHz; map
+    # each channel to its 80 MHz block center (falls back to itself outside
+    # the known non-DFS/DFS ranges).
+    vht_seg0_idx() {
+        case "$1" in
+            36|40|44|48) echo 42 ;;
+            52|56|60|64) echo 58 ;;
+            100|104|108|112) echo 106 ;;
+            116|120|124|128) echo 122 ;;
+            132|136|140|144) echo 138 ;;
+            149|153|157|161) echo 155 ;;
+            *) echo "$1" ;;
+        esac
+    }
+
+    # HT40 secondary-channel offset for 5 GHz, standard 20 MHz step mapping.
+    ht40_capab() {
+        case "$1" in
+            36|44|52|60|100|108|116|124|132|140|149|157) echo "[HT40+]" ;;
+            40|48|56|64|104|112|120|128|136|144|153|161) echo "[HT40-]" ;;
+            *) echo "" ;;
+        esac
+    }
+
+    AP_VHT_LINES=""
+    if [[ "$AP_HW_MODE" == "a" ]]; then
+        if [[ "$AP_BW" == "40" || "$AP_BW" == "80" ]]; then
+            _ht40_cap="$(ht40_capab "$AP_CHANNEL")"
+            [[ -n "$_ht40_cap" ]] && AP_VHT_LINES+=$'\n'"ht_capab=$_ht40_cap"
+        fi
+        if [[ "$AP_BW" == "80" ]]; then
+            AP_VHT_LINES+=$'\n'"vht_oper_chwidth=1"
+            AP_VHT_LINES+=$'\n'"vht_oper_centr_freq_seg0_idx=$(vht_seg0_idx "$AP_CHANNEL")"
+        else
+            AP_VHT_LINES+=$'\n'"vht_oper_chwidth=0"
+        fi
+    fi
 
     cat <<-EOF > /etc/hostapd/hostapd.conf
 interface=$AP_INTERFACE
@@ -1070,7 +1181,7 @@ ieee80211d=1
 hw_mode=$AP_HW_MODE
 channel=$AP_CHANNEL
 ieee80211n=1
-$AP_80211AC
+$AP_80211AC$AP_VHT_LINES
 wmm_enabled=1
 
 # WPA2 security
@@ -1746,58 +1857,73 @@ systemctl enable battery-reader.service
 #   - No election logic change needed — existing is_ntp_server flag stays
 #     tied to the ethernet gateway; GPS just silently improves time quality.
 
-if have_package_network; then
-    provision_try "apt install failed: gpsd gpsd-clients" \
-        apt-get install -y gpsd gpsd-clients
+# gps=n means this hardware has no GPS module at all — skip gpsd/gps-reader
+# setup entirely and make sure both stay stopped (a prior boot may have had
+# gps=y). cot-emitter stays enabled regardless (see below): its relay of
+# peers' CoT to local EUDs is GPS-independent and must keep working here.
+if [[ "${gps:-y}" == "n" ]]; then
+    echo "GPS disabled (gps=n) — skipping gpsd/gps-reader setup"
+    systemctl disable --now gpsd.service 2>/dev/null || true
+    systemctl disable --now gps-reader.service 2>/dev/null || true
 else
-    provision_fail "no network: cannot install gpsd gpsd-clients"
-fi
-
-# Detect UART GPS (e.g. Quectel L76K on WM1302 Pi Hat).
-# The hat connects GPS TX/RX to GPIO 14/15 (/dev/ttyAMA0).
-# GPIO 12 = GPS_WAKE_UP (active high brings GPS out of standby).
-UART_GPS_DEV=""
-if [ -e /dev/ttyAMA0 ]; then
-    # Wake the GPS module
-    echo 12 > /sys/class/gpio/export 2>/dev/null || true
-    echo out > /sys/class/gpio/gpio12/direction 2>/dev/null || true
-    echo 1 > /sys/class/gpio/gpio12/value 2>/dev/null || true
-    sleep 1
-
-    # Check for NMEA data on the UART (L76K defaults to 9600 baud)
-    stty -F /dev/ttyAMA0 9600 raw -echo 2>/dev/null || true
-    if timeout 3 cat /dev/ttyAMA0 2>/dev/null | grep -q '^\$G'; then
-        UART_GPS_DEV="/dev/ttyAMA0"
-        echo " > UART GPS detected on /dev/ttyAMA0"
+    if have_package_network; then
+        provision_try "apt install failed: gpsd gpsd-clients" \
+            apt-get install -y gpsd gpsd-clients
+    else
+        provision_fail "no network: cannot install gpsd gpsd-clients"
     fi
-fi
 
-# /etc/default/gpsd — configure for detected GPS device or USB hotplug.
-if [ -n "$UART_GPS_DEV" ]; then
-    cat > /etc/default/gpsd <<GPSD_CONF
+    # Detect UART GPS (e.g. Quectel L76K on WM1302 Pi Hat).
+    # The hat connects GPS TX/RX to GPIO 14/15 (/dev/ttyAMA0).
+    # GPIO 12 = GPS_WAKE_UP (active high brings GPS out of standby).
+    UART_GPS_DEV=""
+    if [ -e /dev/ttyAMA0 ]; then
+        # Wake the GPS module
+        echo 12 > /sys/class/gpio/export 2>/dev/null || true
+        echo out > /sys/class/gpio/gpio12/direction 2>/dev/null || true
+        echo 1 > /sys/class/gpio/gpio12/value 2>/dev/null || true
+        sleep 1
+
+        # Check for NMEA data on the UART (L76K defaults to 9600 baud)
+        stty -F /dev/ttyAMA0 9600 raw -echo 2>/dev/null || true
+        if timeout 3 cat /dev/ttyAMA0 2>/dev/null | grep -q '^\$G'; then
+            UART_GPS_DEV="/dev/ttyAMA0"
+            echo " > UART GPS detected on /dev/ttyAMA0"
+        fi
+    fi
+
+    # /etc/default/gpsd — configure for detected GPS device or USB hotplug.
+    if [ -n "$UART_GPS_DEV" ]; then
+        cat > /etc/default/gpsd <<GPSD_CONF
 DEVICES="$UART_GPS_DEV"
 GPSD_OPTIONS="-n"
 START_DAEMON="true"
 USBAUTO="true"
 GPSD_CONF
-    echo " > gpsd configured for UART GPS: $UART_GPS_DEV"
-else
-    cat > /etc/default/gpsd <<'GPSD_CONF'
+        echo " > gpsd configured for UART GPS: $UART_GPS_DEV"
+    else
+        cat > /etc/default/gpsd <<'GPSD_CONF'
 DEVICES=""
 GPSD_OPTIONS="-n"
 START_DAEMON="true"
 USBAUTO="true"
 GPSD_CONF
+    fi
+
+    systemctl enable gps-reader.service
+    systemctl restart gps-reader.service 2>/dev/null || true
 fi
 
-# Patch chrony configs — add SHM 0 refclock and IPv4 mesh allow if absent.
+# Patch chrony configs — IPv4 mesh NTP-client allow always (GPS presence
+# doesn't gate whether this node can serve time to the mesh over IPv4);
+# GPS SHM refclock only when this node actually has a GPS module.
 # ethernet-autodetect.sh can replace chrony.conf from these templates, so all
-# available templates must carry the GPS/mesh-NTP additions too.
-ensure_chrony_gps_config() {
+# available templates must carry the mesh-NTP/GPS additions too.
+ensure_chrony_config() {
     local conf="$1"
     [ -f "$conf" ] || return 0
 
-    if ! grep -q 'refclock SHM 0' "$conf"; then
+    if [[ "${gps:-y}" != "n" ]] && ! grep -q 'refclock SHM 0' "$conf"; then
         cat >> "$conf" <<'CHRONY_GPS'
 
 # GPS SHM refclock — populated by gpsd when a GPS dongle is present.
@@ -1819,11 +1945,13 @@ for chrony_conf in \
     /etc/chrony/chrony-default.conf \
     /etc/chrony/chrony-server.conf \
     /etc/chrony/chrony-test.conf; do
-    ensure_chrony_gps_config "$chrony_conf"
+    ensure_chrony_config "$chrony_conf"
 done
 
-systemctl enable gps-reader.service
-systemctl restart gps-reader.service 2>/dev/null || true
+# cot-emitter's relay of peers' CoT to local EUDs is GPS-independent, so it
+# always runs regardless of the gps= toggle above — only its own local
+# position emission silently no-ops without a fix (see readGPS() in
+# src/cot-emitter/main.go).
 systemctl enable cot-emitter.service
 systemctl restart cot-emitter.service 2>/dev/null || true
 systemctl restart chrony 2>/dev/null || true
@@ -1850,7 +1978,8 @@ if [[ "$FIRST_BOOT_UNIT_ENABLED" -eq 1 && ! -f "$FIRST_BOOT_STAGE_MARKER" ]]; th
     touch "$FIRST_BOOT_STAGE_MARKER"
 fi
 
-# networkd-dispatcher hardening (two stock-default issues, both bite Rock 3A).
+# networkd-dispatcher hardening (two stock-default issues that bite boards
+# with a USB HaLow radio slow to come up at boot).
 #
 # 1) The stock unit has no ordering dependency, so at boot it can start before
 #    systemd-networkd and dbus. Its constructor runs `networkctl list`; with no

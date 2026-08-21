@@ -5,12 +5,7 @@ set -e
 
 # --- Configuration ---
 TEMPLATE_FILE="firstrun.sh.template"
-ROCK3A_TEMPLATE="rock3a-provision.sh.template"
 TEMP_SCRIPT_FILE=$(mktemp)
-# Full mirror, fast connection
-ARMBIAN_IMAGE_URL="https://fi.mirror.armbian.de/dl/rock-3a/archive/Armbian_26.2.1_Rock-3a_trixie_vendor_6.1.115_minimal.img.xz"
-ARMBIAN_IMAGE_FILENAME="Armbian_25.11.1_Rock-3a_trixie_vendor_6.1.115_minimal.img"
-ARMBIAN_IMAGE=""  # Will be set by acquire_armbian_image function
 CONFIG_DIR=".mesh-configs"
 # Hardcode the OS image URL. rpi-imager will download and cache this.
 PI_OS_IMAGE_URL="https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2025-10-02/2025-10-01-raspios-trixie-arm64-lite.img.xz"
@@ -436,6 +431,11 @@ ask_questions() {
                 if [ "$AUTO_CHANNEL" = "y" ] || [ "$AUTO_CHANNEL" = "Y" ]; then AUTO_CHANNEL="y"; else AUTO_CHANNEL="n"; fi
         fi
 
+        # GPS presence — some hardware in the fleet has no GPS module at all.
+        read -p "Does this node have a GPS module? (Y/n): " GPS_ENABLED
+        GPS_ENABLED=${GPS_ENABLED:-y}
+        if [ "$GPS_ENABLED" = "y" ] || [ "$GPS_ENABLED" = "Y" ]; then GPS_ENABLED="y"; else GPS_ENABLED="n"; fi
+
         echo "----------------------------------"
 }
 
@@ -465,6 +465,7 @@ MESH_SSID="$MESH_SSID"
 MESH_SAE_KEY="$MESH_SAE_KEY"
 LAN_CIDR_BLOCK="$LAN_CIDR_BLOCK"
 AUTO_CHANNEL="$AUTO_CHANNEL"
+GPS_ENABLED="$GPS_ENABLED"
 RADIO_PW="$RADIO_PW"
 ADMIN_PW="$ADMIN_PW"
 AUTO_UPDATE="$AUTO_UPDATE"
@@ -482,6 +483,7 @@ load_config() {
         # Source the file to load the variables into this script
         source "$CONFIG_FILE"
         HALOW_REGULATORY_DOMAIN=${HALOW_REGULATORY_DOMAIN:-$(halow_regulatory_domain_for_wifi_domain "$REGULATORY_DOMAIN")}
+        GPS_ENABLED=${GPS_ENABLED:-y}
 
         # Display the loaded settings
         echo "--- Loaded Configuration ---"
@@ -498,210 +500,12 @@ load_config() {
         echo "  Mesh SAE Key: $MESH_SAE_KEY"
         echo "  LAN CIDR Block: $LAN_CIDR_BLOCK"
         echo "  Auto Channel: $AUTO_CHANNEL"
+        echo "  GPS Enabled: $GPS_ENABLED"
         echo "  User password: $RADIO_PW"
         echo "  Admin password: ${ADMIN_PW:-(not set)}"
         echo "  Auto Update: ${AUTO_UPDATE:-n}"
         echo "  Node Hostname: ${NODE_HOSTNAME:-(auto)}"
         echo "----------------------------"
-}
-
-# Function to acquire Armbian image for Rock 3A
-# Sets ARMBIAN_IMAGE to the path of a usable .img file
-# Verifies SHA256 checksum if a .sha256 sidecar exists; saves checksum after first download.
-acquire_armbian_image() {
-        echo ""
-        echo "--- Armbian Image Setup for Rock 3A ---"
-
-        local checksum_file="${ARMBIAN_IMAGE_FILENAME}.sha256"
-
-        verify_armbian_checksum() {
-                local img="$1"
-                if [ ! -f "$checksum_file" ]; then
-                        return 0  # No checksum on file, skip verification
-                fi
-                echo "Verifying image checksum..."
-                local expected
-                expected=$(awk '{print $1}' "$checksum_file")
-                local actual
-                actual=$(sha256sum "$img" | awk '{print $1}')
-                if [ "$expected" = "$actual" ]; then
-                        echo "Checksum OK."
-                        return 0
-                else
-                        echo "ERROR: Checksum mismatch!"
-                        echo "  Expected: $expected"
-                        echo "  Actual:   $actual"
-                        return 1
-                fi
-        }
-
-        save_armbian_checksum() {
-                local img="$1"
-                echo "Saving checksum to $checksum_file..."
-                sha256sum "$img" | awk '{print $1}' > "$checksum_file"
-        }
-
-        # Check if default image exists locally (uncompressed)
-        if [ -f "$ARMBIAN_IMAGE_FILENAME" ]; then
-                echo "Found local Armbian image: $ARMBIAN_IMAGE_FILENAME"
-                if verify_armbian_checksum "$ARMBIAN_IMAGE_FILENAME"; then
-                        ARMBIAN_IMAGE="$ARMBIAN_IMAGE_FILENAME"
-                        return 0
-                else
-                        echo "Local image failed checksum — re-downloading."
-                        rm -f "$ARMBIAN_IMAGE_FILENAME"
-                fi
-        fi
-
-        # Check for compressed version
-        if [ -f "${ARMBIAN_IMAGE_FILENAME}.xz" ]; then
-                echo "Found compressed Armbian image: ${ARMBIAN_IMAGE_FILENAME}.xz"
-                echo "Decompressing (this may take a moment)..."
-                xz -dk "${ARMBIAN_IMAGE_FILENAME}.xz"
-                if [ $? -eq 0 ]; then
-                        if verify_armbian_checksum "$ARMBIAN_IMAGE_FILENAME"; then
-                                ARMBIAN_IMAGE="$ARMBIAN_IMAGE_FILENAME"
-                                echo "Decompression complete."
-                                return 0
-                        else
-                                echo "Decompressed image failed checksum — re-downloading."
-                                rm -f "$ARMBIAN_IMAGE_FILENAME" "${ARMBIAN_IMAGE_FILENAME}.xz"
-                        fi
-                else
-                        echo "ERROR: Decompression failed."
-                        return 1
-                fi
-        fi
-
-        echo "Armbian image not found locally."
-        echo ""
-        echo "Options:"
-        echo "  1. Download from Armbian mirror (recommended)"
-        echo "     URL: $ARMBIAN_IMAGE_URL"
-        echo "  2. Provide path to an existing Armbian Trixie image"
-        echo ""
-
-        while true; do
-                read -p "Select option (1 or 2): " img_choice
-                case $img_choice in
-                        1)
-                               download_armbian_image
-                               if [ $? -eq 0 ]; then
-                                       save_armbian_checksum "$ARMBIAN_IMAGE"
-                               fi
-                               return $?
-                               ;;
-                        2)
-                               select_custom_armbian_image
-                               if [ $? -eq 0 ]; then
-                                       save_armbian_checksum "$ARMBIAN_IMAGE"
-                               fi
-                               return $?
-                               ;;
-                        *)
-                               echo "Invalid selection. Please enter 1 or 2."
-                               ;;
-                esac
-        done
-}
-
-# Function to download Armbian image from mirror
-download_armbian_image() {
-        local compressed_file="${ARMBIAN_IMAGE_FILENAME}.xz"
-
-        echo ""
-        echo "Downloading Armbian image..."
-        echo "Source: $ARMBIAN_IMAGE_URL"
-        echo ""
-
-        # Check for wget or curl
-        if command -v wget &> /dev/null; then
-                wget --progress=bar:force -O "$compressed_file" "$ARMBIAN_IMAGE_URL"
-        elif command -v curl &> /dev/null; then
-                curl -L --progress-bar -o "$compressed_file" "$ARMBIAN_IMAGE_URL"
-        else
-                echo "ERROR: Neither wget nor curl found. Please install one to download."
-                return 1
-        fi
-
-        if [ $? -ne 0 ]; then
-                echo "ERROR: Download failed."
-                rm -f "$compressed_file" 2>/dev/null
-                return 1
-        fi
-
-        echo ""
-        echo "Download complete. Decompressing..."
-        xz -dk "$compressed_file"
-
-        if [ $? -ne 0 ]; then
-                echo "ERROR: Decompression failed."
-                return 1
-        fi
-
-        ARMBIAN_IMAGE="$ARMBIAN_IMAGE_FILENAME"
-        echo "Image ready: $ARMBIAN_IMAGE"
-        return 0
-}
-
-# Function to select a custom Armbian image path
-select_custom_armbian_image() {
-        echo ""
-        echo "=============================================="
-        echo "  IMPORTANT: Armbian Image Selection"
-        echo "=============================================="
-        echo "Please ensure you are selecting an Armbian image"
-        echo "that is compatible with the Radxa Rock 3A board."
-        echo ""
-        echo "       The expected environment is:"
-        echo "    minimal/IoT Armbian Trixie ( Debian 13)"
-        echo ""
-        echo "The image should be an uncompressed .img file."
-        echo "If you have a .img.xz file, it will be decompressed."
-        echo "=============================================="
-        echo ""
-
-        while true; do
-                read -p "Enter path to Armbian image: " custom_path
-
-                # Expand ~ if present
-                custom_path="${custom_path/#\~/$HOME}"
-
-                if [ -z "$custom_path" ]; then
-                        echo "No path entered. Please try again or press Ctrl+C to cancel."
-                        continue
-                fi
-
-                # Check if it's a compressed file
-                if [ -f "$custom_path" ] && [[ "$custom_path" == *.xz ]]; then
-                        echo "Compressed image detected. Decompressing..."
-                        local decompressed_path="${custom_path%.xz}"
-                        xz -dk "$custom_path"
-                        if [ $? -eq 0 ]; then
-                               ARMBIAN_IMAGE="$decompressed_path"
-                               echo "Image ready: $ARMBIAN_IMAGE"
-                               return 0
-                        else
-                               echo "ERROR: Decompression failed."
-                               return 1
-                        fi
-                elif [ -f "$custom_path" ] && [[ "$custom_path" == *.img ]]; then
-                        ARMBIAN_IMAGE="$custom_path"
-                        echo "Using image: $ARMBIAN_IMAGE"
-                        return 0
-                elif [ -f "$custom_path" ]; then
-                        echo "WARNING: File exists but doesn't have .img or .img.xz extension."
-                        read -p "Use this file anyway? (y/N): " use_anyway
-                        if [ "$use_anyway" = "y" ] || [ "$use_anyway" = "Y" ]; then
-                               ARMBIAN_IMAGE="$custom_path"
-                               echo "Using image: $ARMBIAN_IMAGE"
-                               return 0
-                        fi
-                else
-                        echo "ERROR: File not found: $custom_path"
-                        echo "Please check the path and try again."
-                fi
-        done
 }
 
 # Selects hardware model. Sets HARDWARE_MODEL global.
@@ -710,22 +514,8 @@ select_hardware() {
         echo "--- 1. Select Hardware ---"
 
         echo "Select hardware model:"
-        select hw_choice in "Raxda Rock 3A" "Raspberry Pi 5" "Raspberry Pi 4B" "Compute Module 4 (CM4)"; do
+        select hw_choice in "Raspberry Pi 5" "Raspberry Pi 4B" "Compute Module 4 (CM4)"; do
                 case $hw_choice in
-                        "Raxda Rock 3A" )
-                               HARDWARE_MODEL="r3a"
-                               if ! command -v losetup &> /dev/null; then
-                                echo "ERROR: 'losetup' command not found."
-                                echo "Cannot customize disk image without losetup"
-                                exit 1
-                               fi
-                               if ! command -v xz &> /dev/null; then
-                                echo "ERROR: 'xz' command not found. Needed for decompressing Armbian images."
-                                echo "Please install it (e.g., 'sudo apt install xz-utils')."
-                                exit 1
-                               fi
-                               break
-                               ;;
                         "Raspberry Pi 5" )
                                HARDWARE_MODEL="rpi5"
                                break
@@ -858,7 +648,6 @@ confirm_flash() {
         echo "Proceeding with flash..."
 }
 
-# Flash one SD card — Rock3A path (dd)
 # Resolve (rebuilding when possible) the tools tarball for a hardware model.
 # Prints the path on stdout; returns 1 if unavailable. First boot has no
 # download fallback — flashing without the tarball produces a node that
@@ -868,7 +657,6 @@ resolve_tools_tarball() {
         case "$model" in
                 cm4|rpi4) tarball_name="cm4-tools.tar.gz";   build_script="build-cm4-tarball.sh" ;;
                 rpi5)     tarball_name="rpi5-tools.tar.gz";  build_script="build-rpi5-tarball.sh" ;;
-                r3a)      tarball_name="r3a-install.tar.gz"; build_script="build-r3a-tarball.sh" ;;
                 *)        return 1 ;;
         esac
         local repo_root
@@ -921,199 +709,6 @@ embed_tools_tarball() {
         return 1
 }
 
-flash_r3a() {
-        local target="$1"
-
-        local tools_tarball
-        tools_tarball=$(resolve_tools_tarball r3a) || exit 1
-
-        # Create temp copy of image to avoid modifying original
-        local TEMP_IMAGE
-        TEMP_IMAGE=$(mktemp --suffix=.img)
-        echo "Creating temporary copy of $ARMBIAN_IMAGE..."
-        cp "$ARMBIAN_IMAGE" "$TEMP_IMAGE"
-
-        # Loop mount the temp image
-        local LOOP_DEV
-        LOOP_DEV=$(sudo losetup -fP --show "$TEMP_IMAGE")
-        echo "Mounted image as: $LOOP_DEV"
-
-        # Mount root partition (partition 2 on Armbian - partition 1 is /boot)
-        local ROOT_MOUNT="/tmp/armbian-root"
-        sudo mkdir -p "$ROOT_MOUNT"
-        echo "Mounting ${LOOP_DEV}p2 to $ROOT_MOUNT"
-        sudo mount "${LOOP_DEV}p2" "$ROOT_MOUNT"
-
-        # Write mesh configuration to /etc/mesh.conf
-        echo "Writing /etc/mesh.conf..."
-        sudo tee "$ROOT_MOUNT/etc/mesh.conf" > /dev/null << EOF
-# Mesh Network Configuration
-# Generated by provisioning script on $(date)
-hardware_model=${HARDWARE_MODEL}
-eud=${EUD_CONNECTION}
-lan_ap_ssid=${LAN_AP_SSID}
-lan_ap_key=${LAN_AP_KEY}
-lan_ap_channel=100
-lan_ap_bw=80
-max_euds_per_node=${MAX_EUDS_PER_NODE}
-mesh_ssid=${MESH_SSID}
-mesh_key=${MESH_SAE_KEY}
-ipv4_network=${LAN_CIDR_BLOCK}
-acs=${AUTO_CHANNEL}
-regulatory_domain=${REGULATORY_DOMAIN}
-halow_regulatory_domain=${HALOW_REGULATORY_DOMAIN}
-admin_password=${ADMIN_PW}
-require_auth=n
-auto_update=${AUTO_UPDATE}
-update_url=
-EOF
-
-        # ============================================================
-        # BYPASS ARMBIAN-FIRSTLOGIN - Headless auto-provisioning
-        # ============================================================
-
-        # Remove .not_logged_in_yet to prevent armbian-firstlogin from running
-        echo "Removing .not_logged_in_yet to bypass interactive setup..."
-        sudo rm -f "$ROOT_MOUNT/root/.not_logged_in_yet"
-
-        # Pre-create the radio user with hashed password
-        echo "Creating radio user..."
-        local RADIO_PW_HASH
-        RADIO_PW_HASH=$(openssl passwd -6 "$RADIO_PW")
-
-        # Add radio user to passwd (UID 1000, GID 1000, home /home/radio, shell /bin/bash)
-        echo "radio:x:1000:1000:radio:/home/radio:/bin/bash" | sudo tee -a "$ROOT_MOUNT/etc/passwd" > /dev/null
-
-        # Add radio group
-        echo "radio:x:1000:" | sudo tee -a "$ROOT_MOUNT/etc/group" > /dev/null
-
-        # Add radio to shadow with hashed password
-        echo "radio:${RADIO_PW_HASH}:19700:0:99999:7:::" | sudo tee -a "$ROOT_MOUNT/etc/shadow" > /dev/null
-
-        # Add radio to sudo group
-        sudo sed -i 's/^sudo:x:\([0-9]*\):.*$/sudo:x:\1:radio/' "$ROOT_MOUNT/etc/group"
-
-        # Create home directory
-        sudo mkdir -p "$ROOT_MOUNT/home/radio"
-        sudo chown 1000:1000 "$ROOT_MOUNT/home/radio"
-        sudo chmod 755 "$ROOT_MOUNT/home/radio"
-
-        # Add radio to sudoers (passwordless sudo)
-        echo "radio ALL=(ALL) NOPASSWD: ALL" | sudo tee "$ROOT_MOUNT/etc/sudoers.d/radio" > /dev/null
-        sudo chmod 440 "$ROOT_MOUNT/etc/sudoers.d/radio"
-
-        # ============================================================
-        # Generate and install the provisioning script
-        # ============================================================
-
-        echo "Generating provisioning script from Rock3A template..."
-        local TEMP_PROVISION_SCRIPT
-        TEMP_PROVISION_SCRIPT=$(mktemp)
-
-        if [ ! -f "$ROCK3A_TEMPLATE" ]; then
-                echo "ERROR: Rock3A template '$ROCK3A_TEMPLATE' not found."
-                sudo umount "$ROOT_MOUNT" 2>/dev/null; sudo losetup -d "$LOOP_DEV" 2>/dev/null
-                rm -f "$TEMP_IMAGE"
-                exit 1
-        fi
-
-        cp "$ROCK3A_TEMPLATE" "$TEMP_PROVISION_SCRIPT"
-
-        sed -i "s|__HARDWARE_MODEL__|${HARDWARE_MODEL}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__EUD_CONNECTION__|${EUD_CONNECTION}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__LAN_AP_SSID__|${LAN_AP_SSID}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__LAN_AP_KEY__|${LAN_AP_KEY}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__MAX_EUDS_PER_NODE__|${MAX_EUDS_PER_NODE}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__MESH_SSID__|${MESH_SSID}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__MESH_SAE_KEY__|${MESH_SAE_KEY}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__LAN_CIDR_BLOCK__|${LAN_CIDR_BLOCK}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__AUTO_CHANNEL__|${AUTO_CHANNEL}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__RADIO_PW__|${RADIO_PW}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__REGULATORY_DOMAIN__|${REGULATORY_DOMAIN}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__HALOW_REGULATORY_DOMAIN__|${HALOW_REGULATORY_DOMAIN}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__ADMIN_PW__|${ADMIN_PW}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__AUTO_UPDATE__|${AUTO_UPDATE}|g" "$TEMP_PROVISION_SCRIPT"
-        sed -i "s|__NODE_HOSTNAME__|${NODE_HOSTNAME}|g" "$TEMP_PROVISION_SCRIPT"
-
-        echo "Installing provisioning script to /usr/local/bin/provision-mesh.sh..."
-        sudo cp "$TEMP_PROVISION_SCRIPT" "$ROOT_MOUNT/usr/local/bin/provision-mesh.sh"
-        sudo chmod +x "$ROOT_MOUNT/usr/local/bin/provision-mesh.sh"
-        rm -f "$TEMP_PROVISION_SCRIPT"
-
-        # ============================================================
-        # Create systemd service for auto-provisioning on first boot
-        # ============================================================
-
-        echo "Creating mesh-provision systemd service..."
-        sudo tee "$ROOT_MOUNT/etc/systemd/system/mesh-provision.service" > /dev/null << 'SERVICE_EOF'
-[Unit]
-Description=Mesh Network First Boot Provisioning
-ConditionPathExists=/root/.mesh-not-provisioned
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/provision-mesh.sh
-ExecStartPost=/bin/rm -f /root/.mesh-not-provisioned
-RemainAfterExit=yes
-StandardOutput=journal+console
-StandardError=journal+console
-
-[Install]
-WantedBy=multi-user.target
-SERVICE_EOF
-
-        echo "Creating provisioning trigger flag..."
-        sudo touch "$ROOT_MOUNT/root/.mesh-not-provisioned"
-
-        echo "Enabling mesh-provision service..."
-        sudo mkdir -p "$ROOT_MOUNT/etc/systemd/system/multi-user.target.wants"
-        sudo ln -sf /etc/systemd/system/mesh-provision.service \
-                "$ROOT_MOUNT/etc/systemd/system/multi-user.target.wants/mesh-provision.service"
-
-        # Stage the install tarball into the image — rock3a-provision.sh
-        # requires it at /root and no longer downloads.
-        echo "Staging install tarball into image..."
-        sudo cp "$tools_tarball" "$ROOT_MOUNT/root/morse-pi-install.tar.gz"
-
-        # ============================================================
-        # Unmount and flash
-        # ============================================================
-
-        echo "Unmounting image..."
-        sudo sync
-        sudo umount "$ROOT_MOUNT"
-        sudo rmdir "$ROOT_MOUNT"
-        sudo losetup -d "$LOOP_DEV"
-
-        echo "Wiping target device..."
-        sudo wipefs -a "$target"
-
-        echo "Flashing image to $target..."
-        sudo dd if="$TEMP_IMAGE" of="$target" bs=4M status=progress conv=fsync
-        sudo sync
-
-        rm -f "$TEMP_IMAGE"
-
-        echo ""
-        echo "=============================================="
-        echo "           ✅ Flash complete: $target"
-        echo "=============================================="
-        echo ""
-        echo "You can now remove the SD card and boot your"
-        echo "Rock 3A. First boot provisioning will run"
-        echo "automatically when connected to the internet."
-        echo ""
-        echo "  - Root password: 1234 (Armbian default)"
-        echo "  - Radio user: radio / <your configured password>"
-        echo ""
-        echo " ONCE BOOTED, THE MESH NODE WILL AUTOMATICALLY START"
-        echo " SETTING ITSELF UP AND WILL REBOOT MULTIPLE TIMES"
-        echo " Just leave it alone, this process takes about ten"
-        echo " minutes"
-}
-
 # Flash one SD card — Raspberry Pi path (rpi-imager)
 flash_rpi() {
         local target="$1"
@@ -1131,6 +726,7 @@ flash_rpi() {
             -e "s|__MESH_SAE_KEY__|${MESH_SAE_KEY}|g" \
             -e "s|__LAN_CIDR_BLOCK__|${LAN_CIDR_BLOCK}|g" \
             -e "s|__AUTO_CHANNEL__|${AUTO_CHANNEL}|g" \
+            -e "s|__GPS_ENABLED__|${GPS_ENABLED}|g" \
             -e "s|__RADIO_PW__|${RADIO_PW}|g" \
             -e "s|__REGULATORY_DOMAIN__|${REGULATORY_DOMAIN}|g" \
             -e "s|__HALOW_REGULATORY_DOMAIN__|${HALOW_REGULATORY_DOMAIN}|g" \
@@ -1160,11 +756,9 @@ flash_rpi() {
 select_hardware
 
 # --- 1. Check Dependencies ---
-if [ "$HARDWARE_MODEL" != "r3a" ]; then
-        if ! command -v rpi-imager &> /dev/null; then
-                echo "ERROR: 'rpi-imager' command not found. Please install it."
-                exit 1
-        fi
+if ! command -v rpi-imager &> /dev/null; then
+        echo "ERROR: 'rpi-imager' command not found. Please install it."
+        exit 1
 fi
 
 if [ ! -f "$TEMPLATE_FILE" ]; then
@@ -1189,11 +783,6 @@ if ! command -v findmnt &> /dev/null; then
         echo "Please install it (e.g., 'sudo apt install util-linux')."
         exit 1
 fi
-if ! command -v sha256sum &> /dev/null; then
-        echo "ERROR: 'sha256sum' command not found. Needed for image verification."
-        exit 1
-fi
-
 # Ensure config directory exists
 mkdir -p "$CONFIG_DIR"
 
@@ -1247,12 +836,7 @@ else
 fi
 
 
-# --- 3. Acquire image (Rock3A only — checksum verified here) ---
-if [ "$HARDWARE_MODEL" = "r3a" ]; then
-        acquire_armbian_image
-fi
-
-# --- 4. Multi-SD flash ---
+# --- 3. Multi-SD flash ---
 
 # CM4 goes through its own single-device flow (rpiboot required)
 if [ "$HARDWARE_MODEL" = "cm4" ]; then
@@ -1329,11 +913,7 @@ flash_multiple_cards() {
                         TARGET_DEVICE=$(echo "$dev_entry" | awk '{print $1}')
                         echo ""
                         echo "=== Flashing card $((FLASH_COUNT+1)) of ${#nums[@]}: $TARGET_DEVICE ==="
-                        if [ "$HARDWARE_MODEL" = "r3a" ]; then
-                                flash_r3a "$TARGET_DEVICE"
-                        else
-                                flash_rpi "$TARGET_DEVICE"
-                        fi
+                        flash_rpi "$TARGET_DEVICE"
                         FLASH_COUNT=$((FLASH_COUNT + 1))
                 done
 

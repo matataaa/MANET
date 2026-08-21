@@ -30,8 +30,13 @@ const (
 	staleSeconds  = 120
 	mcastGroup    = "239.2.3.1"
 	mcastPort     = 6969
-	cotType       = "a-f-G-U-C"
-	controlIface  = "br0"
+	// Default CoT identity: a category-level "friendly ground equipment"
+	// type with no team affiliation — a mesh node reads as infrastructure,
+	// not a teammate, unless explicitly configured otherwise via mesh.conf
+	// (cot_type/cot_team/cot_role/cot_icon, see getCoTIdentity).
+	defaultCoTType = "a-f-G-E"
+	defaultCoTRole = "Team Member"
+	controlIface   = "br0"
 )
 
 type cotStatus struct {
@@ -154,6 +159,30 @@ func getCallsign() string {
 	return h
 }
 
+// cotIdentity controls how this node's own position marker presents on the
+// map. Defaults to an equipment identity (no team); an operator can
+// reconfigure a node to read as a team member instead — e.g. when its
+// carrier has no CoT-capable EUD of their own — by setting cot_team.
+type cotIdentity struct {
+	Type string
+	Team string
+	Role string
+	Icon string
+}
+
+func getCoTIdentity() cotIdentity {
+	id := cotIdentity{Type: defaultCoTType, Role: defaultCoTRole}
+	if t := readMeshConf("cot_type"); t != "" {
+		id.Type = t
+	}
+	id.Team = readMeshConf("cot_team")
+	if r := readMeshConf("cot_role"); r != "" {
+		id.Role = r
+	}
+	id.Icon = readMeshConf("cot_icon")
+	return id
+}
+
 func getUID() string {
 	h, _ := os.Hostname()
 	return "MANET-" + h
@@ -176,9 +205,15 @@ func readGPS() *gpsData {
 			log.Printf("GPS file stale (%ds old), ignoring", time.Now().Unix()-gps.Timestamp)
 		}
 		if time.Since(lastGPSStale) > 2*time.Minute {
-			log.Printf("GPS stale for >2m, restarting gps-reader")
-			exec.Command("systemctl", "restart", "gps-reader").Run()
-			lastGPSStale = time.Now()
+			if readMeshConf("gps") == "n" {
+				// GPS deliberately disabled on this hardware — don't nag a
+				// service the operator turned off on purpose.
+				lastGPSStale = time.Now()
+			} else {
+				log.Printf("GPS stale for >2m, restarting gps-reader")
+				exec.Command("systemctl", "restart", "gps-reader").Run()
+				lastGPSStale = time.Now()
+			}
 		}
 		return nil
 	}
@@ -193,12 +228,23 @@ func isoUTC(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05Z")
 }
 
-func buildCoTEvent(gps *gpsData, uid, callsign string) []byte {
+func buildCoTEvent(gps *gpsData, uid, callsign string, identity cotIdentity) []byte {
 	now := time.Now()
 	stale := now.Add(staleSeconds * time.Second)
 	ce := gps.HDOP * 3.0
 	if ce < 5.0 {
 		ce = 5.0
+	}
+
+	var detail strings.Builder
+	fmt.Fprintf(&detail, `<contact callsign="%s"/>`, html.EscapeString(callsign))
+	if identity.Team != "" {
+		fmt.Fprintf(&detail, `<__group name="%s" role="%s"/>`, html.EscapeString(identity.Team), html.EscapeString(identity.Role))
+	}
+	detail.WriteString(`<precisionlocation altsrc="GPS" geopointsrc="GPS"/>`)
+	detail.WriteString(`<track course="0.0" speed="0.0"/>`)
+	if identity.Icon != "" {
+		fmt.Fprintf(&detail, `<usericon iconsetpath="%s"/>`, html.EscapeString(identity.Icon))
 	}
 
 	xml := fmt.Sprintf(
@@ -208,18 +254,13 @@ func buildCoTEvent(gps *gpsData, uid, callsign string) []byte {
 			` stale="%s" how="m-g">`+
 			`<point lat="%f" lon="%f"`+
 			` hae="%f" ce="%.1f" le="9999999.0"/>`+
-			`<detail>`+
-			`<contact callsign="%s"/>`+
-			`<__group name="Cyan" role="Team Member"/>`+
-			`<precisionlocation altsrc="GPS" geopointsrc="GPS"/>`+
-			`<track course="0.0" speed="0.0"/>`+
-			`</detail></event>`,
-		html.EscapeString(uid), cotType,
+			`<detail>%s</detail></event>`,
+		html.EscapeString(uid), html.EscapeString(identity.Type),
 		isoUTC(now), isoUTC(now),
 		isoUTC(stale),
 		gps.Latitude, gps.Longitude,
 		gps.Altitude, ce,
-		html.EscapeString(callsign),
+		detail.String(),
 	)
 	return []byte(xml)
 }
@@ -379,7 +420,8 @@ func main() {
 
 	callsign := getCallsign()
 	uid := getUID()
-	log.Printf("Starting CoT emitter: uid=%s callsign=%s", uid, callsign)
+	identity := getCoTIdentity()
+	log.Printf("Starting CoT emitter: uid=%s callsign=%s type=%s team=%q", uid, callsign, identity.Type, identity.Team)
 
 	// Relay peers' CoT to our own EUDs. Runs regardless of local GPS state.
 	go relayLoop(uid)
@@ -430,7 +472,7 @@ func main() {
 			continue
 		}
 
-		event := buildCoTEvent(gps, uid, callsign)
+		event := buildCoTEvent(gps, uid, callsign, identity)
 		var lastErr string
 
 		for _, ip := range eudIPs {

@@ -47,6 +47,7 @@ type Node struct {
 	IsDirect     bool        `json:"is_direct"`
 	IsGateway    bool        `json:"is_gateway"`
 	IsSelectedGW bool        `json:"is_selected_gw"`
+	GPS          GPS         `json:"gps"`
 	Uptime       string      `json:"uptime"`
 	CPU          string      `json:"cpu"`
 	Battery      *BatteryInfo `json:"battery"`
