@@ -857,6 +857,13 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	if updates["eud"] != "" {
 		eud := conf["eud"]
 		if eud == "wireless" || eud == "both" || eud == "auto" {
+			// The reconcile script itself selects/regenerates the AP
+			// interface (hostapd.conf, ap-interface-setup.service,
+			// ap-txpower.service) and stops any stale mesh
+			// wpa_supplicant on it — must run before hostapd is
+			// (re)started so it picks up a config that actually
+			// targets the current AP interface, not a stale one.
+			runCmd(10*time.Second, "manet-wlan-reconcile.sh")
 			runCmd(5*time.Second, "systemctl", "enable", "hostapd")
 			runCmd(5*time.Second, "systemctl", "start", "hostapd")
 		} else if eud == "wired" || eud == "none" {
