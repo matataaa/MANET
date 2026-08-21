@@ -60,14 +60,25 @@ restarts and stop logging the same error for ever"
 
 2026-08-21 pass found one actionable, mechanically-portable fix not yet in
 the fork: `70dc3c6` "Fix mesh time sync and wire GPS in as a time source"
-fixes real bugs also present in the fork's `provision-mesh.sh` /
-`ethernet-autodetect.sh` / `one-shot-time-sync.sh` — invalid `offline`
-directive in chrony-default.conf, chrony-default.conf written to the wrong
-path (`/etc/chrony-default.conf` vs `/etc/chrony/chrony-default.conf`),
-`one-shot-time-sync.service` never actually enabled, and
-`one-shot-time-sync.sh` bursting a source chronyd was never told about. Not
-yet ported — see conversation from that date. Everything else in the range
-(the voice PTT/Lyra feature set, journald persistence — already fixed
+fixed real bugs also present in the fork's `provision-mesh.sh` /
+`ethernet-autodetect.sh` / `one-shot-time-sync.sh` / `radio-setup.sh` —
+invalid `offline` directive in chrony-default.conf, chrony-default.conf
+written to the wrong path (`/etc/chrony-default.conf` vs
+`/etc/chrony/chrony-default.conf`), `one-shot-time-sync.service` never
+actually enabled, and `one-shot-time-sync.sh` bursting a source chronyd was
+never told about. Ported (same day, this pass). Deliberately NOT ported: the
+upstream commit's GPS-as-explicit-NTP-source marker
+(`/var/run/mesh-ntp-gps.state`, set from `node_tools/node-manager.sh`) —
+the fork's registry publisher (`src/mesh-registry/main.go`,
+`serviceActive("chrony")`) works on a different principle than upstream's
+state-file marker, so a GPS marker wouldn't plug in the same way; making a
+GPS-disciplined node a preferred/discoverable mesh time source needs its own
+design pass, not a port. See the corrected comment above `radio-setup.sh`'s
+GPS/chrony section for the current, accurate state.
+
+Everything else in the reviewed range (the voice PTT/Lyra feature set —
+fork has its own separate Go `mesh-voice`, not upstream's Python one;
+journald persistence — already fixed
 independently in the fork's own `journald.conf.d/manet.conf`) needs no
 action.
 

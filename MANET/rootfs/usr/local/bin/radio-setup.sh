@@ -1852,10 +1852,16 @@ systemctl enable battery-reader.service
 #   - chrony is already installed and serves the mesh (allow fd01::/64).
 #   - With GPS: SHM 0 refclock (NMEA, ~100 ms accuracy) → stratum ~2.
 #   - Without GPS or fix: chrony falls back to pool.ntp.org or local stratum 10.
-#   - Nodes with GPS automatically become the preferred NTP source because
-#     their chrony stratum beats the stratum-10 fallback of GPS-less nodes.
-#   - No election logic change needed — existing is_ntp_server flag stays
-#     tied to the ethernet gateway; GPS just silently improves time quality.
+#   - GPS does NOT currently change mesh election: mesh-registry publishes
+#     IS_NTP_SERVER from whether chronyd is simply running
+#     (src/mesh-registry/main.go serviceActive("chrony")), not from a
+#     GPS-specific marker, and one-shot-time-sync.sh's discovery loop only
+#     looks at that flag — it has no way to prefer a GPS-disciplined node
+#     over an unsynced one. A GPS dongle improves this node's own clock but
+#     does not make it a better-advertised time source for the rest of the
+#     mesh. Making that work would mean either gating mesh-registry's check
+#     on an explicit "actually synced" marker, or something equivalent —
+#     that's a real design change, not done here.
 
 # gps=n means this hardware has no GPS module at all — skip gpsd/gps-reader
 # setup entirely and make sure both stay stopped (a prior boot may have had
@@ -1940,6 +1946,23 @@ CHRONY_GPS
     fi
 }
 
+# Seed chrony-default.conf when it is missing. Nodes provisioned before the
+# path fix got this written to /etc/chrony-default.conf, one directory too
+# high, where chronyd never reads it. ethernet-autodetect.sh cp's this file
+# over chrony.conf on a failed sync; when it does not exist that cp fails
+# silently and the node is left on the throwaway test config.
+if [ ! -f /etc/chrony/chrony-default.conf ]; then
+    mkdir -p /etc/chrony
+    cat > /etc/chrony/chrony-default.conf <<'CHRONY_DEFAULT'
+# Default client config: chronyd starts with no network time sources, so it
+# generates no traffic until one is added.
+driftfile /var/lib/chrony/chrony.drift
+makestep 1.0 3
+deny all
+CHRONY_DEFAULT
+    echo " > chrony: seeded missing /etc/chrony/chrony-default.conf"
+fi
+
 for chrony_conf in \
     /etc/chrony/chrony.conf \
     /etc/chrony/chrony-default.conf \
@@ -1955,6 +1978,11 @@ done
 systemctl enable cot-emitter.service
 systemctl restart cot-emitter.service 2>/dev/null || true
 systemctl restart chrony 2>/dev/null || true
+
+# provision-mesh.sh writes this unit but leaves it disabled, deferring to
+# radio-setup.sh to enable it — that enable never actually happened, so the
+# one-shot mesh time sync has never run on any node.
+systemctl enable one-shot-time-sync.service 2>/dev/null || true
 
 # ============================================================================
 # === FIRST RUN vs RE-RUN ===
