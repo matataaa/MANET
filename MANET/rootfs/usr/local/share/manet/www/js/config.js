@@ -378,6 +378,22 @@ function configRenderEdit(panel, cfg) {
 }
 
 async function configSave() {
+  const panel = document.getElementById('cfg-content');
+  const saveBtn = document.getElementById('cfg-save-btn');
+  const backBtn = document.getElementById('cfg-back-btn');
+  const savedBtnText = saveBtn.textContent;
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving…';
+  if (backBtn) backBtn.disabled = true;
+  panel.querySelectorAll('.cfg-input').forEach(el => { el.disabled = true; });
+
+  function restoreEditable() {
+    saveBtn.disabled = false;
+    saveBtn.textContent = savedBtnText;
+    if (backBtn) backBtn.disabled = false;
+    panel.querySelectorAll('.cfg-input').forEach(el => { el.disabled = false; });
+  }
+
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','eud_bandwidth','mesh_ssid','mesh_key',
     'ipv4_network','regulatory_domain','halow_bw','multicast_mode','battery_monitor','admin_password','require_auth',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
@@ -419,8 +435,12 @@ async function configSave() {
       if (!meshResult.ok) errors.push('Mesh: ' + (meshResult.error || 'unknown'));
       if (!voiceResult.ok) errors.push('Voice: ' + (voiceResult.error || 'unknown'));
       notify('Save Failed', errors.join(', '), {type:'error'});
+      restoreEditable();
     }
-  } catch(e) { notify('Save Failed', e.message, {type:'error'}); }
+  } catch(e) {
+    notify('Save Failed', e.message, {type:'error'});
+    restoreEditable();
+  }
 }
 
 // QOS Priority
