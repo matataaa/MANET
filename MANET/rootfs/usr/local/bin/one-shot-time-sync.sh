@@ -2,7 +2,7 @@
 #
 # one-shot-time-sync.sh
 # This script runs once on boot to find the best NTP server on the mesh,
-# sync the time, and then disable the chrony service to minimize traffic.
+# sync the time, and then stop the chrony service to minimize traffic.
 #
 
 REGISTRY_STATE_FILE="/var/run/mesh_node_registry"
@@ -15,6 +15,14 @@ log() {
 # If we've already synced on this boot, do nothing.
 if [ -f "$STATE_FILE" ]; then
     log "Initial time sync has already been performed. Exiting."
+    exit 0
+fi
+
+# A gateway syncs its own time over Ethernet and keeps chrony running to serve
+# it to the mesh (see ethernet-autodetect.sh) — it must not then overwrite that
+# with a one-shot sync against some other mesh peer.
+if [ -f /var/run/mesh-ntp.state ]; then
+    log "This node is the mesh's NTP gateway; it stays synced. Exiting."
     exit 0
 fi
 
@@ -54,21 +62,44 @@ while IFS= read -r line; do
 
         # Construct variable names for MAC and Hostname
         MAC_VAR="NODE_${MAC_SANITIZED}_MAC_ADDRESS"
+        MACS_VAR="NODE_${MAC_SANITIZED}_MAC_ADDRESSES"
         HOSTNAME_VAR="NODE_${MAC_SANITIZED}_HOSTNAME"
 
         CANDIDATE_MAC=${!MAC_VAR}
         CANDIDATE_HOSTNAME=${!HOSTNAME_VAR}
+        CANDIDATE_ALL_MACS=${!MACS_VAR}
 
-        # Find the TQ score from this node to the candidate server's MAC
+        # Find the TQ score from this node to the candidate server. `batctl o`'s
+        # Originator column is the node's physical radio MAC, not the registry's
+        # MAC_ADDRESS — that field is bat0's own virtual MAC, and batman-adv sets
+        # the locally-administered bit on it (e.g. 9c:...:6c becomes 9e:...:6c),
+        # so it never appears in `batctl o` output. Matching only against
+        # MAC_ADDRESS meant this loop could never find a TQ score for any
+        # candidate, so a mesh NTP peer was never actually selectable — check
+        # every MAC this node advertises (MAC_ADDRESSES) instead.
         CURRENT_LOCAL_TQ="0" # Default to 0 if not found
+        IFS=',' read -ra CANDIDATE_MAC_LIST <<< "$CANDIDATE_ALL_MACS"
         for bat_line in "${BATCTL_OUTPUT[@]}"; do
-            # The Originator column in `batctl o` is the MAC address
-            if [[ "$bat_line" == *"$CANDIDATE_MAC"* ]]; then
-                # Extract the TQ score
-                TQ_RAW=$(echo "$bat_line" | awk '{print $3}' | tr -d '()')
-                # Validate if it's a number
-                if [[ "$TQ_RAW" =~ ^[0-9]+$ ]]; then
-                    CURRENT_LOCAL_TQ=$TQ_RAW
+            MAC_MATCHED=0
+            for cmac in "${CANDIDATE_MAC_LIST[@]}"; do
+                if [[ "$bat_line" == *"$cmac"* ]]; then
+                    MAC_MATCHED=1
+                    break
+                fi
+            done
+            if [[ "$MAC_MATCHED" == "1" ]]; then
+                # `batctl o` prints throughput (BATMAN_V), a decimal, inside
+                # parens with variable padding, e.g. "(        7.1)" — the "("
+                # is its own whitespace-split field, so `awk '{print $3}'`
+                # never actually landed on the number, and `^[0-9]+$` would
+                # have rejected the decimal even if it had. Pull the number
+                # out directly instead.
+                TQ_RAW=$(echo "$bat_line" | grep -oP '\(\s*\K[0-9]+(\.[0-9]+)?' | head -1)
+                # Validate it's a number, then truncate to an integer — bash's
+                # (( )) arithmetic below can't compare decimals, and whole
+                # Mbit/s is more than enough precision to pick the better link.
+                if [[ "$TQ_RAW" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                    CURRENT_LOCAL_TQ=${TQ_RAW%%.*}
                 fi
                 break # Found the MAC, no need to check further lines
             fi
@@ -96,15 +127,30 @@ if [ -n "$BEST_SERVER_HOSTNAME" ]; then
 
     if [ -n "$BEST_SERVER_IP" ]; then
         log "Syncing time with ${BEST_SERVER_IP}..."
-        # Force a one-time sync.
-        if chronyc -a "burst 1/1 ${BEST_SERVER_IP}"; then
-            log "Time sync successful."
+
+        # chronyc needs a live daemon, and ethernet-autodetect may already have
+        # stopped it earlier in this boot.
+        systemctl is-active --quiet chrony.service || systemctl start chrony.service
+
+        # "burst" only acts on sources chronyd already knows about. This peer is
+        # discovered from the registry at runtime and appears in no config file,
+        # so it has to be added first — without this the command returned
+        # "503 No such source" and the sync silently never happened.
+        chronyc -a "add server ${BEST_SERVER_IP} iburst" >/dev/null 2>&1
+        chronyc -a "burst 1/1 ${BEST_SERVER_IP}" >/dev/null 2>&1
+
+        # burst returns 200 as soon as the command is accepted, which says
+        # nothing about whether the clock was ever set. waitsync is what
+        # actually blocks until chronyd has disciplined it.
+        if timeout 90 chronyc waitsync 60 0 0 1 >/dev/null 2>&1; then
+            log "Time sync successful. Clock disciplined from ${BEST_SERVER_IP}."
             touch "$STATE_FILE"
-            log "Stopping and disabling chrony service to conserve network traffic."
+            # Stop, but leave the unit enabled: this node may become a gateway
+            # later and need chrony running again.
+            log "Stopping chrony; this node has its time and need not keep polling."
             systemctl stop chrony.service
-            systemctl disable chrony.service
         else
-            log "Time sync command failed."
+            log "Time sync did not complete against ${BEST_SERVER_IP}."
         fi
     else
         log "Could not resolve hostname ${BEST_SERVER_HOSTNAME}.local"
