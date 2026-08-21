@@ -252,52 +252,66 @@ vht_oper_chwidth=0"
 fi
 
 # --- 1. Generate a missing mesh wpa_supplicant config for any interface
-#        /var/lib/mesh_if now claims but never got one written for.
+#        /var/lib/mesh_if now claims but never got one written for, AND
+#        make sure the service is actually enabled+running either way —
+#        not just when a config was freshly generated. A radio that went
+#        through an AP round-trip (step 0b stops its wpa_supplicant but
+#        deliberately leaves the mesh config file in place, matching
+#        radio-setup.sh's own "disable stale service, don't delete
+#        config" philosophy) still has its config file sitting there on
+#        the way back, which would otherwise make this loop skip it
+#        entirely and leave it disabled forever.
 [ -f "$MESH_IF_FILE" ] || exit 0
 for WLAN in $(cat "$MESH_IF_FILE"); do
     [ -n "$AP_INTERFACE" ] && [ "$WLAN" = "$AP_INTERFACE" ] && continue
-    [ -e "/etc/wpa_supplicant/wpa_supplicant-$WLAN.conf" ] && continue
 
-    FREQ=$(iface_mesh_freq "$WLAN")
-    if [ -z "$FREQ" ]; then
-        echo "manet-wlan-reconcile: WARNING cannot determine band for $WLAN, skipping" >&2
-        continue
+    if [ ! -e "/etc/wpa_supplicant/wpa_supplicant-$WLAN.conf" ]; then
+        FREQ=$(iface_mesh_freq "$WLAN")
+        if [ -z "$FREQ" ]; then
+            echo "manet-wlan-reconcile: WARNING cannot determine band for $WLAN, skipping" >&2
+            continue
+        fi
+
+        CHANGED=1
+        echo "manet-wlan-reconcile: generating mesh config for $WLAN (${FREQ} MHz)"
+
+        cat <<-EOF > "/etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf"
+		ctrl_interface=/var/run/wpa_supplicant
+		country=$CFG80211_REGDOM
+		update_config=1
+		sae_pwe=0
+		ap_scan=2
+		network={
+		    ssid="$MESH_NAME"
+		    mode=5
+		    frequency=${FREQ}
+		    key_mgmt=SAE
+		    sae_password="$KEY"
+		    ieee80211w=2
+		    mesh_fwding=0
+		    group_rekey=0
+		}
+		EOF
+
+        cat <<-EOF > "/etc/systemd/network/30-$WLAN.network"
+		[Match]
+		MACAddress=$(ip a | grep -A1 "$(phys_iface "$WLAN")" | awk '/ether/ {print $2}')
+
+		[Network]
+
+		[Link]
+		RequiredForOnline=no
+		MTUBytes=1432
+		EOF
+
+        cp "/etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf" "/etc/wpa_supplicant/wpa_supplicant-$WLAN.conf"
     fi
 
-    CHANGED=1
-    echo "manet-wlan-reconcile: generating mesh config for $WLAN (${FREQ} MHz)"
-
-    cat <<-EOF > "/etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf"
-	ctrl_interface=/var/run/wpa_supplicant
-	country=$CFG80211_REGDOM
-	update_config=1
-	sae_pwe=0
-	ap_scan=2
-	network={
-	    ssid="$MESH_NAME"
-	    mode=5
-	    frequency=${FREQ}
-	    key_mgmt=SAE
-	    sae_password="$KEY"
-	    ieee80211w=2
-	    mesh_fwding=0
-	    group_rekey=0
-	}
-	EOF
-
-    cat <<-EOF > "/etc/systemd/network/30-$WLAN.network"
-	[Match]
-	MACAddress=$(ip a | grep -A1 "$(phys_iface "$WLAN")" | awk '/ether/ {print $2}')
-
-	[Network]
-
-	[Link]
-	RequiredForOnline=no
-	MTUBytes=1432
-	EOF
-
-    cp "/etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf" "/etc/wpa_supplicant/wpa_supplicant-$WLAN.conf"
-    systemctl enable --now "wpa_supplicant@$WLAN.service"
+    if ! systemctl is-active --quiet "wpa_supplicant@$WLAN.service"; then
+        CHANGED=1
+        echo "manet-wlan-reconcile: (re)enabling wpa_supplicant for $WLAN"
+        systemctl enable --now "wpa_supplicant@$WLAN.service"
+    fi
 done
 
 # --- 2. If ap-txpower.service is still holding a radio's txpower fixed
