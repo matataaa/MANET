@@ -1351,7 +1351,10 @@ func serviceAction(serviceID, action string) (bool, string) {
 // --- GPS ---
 
 func getGPS(regNode RegistryNode) GPS {
-	gps := GPS{}
+	// connected lives outside the fix-availability branches below: gpsd can
+	// be up and reporting (connected) with no fix yet, and that state must
+	// survive into the registry-fallback return too, not just the have-fix one.
+	connected := false
 	data, err := os.ReadFile(GPSStatusFile)
 	if err == nil {
 		var g struct {
@@ -1363,17 +1366,30 @@ func getGPS(regNode RegistryNode) GPS {
 		}
 		if json.Unmarshal(data, &g) == nil {
 			if g.Timestamp > 0 && time.Now().Unix()-g.Timestamp < 30 {
-				gps.Connected = true
+				connected = true
 			}
 			if g.HasFix {
-				gps.Available = true
-				gps.Lat = fmt.Sprintf("%f", g.Lat)
-				gps.Lon = fmt.Sprintf("%f", g.Lon)
-				gps.Alt = fmt.Sprintf("%f", g.Alt)
-				return gps
+				return GPS{
+					Available: true,
+					Connected: connected,
+					Lat:       fmt.Sprintf("%f", g.Lat),
+					Lon:       fmt.Sprintf("%f", g.Lon),
+					Alt:       fmt.Sprintf("%f", g.Alt),
+				}
 			}
 		}
 	}
+	gps := registryGPS(regNode)
+	gps.Connected = connected
+	return gps
+}
+
+// registryGPS reads a node's position from its gossiped registry entry only,
+// never the local gpsd status file. getGPS() is only correct for the node
+// manet-ctrl is running on — its local-file branch would otherwise report
+// this node's own fix as if it belonged to whichever peer regNode is for.
+func registryGPS(regNode RegistryNode) GPS {
+	gps := GPS{}
 	if lat := regNode["GPS_LATITUDE"]; lat != "" && lat != "0" {
 		gps.Available = true
 		gps.Lat = lat

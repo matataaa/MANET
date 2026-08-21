@@ -17,6 +17,7 @@
 MANET/install_packages/*.tar.gz
 
 # Cross-compiled Go services — regenerate with the packaging scripts
+MANET/src/atak-overlay/atak-overlay
 MANET/src/battery-reader/battery-reader
 MANET/src/cot-emitter/cot-emitter
 MANET/src/gateway-manager/gateway-manager

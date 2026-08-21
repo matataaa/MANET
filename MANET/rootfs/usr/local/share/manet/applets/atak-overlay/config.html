@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ATAK Topology Overlay Config</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--text:#e4e4e7;--muted:#6b7280;--accent:#3b82f6}
+body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text);padding:24px}
+h2{font-size:16px;margin-bottom:16px}
+.form-group{margin-bottom:16px}
+label{display:block;font-size:13px;font-weight:600;margin-bottom:6px;color:var(--muted)}
+input{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:14px}
+input:focus{outline:none;border-color:var(--accent)}
+.hint{font-size:11px;color:var(--muted);margin-top:4px}
+.actions{margin-top:24px;display:flex;gap:8px}
+button{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;border:none}
+.btn-save{background:var(--accent);color:#fff}
+.btn-save:disabled{opacity:.4}
+.msg{margin-top:12px;font-size:13px;padding:8px 12px;border-radius:6px}
+.msg.ok{background:#064e3b;color:#6ee7b7}
+.msg.err{background:#7f1d1d;color:#fca5a5}
+fieldset{border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:16px}
+legend{font-size:13px;font-weight:600;color:var(--muted);padding:0 6px}
+.source-fields{display:none;margin-top:12px;padding-left:24px}
+.source-fields.active{display:block}
+</style>
+</head>
+<body>
+<h2>ATAK Topology Overlay Configuration</h2>
+
+<fieldset>
+  <legend>Position source</legend>
+  <div class="form-group">
+    <label><input type="radio" name="source" value="receiver" checked> This node's own GPS receiver</label>
+  </div>
+  <div class="form-group">
+    <label><input type="radio" name="source" value="manual"> Manual position</label>
+    <div class="source-fields" id="fields-manual">
+      <div class="form-group">
+        <label>Latitude</label>
+        <input id="manual-lat" type="number" step="any" placeholder="52.123456">
+      </div>
+      <div class="form-group">
+        <label>Longitude</label>
+        <input id="manual-lon" type="number" step="any" placeholder="4.654321">
+      </div>
+      <div class="form-group">
+        <label>Altitude (m)</label>
+        <input id="manual-alt" type="number" step="any" placeholder="0">
+      </div>
+    </div>
+  </div>
+  <div class="form-group">
+    <label><input type="radio" name="source" value="eud"> Take over an EUD's own position</label>
+    <div class="source-fields" id="fields-eud">
+      <div class="form-group">
+        <label>EUD CoT UID</label>
+        <input id="eud-uid" type="text" placeholder="ANDROID-xxxxxxxxxxxx">
+        <div class="hint">Find this in the ATAK device's own self-marker (Settings → Device Preferences), or read it off an incoming CoT event from that device.</div>
+      </div>
+    </div>
+  </div>
+</fieldset>
+
+<div class="form-group">
+  <label>Refresh interval (seconds)</label>
+  <input id="interval" type="number" min="5" max="300" placeholder="15">
+  <div class="hint">How often ATAK re-fetches the overlay. Matches the mesh registry's own ~15s gossip tick by default — lower doesn't get you fresher edges.
+  <br><strong>Takes effect on next import, not retroactively:</strong> this value is only written into the Network Link when you download the ATAK package. ATAK reads it once, at import time, and keeps polling on that cadence from then on — it does not come from <code>/topology.kml</code> itself on each fetch. Changing this and restarting the applet does not change the polling rate for a package someone already imported; re-download and re-import in ATAK to apply a new interval.</div>
+</div>
+
+<div class="actions">
+  <button class="btn-save" id="save-btn">Save &amp; Restart</button>
+</div>
+<div id="status-msg"></div>
+
+<script>
+(function() {
+  var appletName = 'atak-overlay';
+  var base = '/api/applets/' + appletName;
+
+  function showSourceFields(source) {
+    document.getElementById('fields-manual').className = 'source-fields' + (source === 'manual' ? ' active' : '');
+    document.getElementById('fields-eud').className = 'source-fields' + (source === 'eud' ? ' active' : '');
+  }
+
+  document.querySelectorAll('input[name="source"]').forEach(function(el) {
+    el.addEventListener('change', function() { showSourceFields(el.value); });
+  });
+
+  function load() {
+    fetch(base + '/config').then(function(r){return r.json()}).then(function(d) {
+      var source = d.gps_source || 'receiver';
+      var radio = document.querySelector('input[name="source"][value="' + source + '"]');
+      if (radio) radio.checked = true;
+      showSourceFields(source);
+      document.getElementById('manual-lat').value = d.manual_lat || '';
+      document.getElementById('manual-lon').value = d.manual_lon || '';
+      document.getElementById('manual-alt').value = d.manual_alt || '';
+      document.getElementById('eud-uid').value = d.eud_uid || '';
+      document.getElementById('interval').value = d.refresh_interval || 15;
+    }).catch(function(){});
+  }
+
+  document.getElementById('save-btn').onclick = function() {
+    var btn = this;
+    btn.disabled = true;
+    var source = document.querySelector('input[name="source"]:checked').value;
+    var body = {
+      GPS_SOURCE: source,
+      MANUAL_LAT: document.getElementById('manual-lat').value.trim() || '0',
+      MANUAL_LON: document.getElementById('manual-lon').value.trim() || '0',
+      MANUAL_ALT: document.getElementById('manual-alt').value.trim() || '0',
+      EUD_UID: document.getElementById('eud-uid').value.trim(),
+      REFRESH_INTERVAL: document.getElementById('interval').value.trim() || '15'
+    };
+    fetch(base + '/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    }).then(function(r){return r.json()}).then(function(d) {
+      var el = document.getElementById('status-msg');
+      if (d.ok) {
+        el.className = 'msg ok';
+        el.textContent = 'Saved. Restarting applet...';
+        fetch(base + '/action', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({action: 'restart'})
+        }).then(function() {
+          setTimeout(function(){ el.textContent = 'Restarted.'; btn.disabled = false; }, 2000);
+        });
+      } else {
+        el.className = 'msg err';
+        el.textContent = d.error || 'Save failed';
+        btn.disabled = false;
+      }
+    }).catch(function(e) {
+      document.getElementById('status-msg').className = 'msg err';
+      document.getElementById('status-msg').textContent = 'Error: ' + e;
+      btn.disabled = false;
+    });
+  };
+
+  load();
+})();
+</script>
+</body>
+</html>
