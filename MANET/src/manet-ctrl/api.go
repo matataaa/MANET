@@ -863,7 +863,11 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 			// wpa_supplicant on it — must run before hostapd is
 			// (re)started so it picks up a config that actually
 			// targets the current AP interface, not a stale one.
-			runCmd(10*time.Second, "manet-wlan-reconcile.sh")
+			if out, err := runCmd(10*time.Second, "manet-wlan-reconcile.sh"); err != nil {
+				log.Printf("manet-wlan-reconcile: %v (%s)", err, strings.TrimSpace(out))
+			} else if strings.TrimSpace(out) != "" {
+				log.Printf("manet-wlan-reconcile: %s", strings.TrimSpace(out))
+			}
 			runCmd(5*time.Second, "systemctl", "enable", "hostapd")
 			runCmd(5*time.Second, "systemctl", "start", "hostapd")
 		} else if eud == "wired" || eud == "none" {
@@ -874,7 +878,11 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 			// and ap-txpower.service still holds its txpower fixed low —
 			// reconcile both now rather than leaving it a non-functional
 			// mesh radio until the node is fully re-provisioned.
-			runCmd(10*time.Second, "manet-wlan-reconcile.sh")
+			if out, err := runCmd(10*time.Second, "manet-wlan-reconcile.sh"); err != nil {
+				log.Printf("manet-wlan-reconcile: %v (%s)", err, strings.TrimSpace(out))
+			} else if strings.TrimSpace(out) != "" {
+				log.Printf("manet-wlan-reconcile: %s", strings.TrimSpace(out))
+			}
 		}
 		applied["eud_mode_applied"] = true
 	}
