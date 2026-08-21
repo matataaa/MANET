@@ -856,7 +856,7 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	// Apply EUD mode changes
 	if updates["eud"] != "" {
 		eud := conf["eud"]
-		if eud == "wireless" || eud == "both" || eud == "auto" {
+		if eudWantsAP(eud) {
 			// The reconcile script itself selects/regenerates the AP
 			// interface (hostapd.conf, ap-interface-setup.service,
 			// ap-txpower.service) and stops any stale mesh
@@ -893,10 +893,15 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		applied["eud_mode_applied"] = true
 	}
 
-	// Apply AP settings
+	// Apply AP settings. Gated on eud actually wanting an AP: the web UI's
+	// Config tab always resends the node's current (unchanged) lan_ap_*
+	// values on every save, not just when the user edited them, so this
+	// would otherwise fire on an eud=wired/none save too -- restarting
+	// hostapd right after the eud block above may have just stopped and
+	// disabled it.
 	apChanged := updates["lan_ap_ssid"] != "" || updates["lan_ap_key"] != "" ||
 		updates["lan_ap_channel"] != "" || updates["lan_ap_bw"] != ""
-	if apChanged {
+	if apChanged && eudWantsAP(conf["eud"]) {
 		applyHostapdConfig(conf)
 		runCmd(10*time.Second, "systemctl", "restart", "hostapd")
 		applied["ap_restarted"] = true
@@ -1804,6 +1809,13 @@ func applyHalowBW(conf map[string]string) {
 	}
 	runCmd(5*time.Second, "systemctl", "daemon-reload")
 	runCmd(10*time.Second, "bash", "-c", "systemctl restart 'wpa_supplicant-s1g-wlan*.service' 2>/dev/null || true")
+}
+
+// eudWantsAP reports whether the given eud= mode requires an AP interface
+// (hostapd running), as opposed to wired/none which only use the mesh
+// radios and must keep hostapd stopped.
+func eudWantsAP(eud string) bool {
+	return eud == "wireless" || eud == "both" || eud == "auto"
 }
 
 func applyHostapdConfig(conf map[string]string) {
