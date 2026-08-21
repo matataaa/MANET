@@ -1,0 +1,12 @@
+# ATAK Topology Overlay applet configuration
+# Where this node's own position comes from: receiver | manual | eud
+GPS_SOURCE=receiver
+# Used when GPS_SOURCE=manual
+MANUAL_LAT=0
+MANUAL_LON=0
+MANUAL_ALT=0
+# Used when GPS_SOURCE=eud — CoT uid of the EUD whose own position report
+# this node should adopt as its own (find it in ATAK's device settings)
+EUD_UID=
+# How often ATAK re-fetches the overlay, in seconds
+REFRESH_INTERVAL=15

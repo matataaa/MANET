@@ -51,6 +51,7 @@ find "$STAGE/usr/local/bin" -type f \
 
 # Cross-compile Go services for arm64
 GO_SERVICES=(
+    atak-overlay
     battery-reader
     cot-emitter
     gateway-manager
