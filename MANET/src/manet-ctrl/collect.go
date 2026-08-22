@@ -694,9 +694,33 @@ func getInterfaces() []Iface {
 			iface.Role = "bat"
 			iface.Health = "info"
 			iface.Detail = "batman-adv virtual interface"
-			if state == "DOWN" {
+			// bat0's kernel operstate is always "unknown" — batman-adv
+			// never wires up carrier detection on the virtual device — so
+			// showing the raw operstate as the badge is meaningless (it
+			// reads "UNKNOWN" whether the mesh is fully healthy or has no
+			// slaves at all). Derive a real state from batctl's slave list
+			// instead: how many mesh radios are actually enslaved and active.
+			activeSlaves := 0
+			for _, s := range batSlaves {
+				if s == "active" {
+					activeSlaves++
+				}
+			}
+			switch {
+			case state == "DOWN":
 				iface.Health = "fault"
 				iface.Faults = append(iface.Faults, "Interface is DOWN")
+				iface.State = "DOWN"
+			case len(batSlaves) == 0:
+				iface.Health = "fault"
+				iface.Faults = append(iface.Faults, "No mesh interfaces enslaved")
+				iface.State = "NO SLAVES"
+			case activeSlaves == 0:
+				iface.Health = "warn"
+				iface.Faults = append(iface.Faults, "No active mesh slaves")
+				iface.State = "DEGRADED"
+			default:
+				iface.State = "ACTIVE"
 			}
 		case name == "br0":
 			iface.Role = "bridge"
@@ -1360,6 +1384,7 @@ func getGPS(regNode RegistryNode) GPS {
 	// be up and reporting (connected) with no fix yet, and that state must
 	// survive into the registry-fallback return too, not just the have-fix one.
 	connected := false
+	source := ""
 	data, err := os.ReadFile(GPSStatusFile)
 	if err == nil {
 		var g struct {
@@ -1367,16 +1392,19 @@ func getGPS(regNode RegistryNode) GPS {
 			Lat       float64 `json:"latitude"`
 			Lon       float64 `json:"longitude"`
 			Alt       float64 `json:"altitude"`
+			Source    string  `json:"source"`
 			Timestamp int64   `json:"timestamp"`
 		}
 		if json.Unmarshal(data, &g) == nil {
 			if g.Timestamp > 0 && time.Now().Unix()-g.Timestamp < 30 {
 				connected = true
 			}
+			source = g.Source
 			if g.HasFix {
 				return GPS{
 					Available: true,
 					Connected: connected,
+					Source:    source,
 					Lat:       fmt.Sprintf("%f", g.Lat),
 					Lon:       fmt.Sprintf("%f", g.Lon),
 					Alt:       fmt.Sprintf("%f", g.Alt),
@@ -1386,6 +1414,7 @@ func getGPS(regNode RegistryNode) GPS {
 	}
 	gps := registryGPS(regNode)
 	gps.Connected = connected
+	gps.Source = source
 	return gps
 }
 

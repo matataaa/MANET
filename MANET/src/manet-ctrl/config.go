@@ -120,6 +120,7 @@ type EUD struct {
 type GPS struct {
 	Available bool   `json:"available"`
 	Connected bool   `json:"connected"`
+	Source    string `json:"source,omitempty"`
 	Lat       string `json:"lat"`
 	Lon       string `json:"lon"`
 	Alt       string `json:"alt"`

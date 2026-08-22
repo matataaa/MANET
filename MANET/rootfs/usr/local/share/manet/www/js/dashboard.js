@@ -142,6 +142,12 @@ function renderDashNetwork() {
   wrap.innerHTML = '<div class="card"><div class="card-header">NETWORK</div>' + rows.join('') + '</div>';
 }
 
+function gpsSourceTag(source) {
+  if (source === 'static') return '<span class="dash-daemon-tag" title="Fixed position from mesh.conf (gps_source=static)">ST</span>';
+  if (source === 'receiver') return '<span class="dash-daemon-tag" title="Live hardware GPS receiver via gpsd">RC</span>';
+  return '';
+}
+
 function renderDashDaemons() {
   var wrap = document.getElementById('dash-daemons-wrap');
   if (!wrap) return;
@@ -150,6 +156,7 @@ function renderDashDaemons() {
     var items = [];
 
     var g = d.gps;
+    var gpsSrc = gpsSourceTag(g && g.source);
     if (g && g.available) {
       var gpsVal = g.has_fix
         ? Number(g.latitude).toFixed(4) + ', ' + Number(g.longitude).toFixed(4)
@@ -157,7 +164,7 @@ function renderDashDaemons() {
       var gpsDot = g.has_fix ? 'on' : 'off';
       items.push('<div class="dash-daemon-row"><span class="voice-dot ' + gpsDot + '"></span>' +
         '<span class="dash-daemon-name">GPS</span>' +
-        '<span class="dash-daemon-val">' + gpsVal + '</span></div>');
+        '<span class="dash-daemon-val">' + gpsVal + gpsSrc + '</span></div>');
     }
 
     var b = d.battery;
@@ -172,7 +179,7 @@ function renderDashDaemons() {
 
     var c = d.cot_emitter;
     if (c && c.available && c.running) {
-      var gpsPart = c.gps_fix ? 'GPS OK' : 'No GPS';
+      var gpsPart = c.gps_fix ? 'GPS OK' + gpsSrc : 'No GPS';
       var eudPart = c.unicast_targets + ' EUD' + (c.unicast_targets !== 1 ? 's' : '');
       var relayPart = c.relay_received > 0 ? ' &middot; ' + c.relay_forwarded + ' relayed' : '';
       var sentPart = c.total_sent > 0 ? ' &middot; ' + c.total_sent + ' sent' : '';
