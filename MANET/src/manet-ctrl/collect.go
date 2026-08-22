@@ -173,7 +173,7 @@ func round1(x float64) float64 { return math.Round(x*10) / 10 }
 // buildLinkBudget converts raw station stats into a link-budget view. The
 // morse driver presents S1G as a 5 GHz alias: reported bitrates are 20x the
 // real over-the-air rate, so divide when the interface is HaLow.
-func buildLinkBudget(st *StationLink, iface, halowBW string) map[string]interface{} {
+func buildLinkBudget(st *StationLink, iface, halowBW string, batTPMbps float64) map[string]interface{} {
 	isHalow := halowBW != "" && iface == "wlan2"
 	scale := 1.0
 	if isHalow {
@@ -195,6 +195,18 @@ func buildLinkBudget(st *StationLink, iface, halowBW string) map[string]interfac
 		// after the /20 above — "expected throughput" already reads
 		// ~7.5Mbps raw, not ~150Mbps). Use it as-is.
 		m["expected_mbps"] = round1(st.ExpectedMbps)
+		m["expected_source"] = "driver"
+	} else if batTPMbps > 0 {
+		// mt7915e (WiFi mesh) doesn't report "expected throughput" to
+		// mac80211 at all, so there's no driver figure to fall back on.
+		// batman-adv's own BATMAN_V throughput metric (same probe-derived
+		// number shown in Topology) is the next best thing — live-tested
+		// against real iperf3 on a wlan1 link and found to sit ~40-45%
+		// below actual achieved TCP throughput, i.e. a conservative
+		// estimate rather than an inflated one. Tag the source so the UI
+		// can flag it as an estimate instead of implying a driver reading.
+		m["expected_mbps"] = round1(batTPMbps)
+		m["expected_source"] = "batman"
 	}
 	if st.TxPackets > 0 {
 		m["retry_pct"] = round1(float64(st.TxRetries) * 100 / float64(st.TxPackets))
@@ -279,8 +291,12 @@ func runBatctlNeighbors() []BatNeighbor {
 			continue
 		}
 		raw, _ := strconv.ParseFloat(m[3], 64)
+		var rawTP float64
+		if isBatmanV() {
+			rawTP = raw
+		}
 		neighbors = append(neighbors, BatNeighbor{
-			Iface: m[4], MAC: normMAC(m[1]), TQ: normTQ(raw), LastSeen: lastSeen,
+			Iface: m[4], MAC: normMAC(m[1]), TQ: normTQ(raw), RawTP: rawTP, LastSeen: lastSeen,
 		})
 	}
 	return neighbors

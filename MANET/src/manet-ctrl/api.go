@@ -426,9 +426,10 @@ func apiRegistry(w http.ResponseWriter, r *http.Request) {
 }
 
 func apiMesh(w http.ResponseWriter, r *http.Request) {
-	_, origMap := runBatctlOriginators()
-	neighbors := runBatctlNeighbors()
-	gateways := runBatctlGateways()
+	snap := cachedBatmanSnapshot()
+	origMap := snap.OrigMap
+	neighbors := snap.Neighbors
+	gateways := snap.Gateways
 	conf := loadKVFile(MeshConfFile)
 	macInfo := meshMACLookup()
 
@@ -500,7 +501,7 @@ func apiMesh(w http.ResponseWriter, r *http.Request) {
 		entry["iface"] = n.Iface
 		entry["last_seen"] = fmt.Sprintf("%d", now-int64(n.LastSeen))
 		if st, ok := stations[n.MAC]; ok {
-			entry["link"] = buildLinkBudget(st, n.Iface, halowBW)
+			entry["link"] = buildLinkBudget(st, n.Iface, halowBW, n.RawTP)
 		}
 		neighList = append(neighList, entry)
 	}

@@ -22,7 +22,43 @@ var (
 	localCache     *LocalData
 	localCacheTime time.Time
 	localCacheTTL  = 3 * time.Second
+
+	batSnapMu   sync.Mutex
+	batSnap     *batmanSnapshot
+	batSnapTime time.Time
+	batSnapTTL  = 3 * time.Second
 )
+
+// batmanSnapshot is the shared batctl o/n/gwl read used by both the topology
+// graph (assembleStatusData) and the mesh tab (apiMesh). These three calls
+// were the expensive/duplicated part of /api/mesh — it was re-running them
+// fresh on every request even though the topology cache above was already
+// polling the exact same tables every 3s. Sharing one cache means an
+// uncoordinated mesh-tab refresh can no longer double the batctl load.
+type batmanSnapshot struct {
+	TQMap     map[string]int
+	OrigMap   map[string]BatOriginator
+	Neighbors []BatNeighbor
+	Gateways  []BatGateway
+}
+
+func cachedBatmanSnapshot() batmanSnapshot {
+	batSnapMu.Lock()
+	defer batSnapMu.Unlock()
+	if batSnap != nil && time.Since(batSnapTime) < batSnapTTL {
+		return *batSnap
+	}
+	tqMap, origMap := runBatctlOriginators()
+	snap := batmanSnapshot{
+		TQMap:     tqMap,
+		OrigMap:   origMap,
+		Neighbors: runBatctlNeighbors(),
+		Gateways:  runBatctlGateways(),
+	}
+	batSnap = &snap
+	batSnapTime = time.Now()
+	return snap
+}
 
 func cachedStatusData() StatusData {
 	statusCacheMu.Lock()
@@ -124,9 +160,10 @@ func assembleStatusData() StatusData {
 	myHostname := getMyHostname()
 	myBattery := getBattery()
 
-	tqMap, origMap := runBatctlOriginators()
-	neighbors := runBatctlNeighbors()
-	gateways := runBatctlGateways()
+	snap := cachedBatmanSnapshot()
+	tqMap, origMap := snap.TQMap, snap.OrigMap
+	neighbors := snap.Neighbors
+	gateways := snap.Gateways
 	nowTS := fmt.Sprintf("%d", time.Now().Unix())
 
 	// Build neighbor MAC set for direct detection

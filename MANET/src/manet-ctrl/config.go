@@ -207,6 +207,7 @@ type BatNeighbor struct {
 	Iface    string  `json:"iface"`
 	MAC      string  `json:"mac"`
 	TQ       int     `json:"tq"`
+	RawTP    float64 `json:"-"`
 	LastSeen float64 `json:"-"`
 }
 

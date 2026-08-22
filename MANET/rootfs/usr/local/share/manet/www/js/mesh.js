@@ -116,7 +116,14 @@ function meshRender() {
       html += '<td>' + L.signal + ' dBm</td>';
       html += '<td>' + (L.mcs >= 0 ? 'MCS ' + L.mcs : '--') + '</td>';
       html += '<td>' + (L.phy_mbps ? L.phy_mbps.toFixed(1) + ' Mbps' : '--') + '</td>';
-      html += '<td>' + (L.expected_mbps ? L.expected_mbps.toFixed(1) + ' Mbps' : '--') + '</td>';
+      var realRateHtml = '--';
+      if (L.expected_mbps) {
+        realRateHtml = L.expected_mbps.toFixed(1) + ' Mbps';
+        if (L.expected_source === 'batman') {
+          realRateHtml += ' <span class="badge badge-tq-none" title="Estimated from batman-adv\'s routing throughput metric, not a driver-measured rate. Live-tested against real throughput and found conservative (real rate ran ~40-70% higher on a WiFi mesh link).">est.</span>';
+        }
+      }
+      html += '<td>' + realRateHtml + '</td>';
       html += '<td>' + (L.floor != null ? L.floor + ' dBm' : '--') + '</td>';
       html += '<td>' + marginHtml + '</td>';
       html += '<td>' + retryHtml + '</td></tr>';
