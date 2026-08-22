@@ -259,6 +259,27 @@ function updateHeader() {
   document.getElementById('hdr-nodes').textContent = onlineNodes + '/' + totalNodes + ' nodes';
   document.getElementById('hdr-time').textContent = DATA.timestamp ? ts(DATA.timestamp) : '--';
 
+  // Battery — only shown when battery monitoring is actually active
+  // (LOCAL_DATA.battery is null unless a status file or a real
+  // /sys/class/power_supply battery device was found).
+  const battEl = document.getElementById('hdr-battery');
+  if (battEl) {
+    const b = LOCAL_DATA.battery;
+    if (b && b.percentage != null) {
+      const pct = b.percentage;
+      const color = pct > 50 ? 'var(--good)' : pct > 20 ? 'var(--warn)' : 'var(--bad)';
+      battEl.style.display = '';
+      battEl.style.color = color;
+      battEl.textContent = (b.charging ? '⚡' : '') + pct + '%';
+      let title = 'Battery';
+      if (b.status && b.status !== 'unknown') title += ' — ' + b.status;
+      if (b.voltage_v != null) title += ' · ' + Number(b.voltage_v).toFixed(2) + 'V';
+      battEl.title = title;
+    } else {
+      battEl.style.display = 'none';
+    }
+  }
+
   // Health
   const hdr = document.getElementById('hdr-health');
   const dot = document.getElementById('hdr-health-dot');

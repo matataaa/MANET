@@ -105,8 +105,9 @@ function hwRenderIfaces() {
 
   el.innerHTML = ifaces.map(function(i) {
     var dot = i.health === 'ok' ? 'dot-ok' : i.health === 'fault' ? 'dot-bad' : i.health === 'warn' ? 'dot-warn' : 'dot-info';
-    var badge = i.state === 'UP' ? '<span class="hw-badge hw-badge-up">UP</span>' :
+    var badge = (i.state === 'UP' || i.state === 'ACTIVE') ? '<span class="hw-badge hw-badge-up">' + escHtml(i.state) + '</span>' :
                 i.state === 'UNKNOWN' ? '<span class="hw-badge hw-badge-unknown">UNKNOWN</span>' :
+                i.state === 'DEGRADED' ? '<span class="hw-badge hw-badge-warn">DEGRADED</span>' :
                 '<span class="hw-badge hw-badge-down">' + escHtml(i.state || '?') + '</span>';
     var rows = hwRow('Role', hwRoleLabel(i.role));
     if (i.addrs && i.addrs.length) rows += hwRow('Addresses', i.addrs.map(escHtml).join('<br>'));
@@ -128,7 +129,11 @@ function hwRenderGPS() {
               connected ? '<span class="hw-badge hw-badge-down">NO FIX</span>' :
               '<span class="hw-badge hw-badge-down">OFFLINE</span>';
 
+  var sourceLabel = gps && gps.source === 'static' ? 'Static (fixed position)' :
+                     gps && gps.source === 'receiver' ? 'Receiver (gpsd)' : '';
+
   var rows = '';
+  if (sourceLabel) rows += hwRow('Source', sourceLabel);
   if (hasFix) {
     rows += hwRow('Latitude', gps.lat || '--');
     rows += hwRow('Longitude', gps.lon || '--');

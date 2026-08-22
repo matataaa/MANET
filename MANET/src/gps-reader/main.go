@@ -59,7 +59,11 @@ type gpsStatus struct {
 	Longitude float64 `json:"longitude"`
 	Altitude  float64 `json:"altitude"`
 	HDOP      float64 `json:"hdop"`
-	Timestamp int64   `json:"timestamp"`
+	// Source is "static" (gps_source=static in mesh.conf) or "receiver"
+	// (real gpsd-backed hardware) — surfaced in the UI so a fixed position
+	// isn't mistaken for a live GPS lock.
+	Source    string `json:"source"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 type tpvMessage struct {
@@ -142,12 +146,13 @@ func main() {
 				Longitude: parseFloatDefault(conf["gps_static_lon"]),
 				Altitude:  parseFloatDefault(conf["gps_static_alt"]),
 				HDOP:      staticHDOP,
+				Source:    "static",
 				Timestamp: time.Now().Unix(),
 			})
 		} else {
 			tpv := queryGPSD()
 			if tpv == nil {
-				writeStatus(gpsStatus{HDOP: 99.9, Timestamp: time.Now().Unix()})
+				writeStatus(gpsStatus{HDOP: 99.9, Source: "receiver", Timestamp: time.Now().Unix()})
 			} else {
 				hasFix := tpv.Mode >= 2
 				hdop := tpv.HDOP
@@ -157,6 +162,7 @@ func main() {
 				s := gpsStatus{
 					HasFix:    hasFix,
 					HDOP:      hdop,
+					Source:    "receiver",
 					Timestamp: time.Now().Unix(),
 				}
 				if hasFix {
