@@ -355,6 +355,16 @@ reconcile() {
         return 0
     fi
 
+    # Nothing to demote: never promoted (or a prior demote already cleared
+    # all gateway state). Without this, every mesh-only node — anything with
+    # no Ethernet/USB uplink — falls through to demote_gateway on every call,
+    # and node-manager's gatewayReconcile() calls reconcile() unconditionally
+    # on its own ~60-75s timer forever, restarting radvd/mesh-manager/
+    # gateway-manager for no reason each time.
+    if [ -z "$current" ] && [ ! -f "$LEGACY_GATEWAY_STATE" ]; then
+        return 0
+    fi
+
     demote_gateway "$current"
 }
 
