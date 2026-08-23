@@ -322,6 +322,141 @@ func apiAdminStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, assembleAdminStatus())
 }
 
+// apiUpdateStatus returns node-update's own status file verbatim — the
+// software/overlay detect results and current uplink reading it writes on
+// every check cycle, regardless of whether auto_update is enabled.
+func apiUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile(UpdateStatusFile)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{
+			"software":    map[string]interface{}{"available": false},
+			"overlay":     map[string]interface{}{"available": false},
+			"uplink_mbps": 0,
+			"uplink_type": "unknown",
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(data)
+}
+
+// apiUpdateNow triggers a manual, deliberate update on this node — the
+// UI has already shown the operator the bandwidth warning before calling
+// this. Writes the trigger file node-update's SIGUSR1 handler reads, then
+// signals it directly (systemctl reload is already used for SIGHUP/recheck,
+// so this is a distinct signal rather than overloading that path).
+func apiUpdateNow(w http.ResponseWriter, r *http.Request) {
+	body := readBody(r)
+	channel := jsonStr(body, "channel", "")
+	if channel != "software" && channel != "overlay" && channel != "both" {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, or both"})
+		return
+	}
+	if err := os.WriteFile(UpdateTriggerFile, []byte(channel), 0644); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+	if _, err := runCmd(5*time.Second, "pkill", "-USR1", "-x", "node-update"); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to signal node-update: " + err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
+// apiForceUpdate broadcasts a fleet-wide update trigger — every node picks
+// it up within one Alfred poll cycle (~10s) and applies via the same local
+// mechanism as a manual per-node "Update Now" (see fleet.go,
+// fleetProcessUpdatePackage), bypassing each node's bandwidth gate the same
+// way a manual trigger does. The Fleet Control UI has already shown the
+// aggregate bandwidth warning before calling this.
+func apiForceUpdate(w http.ResponseWriter, r *http.Request) {
+	body := readBody(r)
+	channel := jsonStr(body, "channel", "")
+	if channel != "software" && channel != "overlay" && channel != "both" {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, or both"})
+		return
+	}
+	if !broadcastUpdatePackage(channel) {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to broadcast update trigger"})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
+// Peer's plain HTTP port only ever redirects to HTTPS (see main.go), and
+// every node's cert is self-signed — HTTPS + peerTLSConfig is the pattern
+// already used for peer-to-peer calls elsewhere (see peerProxyRequest).
+func getPeerUpdateStatus(peerIP string, timeout time.Duration) map[string]interface{} {
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: &http.Transport{TLSClientConfig: peerTLSConfig},
+	}
+	resp, err := client.Get(fmt.Sprintf("https://%s/api/admin/update-status", peerIP))
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+	var result map[string]interface{}
+	json.Unmarshal(body, &result)
+	return result
+}
+
+// apiUpdateSummary aggregates every fleet node's update-status (including
+// this one) for the Fleet Control "N of M nodes have an update available"
+// banner. Read-only, fanned out in parallel with a short per-node timeout
+// so one unreachable node can't stall the whole response.
+func apiUpdateSummary(w http.ResponseWriter, r *http.Request) {
+	registry := parseRegistry()
+	myMAC := getMyMAC()
+
+	type nodeSummary struct {
+		Hostname string      `json:"hostname"`
+		IP       string      `json:"ip"`
+		Status   interface{} `json:"status"`
+		Reached  bool        `json:"reached"`
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	nodes := make([]nodeSummary, 0, len(registry))
+
+	for _, rn := range registry {
+		rn := rn
+		ip := rn["IPV4_ADDRESS"]
+		hostname := rn["HOSTNAME"]
+		isMe := normMAC(rn["MAC_ADDRESS"]) == myMAC
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var status map[string]interface{}
+			reached := false
+			if isMe {
+				data, err := os.ReadFile(UpdateStatusFile)
+				if err == nil && json.Unmarshal(data, &status) == nil {
+					reached = true
+				}
+			} else if ip != "" {
+				if s := getPeerUpdateStatus(ip, 3*time.Second); s != nil {
+					status = s
+					reached = true
+				}
+			}
+			mu.Lock()
+			nodes = append(nodes, nodeSummary{Hostname: hostname, IP: ip, Status: status, Reached: reached})
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	writeJSON(w, 200, map[string]interface{}{"nodes": nodes})
+}
+
 func apiFleetPreferences(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		writeJSON(w, 200, loadFleetPreferences())
@@ -780,7 +915,7 @@ var saveableKeys = map[string]bool{
 	"dns_servers": true,
 	"eud_bandwidth": true,
 	"qos_enabled": true, "qos_voice_band": true, "qos_cot_band": true, "qos_chat_band": true,
-	"auto_update": true, "update_url": true,
+	"auto_update": true, "update_url": true, "auto_update_overlay": true, "auto_update_min_mbps": true,
 	"gps": true, "gps_source": true, "gps_static_lat": true, "gps_static_lon": true, "gps_static_alt": true,
 	"callsign": true, "cot_type": true, "cot_team": true, "cot_role": true, "cot_icon": true,
 }
@@ -1028,7 +1163,7 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		applied["qos_applied"] = true
 	}
 
-	if updates["auto_update"] != "" || updates["update_url"] != "" {
+	if updates["auto_update"] != "" || updates["update_url"] != "" || updates["auto_update_overlay"] != "" || updates["auto_update_min_mbps"] != "" {
 		runCmd(5*time.Second, "systemctl", "reload", "node-update")
 		applied["node_update_reloaded"] = true
 	}

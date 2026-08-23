@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ func fleetConfigWatcher() {
 		time.Sleep(10 * time.Second)
 		fleetPollAlfred()
 		fleetCheckActivation()
+		fleetPollUpdateAlfred()
 	}
 }
 
@@ -164,12 +166,19 @@ func fleetPollAlfred() {
 	if err != nil || len(out) == 0 {
 		return
 	}
+	if best := parseAlfredBest(out, getMyMAC(), "staged_at"); best != nil {
+		fleetProcessPackage(best)
+	}
+}
 
-	// Alfred output has one line per node: { "mac", "json_payload" },
-	// Parse all entries and process the most recently staged one
-	myMAC := getMyMAC()
+// parseAlfredBest scans `alfred -r <slot>` output — one line per node:
+// { "mac", "json_payload" } — and returns the raw JSON payload with the
+// largest value of tsField, skipping this node's own entry. Shared by the
+// config-push and update-trigger watchers, which differ only in which
+// timestamp field orders "most recent."
+func parseAlfredBest(out []byte, myMAC, tsField string) []byte {
 	var best []byte
-	var bestStaged int64
+	var bestTS int64
 
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
@@ -196,16 +205,74 @@ func fleetPollAlfred() {
 		if json.Unmarshal([]byte(raw), &pkg) != nil {
 			continue
 		}
-		stagedAt, _ := pkg["staged_at"].(float64)
-		if int64(stagedAt) > bestStaged {
-			bestStaged = int64(stagedAt)
+		ts, _ := pkg[tsField].(float64)
+		if int64(ts) > bestTS {
+			bestTS = int64(ts)
 			best = []byte(raw)
 		}
 	}
+	return best
+}
 
-	if best != nil {
-		fleetProcessPackage(best)
+// broadcastUpdatePackage pushes a fleet-wide "force update" command via the
+// same Alfred gossip mechanism config-push already uses, on a separate slot
+// so the two package schemas never collide.
+func broadcastUpdatePackage(channel string) bool {
+	pkg := map[string]interface{}{
+		"channel":      channel,
+		"triggered_at": time.Now().Unix(),
 	}
+	data, err := json.Marshal(pkg)
+	if err != nil {
+		return false
+	}
+	cmd := exec.Command("alfred", "-s", "71")
+	cmd.Stdin = strings.NewReader(string(data))
+	return cmd.Run() == nil
+}
+
+func fleetPollUpdateAlfred() {
+	out, err := exec.Command("/usr/sbin/alfred", "-r", "71").Output()
+	if err != nil || len(out) == 0 {
+		return
+	}
+	if best := parseAlfredBest(out, getMyMAC(), "triggered_at"); best != nil {
+		fleetProcessUpdatePackage(best)
+	}
+}
+
+// fleetProcessUpdatePackage applies a fleet-wide update trigger locally via
+// the same trigger-file + SIGUSR1 mechanism the per-node manual "Update Now"
+// endpoint already uses — no separate apply path to maintain. Alfred is a
+// repeating gossip store, so the same package keeps being read on every 10s
+// poll; FleetUpdateAckFile records the last triggered_at already acted on
+// so a node doesn't re-download/re-reboot for a trigger it already applied.
+func fleetProcessUpdatePackage(data []byte) {
+	var pkg map[string]interface{}
+	if json.Unmarshal(data, &pkg) != nil {
+		return
+	}
+	triggeredAt, _ := pkg["triggered_at"].(float64)
+	channel, _ := pkg["channel"].(string)
+	if triggeredAt <= 0 || (channel != "software" && channel != "overlay" && channel != "both") {
+		return
+	}
+
+	existing, _ := os.ReadFile(FleetUpdateAckFile)
+	if last, err := strconv.ParseInt(strings.TrimSpace(string(existing)), 10, 64); err == nil && last >= int64(triggeredAt) {
+		return
+	}
+
+	log.Printf("fleet: update trigger received (channel=%s, triggered_at=%d)", channel, int64(triggeredAt))
+	if err := os.WriteFile(UpdateTriggerFile, []byte(channel), 0644); err != nil {
+		log.Printf("fleet: failed to write update trigger: %v", err)
+		return
+	}
+	if _, err := runCmd(5*time.Second, "pkill", "-USR1", "-x", "node-update"); err != nil {
+		log.Printf("fleet: failed to signal node-update: %v", err)
+		return
+	}
+	os.WriteFile(FleetUpdateAckFile, []byte(strconv.FormatInt(int64(triggeredAt), 10)), 0644)
 }
 
 func fleetProcessPackage(data []byte) {

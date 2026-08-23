@@ -3,6 +3,7 @@ let configInitialized = false;
 let configEditing = false;
 let configData = null;
 let configVoiceData = null;
+let configUpdateStatus = null;
 let configTarget = null;
 
 function configBaseUrl() {
@@ -61,6 +62,10 @@ async function configFetch() {
       const voiceR = await fetch(base + '/api/voice');
       configVoiceData = await voiceR.json();
     } catch(e) { configVoiceData = null; }
+    try {
+      const updR = await fetch(base + '/api/admin/update-status');
+      configUpdateStatus = await updR.json();
+    } catch(e) { configUpdateStatus = null; }
     configRender();
   } catch(e) {
     document.getElementById('cfg-content').innerHTML =
@@ -104,6 +109,8 @@ function configRenderView(panel, cfg) {
       { label: 'Battery Monitor', key: 'battery_monitor', yesno: true },
       { label: 'Auto Update', key: 'auto_update', yesno: true },
       { label: 'Update URL', key: 'update_url' },
+      { label: 'Auto Update Overlay', key: 'auto_update_overlay', yesno: true },
+      { label: 'Auto Update Min Bandwidth', key: 'auto_update_min_mbps', fmt: function(v) { return (v || '10') + ' Mbit'; } },
     ]},
     { title: 'GPS / CoT', fields: [
       { label: 'GPS Enabled', key: 'gps', fmt: function(v) { return (v||'').toLowerCase() === 'n' ? 'Disabled' : 'Enabled'; } },
@@ -154,6 +161,8 @@ function configRenderView(panel, cfg) {
 
   let html = '<div>';
 
+  html += configRenderUpdateBanner(cfg);
+
   sections.forEach(sec => {
     html += '<div class="card cfg-section"><div class="cfg-section-title">' + sec.title + '</div>';
     sec.fields.forEach(f => {
@@ -192,8 +201,87 @@ function configRenderView(panel, cfg) {
     configEditing = true;
     configRender();
   });
+  var updateNowBtn = document.getElementById('cfg-update-now-btn');
+  if (updateNowBtn) updateNowBtn.addEventListener('click', configUpdateNow);
 
   qosFetch();
+}
+
+// Persistent "update available" banner — reuses the same sticky-bar visual
+// language fleet.js uses for its staged-config banner, since this needs to
+// persist until acted on rather than auto-dismiss like a notify() toast.
+function configRenderUpdateBanner(cfg) {
+  var st = configUpdateStatus;
+  if (!st) return '';
+  var swAvail = st.software && st.software.available;
+  var ovAvail = st.overlay && st.overlay.available;
+  if (!swAvail && !ovAvail) return '';
+
+  var parts = [];
+  if (swAvail) parts.push('software v' + escHtml(st.software.local) + ' → v' + escHtml(st.software.remote));
+  if (ovAvail) parts.push('overlay v' + escHtml(st.overlay.local) + ' → v' + escHtml(st.overlay.remote));
+
+  var html = '<div class="fleet-pending">';
+  html += '<div class="fleet-pending-head"><div class="fleet-pending-title">Update Available</div></div>';
+  html += '<div class="fleet-pending-meta">' + parts.join(' &middot; ') + '</div>';
+  html += '<div class="fleet-actions"><button class="fleet-btn fleet-btn-primary" id="cfg-update-now-btn">Update Now</button></div>';
+  html += '</div>';
+  return html;
+}
+
+// Minimal confirm-bar, mirroring fleetConfirm() in fleet.js but scoped to
+// #cfg-content — kept local rather than depending on fleet.js being loaded.
+function configConfirm(msg, opts, onConfirm) {
+  var panel = document.getElementById('cfg-content');
+  var existing = panel.querySelector('.fleet-confirm-bar');
+  if (existing) existing.remove();
+  var bar = document.createElement('div');
+  bar.className = 'fleet-confirm-bar' + (opts.danger ? ' fleet-confirm-danger' : '');
+  bar.innerHTML = '<div class="fleet-confirm-msg">' + msg + '</div>' +
+    '<div class="fleet-confirm-actions">' +
+    '<button class="fleet-btn ' + (opts.danger ? 'fleet-btn-danger' : 'fleet-btn-primary') + ' fleet-confirm-yes">' +
+    escHtml(opts.label || 'Confirm') + '</button>' +
+    '<button class="fleet-btn fleet-btn-cancel fleet-confirm-no">Cancel</button>' +
+    '</div>';
+  panel.insertBefore(bar, panel.firstChild);
+  bar.querySelector('.fleet-confirm-yes').onclick = function() { bar.remove(); onConfirm(); };
+  bar.querySelector('.fleet-confirm-no').onclick = function() { bar.remove(); };
+  bar.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function configUpdateNow() {
+  var st = configUpdateStatus || {};
+  var channel = (st.software && st.software.available && st.overlay && st.overlay.available) ? 'both' :
+    (st.overlay && st.overlay.available) ? 'overlay' : 'software';
+
+  var mbps = st.uplink_mbps || 0;
+  var uplinkType = st.uplink_type || 'unknown';
+  var minMbps = parseFloat((configData && configData.current_config && configData.current_config.auto_update_min_mbps) || '10');
+  var belowThreshold = uplinkType !== 'wired' && mbps < minMbps;
+
+  var msg = 'Update now? This downloads the update and reboots this node once applied.';
+  if (channel === 'overlay' || channel === 'both') {
+    msg += ' The overlay channel updates kernel/firmware — there is no rollback if it fails to boot.';
+  }
+  if (belowThreshold) {
+    msg = '⚠ Current link is ' + mbps.toFixed(1) + ' Mbps (' + uplinkType + '), below the ' + minMbps +
+      ' Mbps recommended for auto-update. This may take a long time and could disrupt mesh connectivity. ' +
+      'Consider using a higher-bandwidth connection (Ethernet, WiFi mesh, or 8MHz HaLow) if available. ' + msg;
+  }
+
+  configConfirm(msg, { label: 'Update Now', danger: belowThreshold || channel !== 'software' }, async function() {
+    try {
+      var r = await fetch(configBaseUrl() + '/api/admin/update-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: channel })
+      });
+      if (!r.ok) throw new Error('request failed');
+      notify('Update', 'Update triggered', { type: 'success' });
+    } catch(e) {
+      notify('Update', 'Failed to trigger update', { type: 'error' });
+    }
+  });
 }
 
 function configRenderEdit(panel, cfg) {
@@ -257,8 +345,10 @@ function configRenderEdit(panel, cfg) {
     ], hint: 'Per-device symmetric bandwidth limit for connected EUDs' },
     { section: 'Services' },
     { label: 'Battery Monitor', key: 'battery_monitor', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
-    { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Trigger update check when internet is detected' },
+    { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Checks for a new release every 6h, and immediately when this setting is saved' },
     { label: 'Update URL', key: 'update_url', type: 'text', hint: 'Base URL for OTA tarball server (blank = disabled)' },
+    { label: 'Auto Update Overlay (kernel/firmware)', key: 'auto_update_overlay', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Updates the kernel/modules/firmware. No rollback if a bad overlay fails to boot — test on one node before enabling fleet-wide. Off by default.' },
+    { label: 'Auto Update Min Bandwidth (Mbit)', key: 'auto_update_min_mbps', type: 'text', hint: 'Automatic apply is skipped below this link speed. Manual "Update Now" and fleet-wide force update ignore it (with a warning).' },
     { section: 'Gateway' },
     { label: 'Gateway Enabled', key: 'gateway', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}], hint: 'Allow this node to act as a mesh gateway' },
     { label: 'NAT Masquerade', key: 'gateway_nat', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
@@ -406,7 +496,7 @@ async function configSave() {
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','eud_bandwidth','mesh_ssid','mesh_key',
     'ipv4_network','regulatory_domain','halow_bw','multicast_mode','battery_monitor','admin_password','require_auth',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
-    'auto_update','update_url',
+    'auto_update','update_url','auto_update_overlay','auto_update_min_mbps',
     'gps','gps_source','gps_static_lat','gps_static_lon','gps_static_alt','callsign','cot_type','cot_team','cot_role','cot_icon',
     'voice_mic_volume','voice_speaker_volume','voice_channel',
     'voice_beep_tx_start','voice_beep_rx_end','voice_gain','voice_enabled'];

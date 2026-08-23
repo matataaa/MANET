@@ -313,7 +313,13 @@ func runBatctlGateways() []BatGateway {
 		if line == "" || strings.HasPrefix(line, "Gateway") || !macRE.MatchString(line) {
 			continue
 		}
-		selected := strings.HasPrefix(line, "=>")
+		// batctl marks the selected gateway with a leading "*" — same
+		// convention already handled for the originator table (origRE's
+		// optional leading group). Previously checked for "=>", which this
+		// batctl version (2025.4) doesn't emit, so Selected was always
+		// false and every gate/uplink computation that depends on it
+		// silently fell back to "no gateway found".
+		selected := strings.HasPrefix(line, "*")
 		mac := macRE.FindString(line)
 		tq := 0
 		if m := regexp.MustCompile(`\(\s*([\d.]+)\s*\)`).FindStringSubmatch(line); len(m) > 1 {

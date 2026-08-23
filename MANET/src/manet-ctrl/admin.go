@@ -124,6 +124,8 @@ func assembleAdminStatus() AdminStatus {
 		"require_auth":         confGet(conf, "require_auth", "n"),
 		"auto_update":          confGet(conf, "auto_update", "n"),
 		"update_url":           confGet(conf, "update_url", ""),
+		"auto_update_overlay":  confGet(conf, "auto_update_overlay", "n"),
+		"auto_update_min_mbps": confGet(conf, "auto_update_min_mbps", "10"),
 		"eud_bandwidth":        confGet(conf, "eud_bandwidth", "0"),
 		"battery_monitor":      confGet(conf, "battery_monitor", "y"),
 		"voice_beep_tx_start":  confGet(conf, "voice_beep_tx_start", "y"),

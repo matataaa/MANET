@@ -60,6 +60,46 @@ func cachedBatmanSnapshot() batmanSnapshot {
 	return snap
 }
 
+// computeUplink reports this node's current best throughput toward its
+// mesh gateway, for node-update's auto-update bandwidth gate. A node that
+// is itself the selected gateway has no mesh hop in the way — report it as
+// wired with no ceiling, matching the "ethernet always OK" assumption.
+// Otherwise reuse the same batman-adv throughput estimate already computed
+// for the topology "Real Rate" column, for the route toward whichever
+// gateway is currently selected.
+func computeUplink() (mbps float64, uplinkType string) {
+	myMAC := getMyMAC()
+	snap := cachedBatmanSnapshot()
+
+	selectedGW := ""
+	for _, gw := range snap.Gateways {
+		if gw.Selected {
+			selectedGW = gw.MAC
+			break
+		}
+	}
+	if selectedGW == myMAC {
+		return 0, "wired"
+	}
+	// No selected gateway found is NOT the same as "wired, no ceiling" —
+	// that would make the bandwidth gate always pass when we actually have
+	// no idea what the link looks like. Report unknown so callers fail
+	// closed instead.
+	if selectedGW == "" {
+		return 0, "unknown"
+	}
+
+	orig, ok := snap.OrigMap[selectedGW]
+	if !ok || orig.RawTP <= 0 {
+		return 0, "unknown"
+	}
+	uplinkType = "wifi-mesh"
+	if orig.Iface == "wlan2" {
+		uplinkType = "halow-mesh"
+	}
+	return orig.RawTP, uplinkType
+}
+
 func cachedStatusData() StatusData {
 	statusCacheMu.Lock()
 	defer statusCacheMu.Unlock()
@@ -131,6 +171,7 @@ func assembleLocalData() LocalData {
 	gps := getGPS(myReg)
 	throttle := getThrottle()
 	network := getNetworkState()
+	uplinkMbps, uplinkType := computeUplink()
 
 	return LocalData{
 		Hostname:   hostname,
@@ -149,6 +190,8 @@ func assembleLocalData() LocalData {
 		Network:    network,
 		System:     getSystemStats(),
 		Airtime:    currentAirtime(),
+		UplinkMbps: uplinkMbps,
+		UplinkType: uplinkType,
 	}
 }
 

@@ -149,9 +149,12 @@ DOCS_TABS.config = [
 '</tbody></table>',
 
 '<h4>Updates</h4>',
+'<p>The check always runs every 6h (and immediately when Updates settings are saved) regardless of the auto_update flags below — the node records what\'s available and shows an "Update Available" banner either way. The flags only control whether it applies automatically; a deliberate "Update Now" (per node) or "Force Update All Nodes" (Fleet Control) bypasses both the flag and the bandwidth gate.</p>',
 '<table class="docs-table"><thead><tr><th>Key</th><th>Values</th><th>UI</th><th>Description</th></tr></thead><tbody>',
-'<tr><td><code>auto_update</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Trigger OTA update check when ethernet carrier is detected and internet is reachable. Default: <code>n</code>.</td></tr>',
-'<tr><td><code>update_url</code></td><td>URL string</td><td>Yes</td><td>Base URL for the OTA update server. The node fetches <code>{url}/manet_version.txt</code> and <code>{url}/{board}-tools.tar.gz</code>. Leave empty to disable OTA entirely.</td></tr>',
+'<tr><td><code>auto_update</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Apply the software-stack update automatically once detected, if the bandwidth gate (below) passes. The node fetches <code>{url}/manet_release_version.txt</code> and, if newer than the locally installed release, <code>{url}/{board}-tools.tar.gz</code>. Default: <code>n</code>.</td></tr>',
+'<tr><td><code>update_url</code></td><td>URL string</td><td>Yes</td><td>Base URL for the OTA update server, shared by both channels below. Leave empty to disable OTA entirely.</td></tr>',
+'<tr><td><code>auto_update_overlay</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Apply the SBC overlay (kernel/modules/firmware) update automatically — separate from <code>auto_update</code> and off by default. No rollback if a bad overlay fails to boot; test on one node before enabling fleet-wide. Fetches <code>{url}/{board}-overlay-version.txt</code> and, if newer, <code>{url}/{board}-sbc-overlay.tar.gz</code>. Default: <code>n</code>.</td></tr>',
+'<tr><td><code>auto_update_min_mbps</code></td><td>Number</td><td>Yes</td><td>Minimum current link throughput required for <em>automatic</em> apply (either channel) — below this, availability is still recorded but the node waits rather than downloading. A wired/gateway uplink always passes. Manual "Update Now" and fleet-wide force update bypass this (with a warning shown first). Default: <code>10</code>.</td></tr>',
 '</tbody></table>',
 
 '<h4>Security</h4>',
