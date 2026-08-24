@@ -10,7 +10,7 @@ Cross-compile for the target architecture:
 
 ```bash
 # ARM64 (Raspberry Pi)
-cd MANET/applets/mesh-chat
+cd MANET/src/mesh-chat
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o mesh-chat .
 
 # x86_64

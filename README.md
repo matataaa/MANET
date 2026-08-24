@@ -18,7 +18,7 @@ The project transforms a Raspberry Pi CM4, Pi 5, or x86 gateway into a self-form
 * **OTA Updates** — Go-based update service polls for and applies tools tarball updates automatically.
 * **CLI Tool** — `mesh` command with 12+ subcommands for status, node listing, config, radio info, GPS, services, and performance testing.
 
-See [docs/features.md](docs/features.md) for the complete feature list.
+See [MANET/docs/features.md](MANET/docs/features.md) for the complete feature list.
 
 ## Screenshots
 
@@ -114,9 +114,21 @@ The nodes support connecting external devices (End User Devices) in several ways
 This project is a fork of [very-srs/MANET](https://github.com/very-srs/MANET) with additional contributions from [quietprotocol/MANET](https://github.com/quietprotocol/MANET).
 
 ## Documentation
-* [Feature List](docs/features.md)
-* [Node Architecture](docs/node-architecture.md)
-* [Provisioning Guide](MANET/provisioning/README.md)
-* [HaLow Range Calculator](docs/halow-range-calc.md)
+
+**Operating**
+* [Provisioning Guide](MANET/provisioning/README.md) — flashing and first boot
+* [x86 Gateway Setup](MANET/provisioning/x86-gateway/README.md)
+* [Auto-Update](MANET/docs/AUTO_UPDATE.md) — OTA updates: settings, manual/fleet actions, publishing a release
+* [Packaging](MANET/packaging/README.md) — building release tarballs
+
+**Reference**
+* [Feature List](MANET/docs/features.md)
+* [Node Architecture](MANET/docs/node-architecture.md)
+* [HaLow Range Calculator](MANET/docs/halow-range-calc.md)
 * [Bill of Materials](MANET/BOM.md)
+* [Versioning](MANET/docs/VERSIONING.md)
+* [Mesh/Topology Data Sources](MANET/src/manet-ctrl/DATA_SOURCES.md) — where each UI metric comes from
 * [Screenshot Gallery](screenshots/)
+
+**Development**
+* [Kernel 6.18 + Morse Driver Port](MANET/docs/kernel-6.18-morse-port.md)
