@@ -83,6 +83,10 @@ by hand.
 
 ## Publishing an overlay OTA update
 
+For what happens on the node side once this is published — settings,
+the bandwidth gate, manual/fleet-wide update actions — see
+[`MANET/docs/AUTO_UPDATE.md`](../docs/AUTO_UPDATE.md).
+
 Separate from the full-image build above: `node-update`'s opt-in overlay
 channel (`auto_update_overlay`, default off — see
 [`MANET/docs/VERSIONING.md`](../docs/VERSIONING.md)) pulls a per-board

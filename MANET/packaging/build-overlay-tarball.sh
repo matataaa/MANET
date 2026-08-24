@@ -24,6 +24,13 @@ trap cleanup EXIT
 
 cp -a "$OVERLAY_DIR"/. "$STAGE"/
 
+# Vendoring scripts (e.g. fetch-cm4-overlay.sh) drop their own tracking docs
+# — VENDORED_FROM.md — directly into the overlay dir alongside the real
+# payload. That's fine for the dir itself, but this tarball gets extracted
+# straight onto a node's /, so a top-level *.md here would land as e.g.
+# /VENDORED_FROM.md on every node applying the update. Strip it before packing.
+find "$STAGE" -mindepth 1 -maxdepth 1 -name '*.md' -delete
+
 # macOS: strip extended attributes and AppleDouble files before packing —
 # see build-tools-tarball.sh for why.
 export COPYFILE_DISABLE=1

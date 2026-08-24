@@ -3,6 +3,11 @@
 This project has four separate versioning schemes that intentionally don't
 mix.
 
+For what the auto-update feature actually does, every `mesh.conf` setting,
+and how the manual/fleet-wide update actions behave, see
+[`AUTO_UPDATE.md`](AUTO_UPDATE.md) — this file covers the tag/version-file
+formats behind it.
+
 ## Detect vs. apply, and the bandwidth gate
 
 `node-update` always checks both channels below on its normal cadence (every

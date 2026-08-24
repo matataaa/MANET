@@ -184,6 +184,16 @@ func runChecks(board string, manual trigger) {
 	autoUpdateOverlay := isAffirmative(confValue("auto_update_overlay"), false)
 	gateOK := bandwidthOK(uplinkMbps, uplinkType)
 
+	// Software and overlay are evaluated independently — NOT a single
+	// either/or choice. They used to share one switch where the first
+	// matching case (always software, by declaration order) won and the
+	// other channel was silently skipped for the cycle. That meant a
+	// manual/fleet "both" trigger only ever actually applied software,
+	// with overlay dropped unless auto_update_overlay also happened to be
+	// on. Both can apply in the same cycle now; applySoftware/applyOverlay
+	// each end in scheduleReboot(), and calling that twice is harmless —
+	// the later call just reschedules the pending shutdown, so this is
+	// still at most one reboot, not two.
 	switch {
 	case manual.software && swAvailable:
 		log.Printf("manual update: release v%s -> v%s", swLocal, swRemote)
@@ -193,6 +203,9 @@ func runChecks(board string, manual trigger) {
 		applySoftware(baseURL, board, swRemote)
 	case swAvailable && autoUpdate && !gateOK:
 		log.Printf("release v%s available but uplink (%.1f Mbps, %s) is below the bandwidth gate — skipping automatic apply", swRemote, uplinkMbps, uplinkType)
+	}
+
+	switch {
 	case manual.overlay && ovAvailable:
 		log.Printf("manual overlay update: v%s -> v%s", ovLocal, ovRemote)
 		applyOverlay(baseURL, board, ovRemote)
