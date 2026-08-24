@@ -3,9 +3,9 @@ set -euo pipefail
 
 # build-tools-tarball.sh — assemble a tools-only update tarball.
 #
-# Contains scripts, Go binaries, web frontend, systemd units, and etc files.
-# Does NOT include the SBC overlay (kernel/modules/firmware) or pre-built
-# binaries (alfred, batctl, wpa_supplicant_s1g).
+# Contains scripts, Go binaries, pre-built arm64 binaries, web frontend,
+# systemd units, and etc files. Does NOT include the SBC overlay
+# (kernel/modules/firmware) — see build-overlay-tarball.sh for that.
 #
 # Usage:
 #   build-tools-tarball.sh [output.tar.gz]
@@ -15,6 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOTFS="$REPO_ROOT/rootfs"
 SRC="$REPO_ROOT/src"
+BINARIES="$REPO_ROOT/binaries_arm64"
 STAGE="$(mktemp -d)"
 
 cleanup() { rm -rf "$STAGE"; }
@@ -63,6 +64,7 @@ GO_SERVICES=(
     mesh-radio-state
     mesh-registry
     node-manager
+    node-update
 )
 
 for svc in "${GO_SERVICES[@]}"; do
@@ -76,7 +78,33 @@ done
 # mesh-voice needs CGO — use pre-built binary
 install_file 0755 "$SRC/mesh-voice/bin/mesh-voice-linux-arm64" "$STAGE/usr/local/bin/mesh-voice"
 
+# Pre-built arm64 binaries (alfred, batctl, wpa_supplicant_s1g, etc.) — same
+# set and destinations as build-rpi5-tarball.sh. These are git-tracked in
+# binaries_arm64/, so a software release should carry them same as any Go
+# service. wpa_supplicant_s1g/wpa_cli_s1g/morse_cli talk directly to the
+# morse kernel driver (shipped separately via the SBC overlay) — a release
+# that bumps those three should be sanity-checked against the overlay
+# currently deployed before wide rollout.
+install_file 0755 "$BINARIES/alfred"              "$STAGE/usr/sbin/alfred"
+install_file 0755 "$BINARIES/batctl"              "$STAGE/usr/sbin/batctl"
+install_file 0755 "$BINARIES/wpa_cli_s1g"         "$STAGE/usr/sbin/wpa_cli_s1g"
+install_file 0755 "$BINARIES/wpa_supplicant_s1g"  "$STAGE/usr/sbin/wpa_supplicant_s1g"
+install_file 0755 "$BINARIES/morse_cli"           "$STAGE/usr/local/bin/morse_cli"
+install_file 0755 "$BINARIES/chronyc"             "$STAGE/usr/local/bin/chronyc"
+install_file 0755 "$BINARIES/openvlm"             "$STAGE/usr/local/bin/openvlm"
+
 install_file 0644 "$ROOTFS/etc/manet_version.txt" "$STAGE/etc/manet_version.txt"
+
+# Release version — only present when this build is an actual cut release
+# (see MANET/docs/VERSIONING.md). Ad hoc/dev builds omit it so they can never
+# advance a node's installed release version or trigger auto-update.
+RELEASE_VER="$(git -C "$REPO_ROOT" describe --tags --exact-match --match "release-v*" 2>/dev/null || true)"
+if [ -n "$RELEASE_VER" ]; then
+    echo "${RELEASE_VER#release-v}" > "$STAGE/etc/manet_release_version.txt"
+    echo "Release version: ${RELEASE_VER#release-v}"
+else
+    echo "Not building from a release-v* tag — omitting manet_release_version.txt (this tarball will not advance auto-update)" >&2
+fi
 
 mkdir -p "$(dirname "$OUT")"
 OUT_ABS="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"

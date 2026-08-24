@@ -57,7 +57,7 @@ merged per neighbor:
 
 - **Floor / Margin**: HaLow-only. `s1gFloor1MHz` + `s1gBWFloorOffset` in
   `collect.go` are approximate S1G receiver decode floors per MCS/channel
-  width (from `docs/halow-range-calc.md` / MM6108 typicals), not measured —
+  width (from `MANET/docs/halow-range-calc.md` / MM6108 typicals), not measured —
   margin is signal headroom above that modeled floor.
 
 - **Retry %**: `tx_retries / tx_packets` from the same station dump, live.

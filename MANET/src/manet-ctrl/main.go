@@ -446,6 +446,8 @@ func main() {
 	mux.HandleFunc("/api/voice", apiVoice)
 	mux.HandleFunc("/api/voice/channels", apiVoiceChannels)
 	mux.HandleFunc("/api/admin/status", apiAdminStatus)
+	mux.HandleFunc("/api/admin/update-status", apiUpdateStatus)
+	mux.HandleFunc("/api/admin/update-summary", apiUpdateSummary)
 	mux.HandleFunc("/api/daemons", apiDaemons)
 	mux.HandleFunc("/api/atak-package", apiATAKPackage)
 	mux.HandleFunc("/api/mesh-ctrl.apk", apiDownloadAPK)
@@ -478,6 +480,8 @@ func main() {
 	mux.HandleFunc("/api/admin/cancel", requireAuth(apiAdminCancel))
 	mux.HandleFunc("/api/admin/delete-node", requireAuth(apiAdminDeleteNode))
 	mux.HandleFunc("/api/admin/preferences", requireAuth(apiFleetPreferences))
+	mux.HandleFunc("/api/admin/update-now", requireAuth(apiUpdateNow))
+	mux.HandleFunc("/api/admin/force-update", requireAuth(apiForceUpdate))
 
 	// Perf APIs (run tests on mesh — require auth)
 	mux.HandleFunc("/api/iperf/server/start", requireAuth(apiIperfServerStart))
