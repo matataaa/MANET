@@ -138,6 +138,15 @@ type updateStatus struct {
 	UplinkMbps  float64       `json:"uplink_mbps"`
 	UplinkType  string        `json:"uplink_type"`
 	LastChecked string        `json:"last_checked"`
+	// Phase reports what an in-progress apply is actually doing right now
+	// ("idle" the rest of the time) — the UI polls this to show real
+	// progress instead of a static "triggered" toast with no further
+	// feedback until the node disappears to reboot.
+	Phase string `json:"phase"`
+	// RebootAt is set only while Phase == "rebooting" — the RFC3339 time
+	// the jittered `shutdown -r` will actually fire, so the UI can render
+	// a real countdown instead of a static "rebooting" message.
+	RebootAt string `json:"reboot_at,omitempty"`
 }
 
 // runChecks always detects on both channels (regardless of the auto_update
@@ -158,6 +167,7 @@ func runChecks(board string, manual trigger) {
 		UplinkMbps:  uplinkMbps,
 		UplinkType:  uplinkType,
 		LastChecked: time.Now().UTC().Format(time.RFC3339),
+		Phase:       "idle",
 	}
 
 	if baseURL == "" {
@@ -197,10 +207,10 @@ func runChecks(board string, manual trigger) {
 	switch {
 	case manual.software && swAvailable:
 		log.Printf("manual update: release v%s -> v%s", swLocal, swRemote)
-		applySoftware(baseURL, board, swRemote)
+		applySoftware(baseURL, board, swRemote, &status)
 	case swAvailable && autoUpdate && gateOK:
 		log.Printf("auto update: release v%s -> v%s", swLocal, swRemote)
-		applySoftware(baseURL, board, swRemote)
+		applySoftware(baseURL, board, swRemote, &status)
 	case swAvailable && autoUpdate && !gateOK:
 		log.Printf("release v%s available but uplink (%.1f Mbps, %s) is below the bandwidth gate — skipping automatic apply", swRemote, uplinkMbps, uplinkType)
 	}
@@ -208,10 +218,10 @@ func runChecks(board string, manual trigger) {
 	switch {
 	case manual.overlay && ovAvailable:
 		log.Printf("manual overlay update: v%s -> v%s", ovLocal, ovRemote)
-		applyOverlay(baseURL, board, ovRemote)
+		applyOverlay(baseURL, board, ovRemote, &status)
 	case ovAvailable && autoUpdateOverlay && gateOK:
 		log.Printf("auto overlay update: v%s -> v%s", ovLocal, ovRemote)
-		applyOverlay(baseURL, board, ovRemote)
+		applyOverlay(baseURL, board, ovRemote, &status)
 	case ovAvailable && autoUpdateOverlay && !gateOK:
 		log.Printf("overlay v%s available but uplink (%.1f Mbps, %s) is below the bandwidth gate — skipping automatic apply", ovRemote, uplinkMbps, uplinkType)
 	}
@@ -324,12 +334,20 @@ func detectSoftware(baseURL string) (local, remote string, available bool, err e
 // applySoftware downloads, extracts, and records the given already-detected
 // release, then schedules a reboot. Callers (automatic or manual) have
 // already decided this should happen.
-func applySoftware(baseURL, board, remoteVerStr string) {
+func applySoftware(baseURL, board, remoteVerStr string, status *updateStatus) {
+	status.Phase = "downloading software"
+	writeStatus(*status)
+
 	tarballURL := fmt.Sprintf("%s/%s-tools.tar.gz", baseURL, board)
 	if err := download(tarballURL, tarballPath); err != nil {
 		log.Printf("download failed: %v", err)
+		status.Phase = "idle"
+		writeStatus(*status)
 		return
 	}
+
+	status.Phase = "extracting software"
+	writeStatus(*status)
 
 	// --no-overwrite-dir: an archive must never change the mode of an
 	// existing directory, least of all /. Directory modes in the tarball
@@ -339,6 +357,8 @@ func applySoftware(baseURL, board, remoteVerStr string) {
 	if err != nil {
 		log.Printf("extract failed: %v: %s", err, strings.TrimSpace(string(out)))
 		os.Remove(tarballPath)
+		status.Phase = "idle"
+		writeStatus(*status)
 		return
 	}
 	os.Remove(tarballPath)
@@ -355,7 +375,7 @@ func applySoftware(baseURL, board, remoteVerStr string) {
 	}
 	log.Printf("updated to release v%s", remoteVerStr)
 
-	scheduleReboot()
+	scheduleReboot(status)
 }
 
 // detectOverlay checks the SBC overlay channel (kernel, modules, firmware)
@@ -377,17 +397,27 @@ func detectOverlay(baseURL, board string) (local, remote string, available bool,
 
 // applyOverlay downloads, extracts, and records the given already-detected
 // overlay, then schedules a reboot.
-func applyOverlay(baseURL, board, remoteVerStr string) {
+func applyOverlay(baseURL, board, remoteVerStr string, status *updateStatus) {
+	status.Phase = "downloading overlay"
+	writeStatus(*status)
+
 	overlayURL := fmt.Sprintf("%s/%s-sbc-overlay.tar.gz", baseURL, board)
 	if err := download(overlayURL, overlayTarballPath); err != nil {
 		log.Printf("overlay download failed: %v", err)
+		status.Phase = "idle"
+		writeStatus(*status)
 		return
 	}
+
+	status.Phase = "extracting overlay"
+	writeStatus(*status)
 
 	out, err := exec.Command("tar", "-zxf", overlayTarballPath, "--no-overwrite-dir", "-C", "/").CombinedOutput()
 	if err != nil {
 		log.Printf("overlay extract failed: %v: %s", err, strings.TrimSpace(string(out)))
 		os.Remove(overlayTarballPath)
+		status.Phase = "idle"
+		writeStatus(*status)
 		return
 	}
 	os.Remove(overlayTarballPath)
@@ -397,19 +427,24 @@ func applyOverlay(baseURL, board, remoteVerStr string) {
 	}
 	log.Printf("updated overlay to v%s", remoteVerStr)
 
-	scheduleReboot()
+	scheduleReboot(status)
 }
 
 // scheduleReboot asks the kernel to reboot after a random delay rather than
 // immediately. Every node on the mesh runs the same check cadence, so an
 // immediate reboot here would tend to drop the whole fleet (and any gateway)
 // within moments of a release going out; the jitter spreads that out.
-func scheduleReboot() {
+func scheduleReboot(status *updateStatus) {
 	jitter := minRebootJitter + time.Duration(rand.Int63n(int64(maxRebootJitter-minRebootJitter)))
 	mins := int(jitter / time.Minute)
 	if mins < 1 {
 		mins = 1
 	}
+
+	status.Phase = "rebooting"
+	status.RebootAt = time.Now().Add(time.Duration(mins) * time.Minute).UTC().Format(time.RFC3339)
+	writeStatus(*status)
+
 	log.Printf("scheduling reboot in %d minute(s) to apply update", mins)
 	out, err := exec.Command("shutdown", "-r", fmt.Sprintf("+%d", mins), "MANET OTA update applied, rebooting").CombinedOutput()
 	if err != nil {

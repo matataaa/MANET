@@ -2,6 +2,7 @@
 var hwInitialized = false;
 var hwPttTimer = null;
 var hwPttData = null;
+var hwUpdateStatus = null;
 
 function hardwareActivate() {
   var panel = document.getElementById('tab-hardware');
@@ -23,7 +24,18 @@ function hardwareActivate() {
   }
   hardwareUpdate();
   hwPttFetch();
+  hwFetchUpdateStatus();
   hwPttTimer = setInterval(hwPttFetchLive, 1000);
+}
+
+async function hwFetchUpdateStatus() {
+  try {
+    var r = await fetch('/api/admin/update-status');
+    hwUpdateStatus = await r.json();
+    hwRenderSystem();
+  } catch (e) {
+    hwUpdateStatus = null;
+  }
 }
 
 function hardwareDeactivate() {
@@ -154,6 +166,12 @@ function hwRenderSystem() {
   var el = document.getElementById('hw-system');
   var rows = '';
   rows += hwRow('Hostname', LOCAL_DATA.hostname || '--');
+  if (hwUpdateStatus) {
+    var sw = hwUpdateStatus.software, ov = hwUpdateStatus.overlay;
+    var updateBadge = '<span class="hw-badge hw-badge-warn">Update available</span>';
+    if (sw) rows += hwRow('MANET Version', 'v' + escHtml(sw.local || '--') + (sw.available ? ' ' + updateBadge : ''));
+    if (ov) rows += hwRow('Kernel/Drivers Version', escHtml(ov.local || '--') + (ov.available ? ' ' + updateBadge : ''));
+  }
   rows += hwRow('IP Address', LOCAL_DATA.ip || '--');
   rows += hwRow('MAC', '<span style="font-family:monospace">' + (LOCAL_DATA.mac || '--') + '</span>');
   rows += hwRow('Uptime', LOCAL_DATA.uptime || '--');

@@ -201,8 +201,7 @@ function configRenderView(panel, cfg) {
     configEditing = true;
     configRender();
   });
-  var updateNowBtn = document.getElementById('cfg-update-now-btn');
-  if (updateNowBtn) updateNowBtn.addEventListener('click', configUpdateNow);
+  configWireUpdateButtons();
 
   qosFetch();
 }
@@ -218,15 +217,170 @@ function configRenderUpdateBanner(cfg) {
   if (!swAvail && !ovAvail) return '';
 
   var parts = [];
-  if (swAvail) parts.push('software v' + escHtml(st.software.local) + ' → v' + escHtml(st.software.remote));
-  if (ovAvail) parts.push('overlay v' + escHtml(st.overlay.local) + ' → v' + escHtml(st.overlay.remote));
+  if (swAvail) parts.push('MANET v' + escHtml(st.software.local) + ' → v' + escHtml(st.software.remote));
+  if (ovAvail) parts.push('Kernel/Drivers v' + escHtml(st.overlay.local) + ' → v' + escHtml(st.overlay.remote));
 
   var html = '<div class="fleet-pending">';
   html += '<div class="fleet-pending-head"><div class="fleet-pending-title">Update Available</div></div>';
   html += '<div class="fleet-pending-meta">' + parts.join(' &middot; ') + '</div>';
-  html += '<div class="fleet-actions"><button class="fleet-btn fleet-btn-primary" id="cfg-update-now-btn">Update Now</button></div>';
+
+  // While an apply is actually in flight (phase != idle), show real
+  // progress instead of the buttons — the daemon downloads/extracts
+  // synchronously, so this is genuine state, not a guess. This also
+  // doubles as the double-click fix: as long as this keeps getting
+  // re-rendered from live status, there's no window where the buttons
+  // are clickable during an in-progress apply.
+  var phase = st.phase || 'idle';
+  if (phase !== 'idle') {
+    html += '<div class="fleet-pending-meta" id="cfg-update-phase">' + escHtml(configPhaseLabel(st)) + '</div>';
+    if (phase === 'rebooting') {
+      html += '<div class="fleet-actions" style="justify-content:flex-end">' +
+        '<button class="fleet-btn" id="cfg-reboot-now-btn">Reboot Now</button></div>';
+    }
+  } else {
+    html += '<div class="fleet-actions">';
+    if (swAvail) html += '<button class="fleet-btn fleet-btn-primary" id="cfg-update-now-sw-btn">Update MANET</button>';
+    if (ovAvail) html += '<button class="fleet-btn fleet-btn-danger" id="cfg-update-now-ov-btn">Update Kernel/Drivers</button>';
+    html += '</div>';
+  }
   html += '</div>';
   return html;
+}
+
+// Takes the full status (not just the phase string) so the "rebooting"
+// case can compute a live countdown from reboot_at — node-update writes
+// the actual jittered reboot time, so this isn't a guess.
+function configPhaseLabel(st) {
+  var phase = st.phase || 'idle';
+  if (phase === 'rebooting' && st.reboot_at) {
+    var secs = Math.max(0, Math.round((new Date(st.reboot_at).getTime() - Date.now()) / 1000));
+    var m = Math.floor(secs / 60), s = secs % 60;
+    return 'Update applied — rebooting in ' + m + 'm ' + (s < 10 ? '0' : '') + s + 's…';
+  }
+  var labels = {
+    'downloading software': 'Downloading MANET update…',
+    'extracting software': 'Extracting MANET update…',
+    'downloading overlay': 'Downloading Kernel/Drivers update…',
+    'extracting overlay': 'Extracting Kernel/Drivers update…',
+    'rebooting': 'Update applied — rebooting now…'
+  };
+  return labels[phase] || (phase.charAt(0).toUpperCase() + phase.slice(1) + '…');
+}
+
+// Wires whichever per-channel update buttons the banner actually rendered —
+// separate buttons (not one combined action) so overlay, which has no
+// rollback, is never applied as a side effect of clicking through a routine
+// software update in the field.
+function configWireUpdateButtons() {
+  var swBtn = document.getElementById('cfg-update-now-sw-btn');
+  if (swBtn) swBtn.addEventListener('click', function() { configUpdateNow('software', swBtn); });
+  var ovBtn = document.getElementById('cfg-update-now-ov-btn');
+  if (ovBtn) ovBtn.addEventListener('click', function() { configUpdateNow('overlay', ovBtn); });
+  var rebootBtn = document.getElementById('cfg-reboot-now-btn');
+  if (rebootBtn) rebootBtn.addEventListener('click', function() { configRebootNow(rebootBtn); });
+}
+
+// Overrides the jittered shutdown node-update already scheduled — reuses
+// the existing /api/terminal/reboot endpoint (same one Services uses) to
+// reboot immediately rather than waiting out the 1-15 min spread. Safe:
+// the update itself already finished applying before this phase, so an
+// earlier reboot just reaches the same end state sooner.
+function configRebootNow(btn) {
+  configConfirm('Reboot now instead of waiting for the scheduled time? You will lose connection until it comes back up.',
+    { label: 'Reboot Now', danger: true }, async function() {
+      btn.disabled = true;
+      try {
+        var r = await authFetch(configBaseUrl() + '/api/terminal/reboot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        if (!r.ok) throw new Error('request failed');
+        notify('Update', 'Rebooting now', { type: 'success' });
+        configStopUpdatePoll();
+      } catch (e) {
+        btn.disabled = false;
+        notify('Update', 'Failed to trigger reboot', { type: 'error' });
+      }
+    });
+}
+
+var configUpdatePollTimer = null;
+var configRebootTickTimer = null;
+
+// Polls update-status every 3s while an apply is in progress and patches
+// just the banner in place — not a full configFetch()/re-render, so this
+// can safely run while the operator is mid-edit elsewhere on the page.
+function configStartUpdatePoll() {
+  if (configUpdatePollTimer) return;
+  configUpdatePollTimer = setInterval(async function() {
+    try {
+      var r = await fetch(configBaseUrl() + '/api/admin/update-status');
+      var st = await r.json();
+      configUpdateStatus = st;
+      configRefreshUpdateBanner();
+      var phase = st.phase || 'idle';
+      if (phase === 'idle') {
+        configStopUpdatePoll();
+        // Apply finished (success or failure) — refresh the full view so
+        // availability reflects the new state: banner disappears on
+        // success, or the buttons come back for a retry on failure.
+        if (!configEditing) configFetch();
+      } else if (phase === 'rebooting') {
+        configStartRebootTick();
+        // Node is about to disappear — no point chasing connectivity
+        // once it does.
+        setTimeout(configStopUpdatePoll, 15000);
+      }
+    } catch (e) {
+      // Node likely mid-reboot / unreachable — stop rather than spam
+      // failed requests indefinitely.
+      configStopUpdatePoll();
+    }
+  }, 3000);
+}
+
+// Ticks the "rebooting in Xm Ys" text every second between 3s status
+// polls, computed client-side from the reboot_at timestamp node-update
+// already reported — no extra network traffic for the countdown itself.
+function configStartRebootTick() {
+  if (configRebootTickTimer) return;
+  configRebootTickTimer = setInterval(function() {
+    var el = document.getElementById('cfg-update-phase');
+    if (!el || !configUpdateStatus || configUpdateStatus.phase !== 'rebooting') {
+      configStopRebootTick();
+      return;
+    }
+    el.textContent = configPhaseLabel(configUpdateStatus);
+  }, 1000);
+}
+
+function configStopRebootTick() {
+  if (configRebootTickTimer) { clearInterval(configRebootTickTimer); configRebootTickTimer = null; }
+}
+
+function configStopUpdatePoll() {
+  if (configUpdatePollTimer) { clearInterval(configUpdatePollTimer); configUpdatePollTimer = null; }
+  configStopRebootTick();
+}
+
+// Re-renders just the update banner from the current configUpdateStatus,
+// in place, without touching the rest of the panel.
+function configRefreshUpdateBanner() {
+  var container = document.getElementById('cfg-content');
+  if (!container) return;
+  var old = container.querySelector('.fleet-pending');
+  var html = configRenderUpdateBanner();
+  if (!html) {
+    if (old) old.remove();
+    return;
+  }
+  var wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  var fresh = wrap.firstElementChild;
+  if (old) old.replaceWith(fresh);
+  else container.insertBefore(fresh, container.firstChild);
+  configWireUpdateButtons();
 }
 
 // Minimal confirm-bar, mirroring fleetConfirm() in fleet.js but scoped to
@@ -249,19 +403,18 @@ function configConfirm(msg, opts, onConfirm) {
   bar.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function configUpdateNow() {
+function configUpdateNow(channel, btn) {
   var st = configUpdateStatus || {};
-  var channel = (st.software && st.software.available && st.overlay && st.overlay.available) ? 'both' :
-    (st.overlay && st.overlay.available) ? 'overlay' : 'software';
+  var channelLabel = channel === 'overlay' ? 'Kernel/Drivers' : 'MANET';
 
   var mbps = st.uplink_mbps || 0;
   var uplinkType = st.uplink_type || 'unknown';
   var minMbps = parseFloat((configData && configData.current_config && configData.current_config.auto_update_min_mbps) || '10');
   var belowThreshold = uplinkType !== 'wired' && mbps < minMbps;
 
-  var msg = 'Update now? This downloads the update and reboots this node once applied.';
-  if (channel === 'overlay' || channel === 'both') {
-    msg += ' The overlay channel updates kernel/firmware — there is no rollback if it fails to boot.';
+  var msg = 'Update ' + channelLabel + ' now? This downloads the update and reboots this node once applied.';
+  if (channel === 'overlay') {
+    msg += ' The Kernel/Drivers channel updates kernel/firmware — there is no rollback if it fails to boot.';
   }
   if (belowThreshold) {
     msg = '⚠ Current link is ' + mbps.toFixed(1) + ' Mbps (' + uplinkType + '), below the ' + minMbps +
@@ -269,7 +422,12 @@ function configUpdateNow() {
       'Consider using a higher-bandwidth connection (Ethernet, WiFi mesh, or 8MHz HaLow) if available. ' + msg;
   }
 
-  configConfirm(msg, { label: 'Update Now', danger: belowThreshold || channel !== 'software' }, async function() {
+  configConfirm(msg, { label: 'Update ' + channelLabel, danger: belowThreshold || channel === 'overlay' }, async function() {
+    // Disable immediately — before the request even resolves — so a
+    // second click during the network round-trip can't fire a duplicate
+    // trigger. The status poll below takes over showing real progress
+    // once the daemon actually starts working.
+    if (btn) btn.disabled = true;
     try {
       var r = await fetch(configBaseUrl() + '/api/admin/update-now', {
         method: 'POST',
@@ -278,7 +436,9 @@ function configUpdateNow() {
       });
       if (!r.ok) throw new Error('request failed');
       notify('Update', 'Update triggered', { type: 'success' });
+      configStartUpdatePoll();
     } catch(e) {
+      if (btn) btn.disabled = false;
       notify('Update', 'Failed to trigger update', { type: 'error' });
     }
   });
@@ -382,7 +542,8 @@ function configRenderEdit(panel, cfg) {
     { label: 'RX End Beep', key: 'voice_beep_rx_end', type: 'select', options: [{v:'y',l:'On'},{v:'n',l:'Off'}] },
   ];
 
-  let html = (configTarget ? '<div class="cfg-target-label">Editing: ' + escHtml(configTarget) + '</div>' : '') + '<div class="card">';
+  let html = configRenderUpdateBanner(cfg) +
+    (configTarget ? '<div class="cfg-target-label">Editing: ' + escHtml(configTarget) + '</div>' : '') + '<div class="card">';
   fields.forEach(f => {
     if (f.section) {
       html += '</div><div class="card cfg-section"><div class="cfg-section-title">' + f.section + '</div>';
@@ -454,6 +615,7 @@ function configRenderEdit(panel, cfg) {
     configFetch();
   });
   document.getElementById('cfg-save-btn').addEventListener('click', configSave);
+  configWireUpdateButtons();
 
   // Live hostname preview
   const hostnameInput = document.getElementById('cfg-f-node_hostname');

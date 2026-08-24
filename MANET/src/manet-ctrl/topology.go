@@ -68,7 +68,17 @@ func cachedBatmanSnapshot() batmanSnapshot {
 // for the topology "Real Rate" column, for the route toward whichever
 // gateway is currently selected.
 func computeUplink() (mbps float64, uplinkType string) {
-	myMAC := getMyMAC()
+	// If this node is itself running as the mesh gateway (gw_mode=server),
+	// there's no mesh hop between it and the internet — updates download
+	// over its own uplink directly. batman-adv's gwl/originator tables
+	// never list a node as a gateway candidate to itself, so this can't be
+	// detected via selectedGW below (that comparison was always false in
+	// practice) — it has to come from local gw_mode instead.
+	if out, err := runCmdStdout(5*time.Second, "batctl", "gw_mode"); err == nil &&
+		strings.HasPrefix(strings.TrimSpace(out), "server") {
+		return 0, "wired"
+	}
+
 	snap := cachedBatmanSnapshot()
 
 	selectedGW := ""
@@ -77,9 +87,6 @@ func computeUplink() (mbps float64, uplinkType string) {
 			selectedGW = gw.MAC
 			break
 		}
-	}
-	if selectedGW == myMAC {
-		return 0, "wired"
 	}
 	// No selected gateway found is NOT the same as "wired, no ceiling" —
 	// that would make the bandwidth gate always pass when we actually have
