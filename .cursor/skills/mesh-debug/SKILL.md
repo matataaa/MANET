@@ -132,18 +132,19 @@ curl -s http://localhost/api/local | python3 -m json.tool
 ### 7. Alfred & Node Manager
 
 ```bash
-# Read Alfred data store (type 65 = mesh node status)
-alfred -r 65
-
-# Node manager journal (IP allocation, registry updates)
+# Node manager journal (IP allocation, registry updates, ACS elections)
 journalctl -u node-manager --no-pager -n 40
 
 # Mesh registry (decoded peer data)
 cat /var/run/mesh_node_registry
 
 # Which node-manager mode is running (ACS vs static)
-readlink -f /usr/local/bin/node-manager.sh
+grep -i '^acs=' /etc/mesh.conf
 ```
+
+`node-manager` no longer uses `alfred` for status gossip at all (confirmed via `strings` on the binary — zero references) — `node-manager` reads/writes `/var/run/mesh_node_registry` directly. Use the web status API instead (see §6) for live topology/node state. There is also no `node-manager.sh` wrapper script — `node-manager` is a single Go binary, and mode is controlled entirely by `acs=` in `/etc/mesh.conf` (see `.cursor/rules/manet-project.mdc`).
+
+**But `alfred` is NOT dead weight — don't stop it.** A separate binary, `mesh-registry` (`src/mesh-registry/main.go`), is what actually populates `mesh_node_registry`, and it depends on `alfred` completely: it shells out to `alfred -s 68` to publish this node's status and `alfred -r 68` to read peers. Note the data type is `68`, not `65` — `alfred -r 65` returns nothing on this fleet and is not evidence alfred is unused, just the wrong type. If `alfred.service` is stopped on a node, `mesh-registry` keeps running but every publish fails (`journalctl -u mesh-registry` shows `alfred publish: exit status 255: can't connect to unix socket: Connection refused` on a ~15s loop), the node silently drops out of every other node's registry within a few minutes (see `offlineMaxAge`/stale-purge logic in `main.go`), and it stays missing until `alfred` is restarted — even though the node is fully reachable over the mesh (batman-adv/SSH) the whole time. Found live on EUD1 on 2026-08-25: `alfred` had been stopped since first boot (2026-08-17) with no crash and no restart, `mesh-registry` had been failing silently for over a week, and nothing alerted on it. `systemctl restart alfred` on the affected node fixes it immediately.
 
 ### 8. Service Status
 
@@ -227,7 +228,7 @@ dmesg | grep -iE 'morse|wifi|wlan|bat0|mesh|mt7915|brcmfmac' | tail -30
 ### No IPv4 on br0
 
 **Symptom**: Node has no 10.x.x.x address.
-**Check**: `journalctl -u node-manager` — look for IP allocation errors. Verify Alfred is running and peers are visible (`alfred -r 65`).
+**Check**: `journalctl -u node-manager` — look for IP allocation errors. Verify peers are visible via `curl -s http://localhost/api/data` (see §6).
 
 ### AP not broadcasting
 

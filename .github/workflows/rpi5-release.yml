@@ -1,9 +1,6 @@
 name: Build RPi5 release tarball
 
 on:
-  push:
-    branches:
-      - "**"
   workflow_dispatch:
 
 permissions:

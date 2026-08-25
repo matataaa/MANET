@@ -421,8 +421,8 @@ function Ask-Questions {
     }
 
     Write-Host ""
-    $r = Read-Host "Enable automatic updates for MANET tools? (Y/n)"
-    if ([string]::IsNullOrWhiteSpace($r) -or $r -match "^[Yy]") {
+    $r = Read-Host "Enable automatic updates for MANET tools? (y/N)"
+    if ($r -match "^[Yy]") {
         $Script:AUTO_UPDATE = "y"; Write-Host "Automatic updates enabled."
     } else {
         $Script:AUTO_UPDATE = "n"; Write-Host "Automatic updates disabled."

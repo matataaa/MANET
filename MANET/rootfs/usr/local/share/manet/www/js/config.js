@@ -3,6 +3,7 @@ let configInitialized = false;
 let configEditing = false;
 let configData = null;
 let configVoiceData = null;
+let configUpdateStatus = null;
 let configTarget = null;
 
 function configBaseUrl() {
@@ -61,6 +62,10 @@ async function configFetch() {
       const voiceR = await fetch(base + '/api/voice');
       configVoiceData = await voiceR.json();
     } catch(e) { configVoiceData = null; }
+    try {
+      const updR = await fetch(base + '/api/admin/update-status');
+      configUpdateStatus = await updR.json();
+    } catch(e) { configUpdateStatus = null; }
     configRender();
   } catch(e) {
     document.getElementById('cfg-content').innerHTML =
@@ -104,13 +109,20 @@ function configRenderView(panel, cfg) {
       { label: 'Battery Monitor', key: 'battery_monitor', yesno: true },
       { label: 'Auto Update', key: 'auto_update', yesno: true },
       { label: 'Update URL', key: 'update_url' },
+      { label: 'Auto Update Overlay', key: 'auto_update_overlay', yesno: true },
+      { label: 'Auto Update Min Bandwidth', key: 'auto_update_min_mbps', fmt: function(v) { return (v || '10') + ' Mbit'; } },
     ]},
     { title: 'GPS / CoT', fields: [
       { label: 'GPS Enabled', key: 'gps', fmt: function(v) { return (v||'').toLowerCase() === 'n' ? 'Disabled' : 'Enabled'; } },
+      { label: 'GPS Source', key: 'gps_source', fmt: function(v) { return v === 'static' ? 'Static (fixed location)' : 'Receiver (hardware GPS)'; },
+        showIf: [{key:'gps', equals:'y'}] },
+      { label: 'Latitude', key: 'gps_static_lat', showIf: [{key:'gps', equals:'y'}, {key:'gps_source', equals:'static'}] },
+      { label: 'Longitude', key: 'gps_static_lon', showIf: [{key:'gps', equals:'y'}, {key:'gps_source', equals:'static'}] },
+      { label: 'Altitude', key: 'gps_static_alt', showIf: [{key:'gps', equals:'y'}, {key:'gps_source', equals:'static'}] },
       { label: 'Callsign', key: 'callsign' },
       { label: 'CoT Type', key: 'cot_type', fmt: function(v) { return v || 'a-f-G-E (equipment, default)'; } },
       { label: 'CoT Team', key: 'cot_team', fmt: function(v) { return v || '(none — equipment identity)'; } },
-      { label: 'CoT Role', key: 'cot_role', fmt: function(v) { return v || 'Team Member'; } },
+      { label: 'CoT Role', key: 'cot_role', fmt: function(v) { return v || 'Team Member'; }, showIf: [{key:'cot_team', notEmpty:true}] },
       { label: 'CoT Icon', key: 'cot_icon', fmt: function(v) { return v || '(default for type)'; } },
     ]},
     { title: 'Access Point', fields: [
@@ -149,9 +161,15 @@ function configRenderView(panel, cfg) {
 
   let html = '<div>';
 
+  html += configRenderUpdateBanner(cfg);
+
   sections.forEach(sec => {
     html += '<div class="card cfg-section"><div class="cfg-section-title">' + sec.title + '</div>';
     sec.fields.forEach(f => {
+      if (f.showIf && !f.showIf.every(cond => {
+        const v = cfg[cond.key] || '';
+        return cond.notEmpty ? v !== '' : v === cond.equals;
+      })) return;
       let val;
       if (f.voiceKey) {
         val = (configVoiceData && configVoiceData[f.voiceKey]) || f.fallback || '--';
@@ -183,8 +201,247 @@ function configRenderView(panel, cfg) {
     configEditing = true;
     configRender();
   });
+  configWireUpdateButtons();
 
   qosFetch();
+}
+
+// Persistent "update available" banner — reuses the same sticky-bar visual
+// language fleet.js uses for its staged-config banner, since this needs to
+// persist until acted on rather than auto-dismiss like a notify() toast.
+function configRenderUpdateBanner(cfg) {
+  var st = configUpdateStatus;
+  if (!st) return '';
+  var swAvail = st.software && st.software.available;
+  var ovAvail = st.overlay && st.overlay.available;
+  if (!swAvail && !ovAvail) return '';
+
+  var parts = [];
+  if (swAvail) parts.push('MANET v' + escHtml(st.software.local) + ' → v' + escHtml(st.software.remote));
+  if (ovAvail) parts.push('Kernel/Drivers v' + escHtml(st.overlay.local) + ' → v' + escHtml(st.overlay.remote));
+
+  var html = '<div class="fleet-pending">';
+  html += '<div class="fleet-pending-head"><div class="fleet-pending-title">Update Available</div></div>';
+  html += '<div class="fleet-pending-meta">' + parts.join(' &middot; ') + '</div>';
+
+  // While an apply is actually in flight (phase != idle), show real
+  // progress instead of the buttons — the daemon downloads/extracts
+  // synchronously, so this is genuine state, not a guess. This also
+  // doubles as the double-click fix: as long as this keeps getting
+  // re-rendered from live status, there's no window where the buttons
+  // are clickable during an in-progress apply.
+  var phase = st.phase || 'idle';
+  if (phase !== 'idle') {
+    html += '<div class="fleet-pending-meta" id="cfg-update-phase">' + escHtml(configPhaseLabel(st)) + '</div>';
+    if (phase === 'rebooting') {
+      html += '<div class="fleet-actions" style="justify-content:flex-end">' +
+        '<button class="fleet-btn" id="cfg-reboot-now-btn">Reboot Now</button></div>';
+    }
+  } else {
+    html += '<div class="fleet-actions">';
+    if (swAvail) html += '<button class="fleet-btn fleet-btn-primary" id="cfg-update-now-sw-btn">Update MANET</button>';
+    if (ovAvail) html += '<button class="fleet-btn fleet-btn-danger" id="cfg-update-now-ov-btn">Update Kernel/Drivers</button>';
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+// Takes the full status (not just the phase string) so the "rebooting"
+// case can compute a live countdown from reboot_at — node-update writes
+// the actual jittered reboot time, so this isn't a guess.
+function configPhaseLabel(st) {
+  var phase = st.phase || 'idle';
+  if (phase === 'rebooting' && st.reboot_at) {
+    var secs = Math.max(0, Math.round((new Date(st.reboot_at).getTime() - Date.now()) / 1000));
+    var m = Math.floor(secs / 60), s = secs % 60;
+    return 'Update applied — rebooting in ' + m + 'm ' + (s < 10 ? '0' : '') + s + 's…';
+  }
+  var labels = {
+    'downloading software': 'Downloading MANET update…',
+    'extracting software': 'Extracting MANET update…',
+    'downloading overlay': 'Downloading Kernel/Drivers update…',
+    'extracting overlay': 'Extracting Kernel/Drivers update…',
+    'rebooting': 'Update applied — rebooting now…'
+  };
+  return labels[phase] || (phase.charAt(0).toUpperCase() + phase.slice(1) + '…');
+}
+
+// Wires whichever per-channel update buttons the banner actually rendered —
+// separate buttons (not one combined action) so overlay, which has no
+// rollback, is never applied as a side effect of clicking through a routine
+// software update in the field.
+function configWireUpdateButtons() {
+  var swBtn = document.getElementById('cfg-update-now-sw-btn');
+  if (swBtn) swBtn.addEventListener('click', function() { configUpdateNow('software', swBtn); });
+  var ovBtn = document.getElementById('cfg-update-now-ov-btn');
+  if (ovBtn) ovBtn.addEventListener('click', function() { configUpdateNow('overlay', ovBtn); });
+  var rebootBtn = document.getElementById('cfg-reboot-now-btn');
+  if (rebootBtn) rebootBtn.addEventListener('click', function() { configRebootNow(rebootBtn); });
+}
+
+// Overrides the jittered shutdown node-update already scheduled — reuses
+// the existing /api/terminal/reboot endpoint (same one Services uses) to
+// reboot immediately rather than waiting out the 1-15 min spread. Safe:
+// the update itself already finished applying before this phase, so an
+// earlier reboot just reaches the same end state sooner.
+function configRebootNow(btn) {
+  configConfirm('Reboot now instead of waiting for the scheduled time? You will lose connection until it comes back up.',
+    { label: 'Reboot Now', danger: true }, async function() {
+      btn.disabled = true;
+      try {
+        var r = await authFetch(configBaseUrl() + '/api/terminal/reboot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        if (!r.ok) throw new Error('request failed');
+        notify('Update', 'Rebooting now', { type: 'success' });
+        configStopUpdatePoll();
+      } catch (e) {
+        btn.disabled = false;
+        notify('Update', 'Failed to trigger reboot', { type: 'error' });
+      }
+    });
+}
+
+var configUpdatePollTimer = null;
+var configRebootTickTimer = null;
+
+// Polls update-status every 3s while an apply is in progress and patches
+// just the banner in place — not a full configFetch()/re-render, so this
+// can safely run while the operator is mid-edit elsewhere on the page.
+function configStartUpdatePoll() {
+  if (configUpdatePollTimer) return;
+  configUpdatePollTimer = setInterval(async function() {
+    try {
+      var r = await fetch(configBaseUrl() + '/api/admin/update-status');
+      var st = await r.json();
+      configUpdateStatus = st;
+      configRefreshUpdateBanner();
+      var phase = st.phase || 'idle';
+      if (phase === 'idle') {
+        configStopUpdatePoll();
+        // Apply finished (success or failure) — refresh the full view so
+        // availability reflects the new state: banner disappears on
+        // success, or the buttons come back for a retry on failure.
+        if (!configEditing) configFetch();
+      } else if (phase === 'rebooting') {
+        configStartRebootTick();
+        // Node is about to disappear — no point chasing connectivity
+        // once it does.
+        setTimeout(configStopUpdatePoll, 15000);
+      }
+    } catch (e) {
+      // Node likely mid-reboot / unreachable — stop rather than spam
+      // failed requests indefinitely.
+      configStopUpdatePoll();
+    }
+  }, 3000);
+}
+
+// Ticks the "rebooting in Xm Ys" text every second between 3s status
+// polls, computed client-side from the reboot_at timestamp node-update
+// already reported — no extra network traffic for the countdown itself.
+function configStartRebootTick() {
+  if (configRebootTickTimer) return;
+  configRebootTickTimer = setInterval(function() {
+    var el = document.getElementById('cfg-update-phase');
+    if (!el || !configUpdateStatus || configUpdateStatus.phase !== 'rebooting') {
+      configStopRebootTick();
+      return;
+    }
+    el.textContent = configPhaseLabel(configUpdateStatus);
+  }, 1000);
+}
+
+function configStopRebootTick() {
+  if (configRebootTickTimer) { clearInterval(configRebootTickTimer); configRebootTickTimer = null; }
+}
+
+function configStopUpdatePoll() {
+  if (configUpdatePollTimer) { clearInterval(configUpdatePollTimer); configUpdatePollTimer = null; }
+  configStopRebootTick();
+}
+
+// Re-renders just the update banner from the current configUpdateStatus,
+// in place, without touching the rest of the panel.
+function configRefreshUpdateBanner() {
+  var container = document.getElementById('cfg-content');
+  if (!container) return;
+  var old = container.querySelector('.fleet-pending');
+  var html = configRenderUpdateBanner();
+  if (!html) {
+    if (old) old.remove();
+    return;
+  }
+  var wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  var fresh = wrap.firstElementChild;
+  if (old) old.replaceWith(fresh);
+  else container.insertBefore(fresh, container.firstChild);
+  configWireUpdateButtons();
+}
+
+// Minimal confirm-bar, mirroring fleetConfirm() in fleet.js but scoped to
+// #cfg-content — kept local rather than depending on fleet.js being loaded.
+function configConfirm(msg, opts, onConfirm) {
+  var panel = document.getElementById('cfg-content');
+  var existing = panel.querySelector('.fleet-confirm-bar');
+  if (existing) existing.remove();
+  var bar = document.createElement('div');
+  bar.className = 'fleet-confirm-bar' + (opts.danger ? ' fleet-confirm-danger' : '');
+  bar.innerHTML = '<div class="fleet-confirm-msg">' + msg + '</div>' +
+    '<div class="fleet-confirm-actions">' +
+    '<button class="fleet-btn ' + (opts.danger ? 'fleet-btn-danger' : 'fleet-btn-primary') + ' fleet-confirm-yes">' +
+    escHtml(opts.label || 'Confirm') + '</button>' +
+    '<button class="fleet-btn fleet-btn-cancel fleet-confirm-no">Cancel</button>' +
+    '</div>';
+  panel.insertBefore(bar, panel.firstChild);
+  bar.querySelector('.fleet-confirm-yes').onclick = function() { bar.remove(); onConfirm(); };
+  bar.querySelector('.fleet-confirm-no').onclick = function() { bar.remove(); };
+  bar.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function configUpdateNow(channel, btn) {
+  var st = configUpdateStatus || {};
+  var channelLabel = channel === 'overlay' ? 'Kernel/Drivers' : 'MANET';
+
+  var mbps = st.uplink_mbps || 0;
+  var uplinkType = st.uplink_type || 'unknown';
+  var minMbps = parseFloat((configData && configData.current_config && configData.current_config.auto_update_min_mbps) || '10');
+  var belowThreshold = uplinkType !== 'wired' && mbps < minMbps;
+
+  var msg = 'Update ' + channelLabel + ' now? This downloads the update and reboots this node once applied.';
+  if (channel === 'overlay') {
+    msg += ' The Kernel/Drivers channel updates kernel/firmware — there is no rollback if it fails to boot.';
+  }
+  if (belowThreshold) {
+    msg = '⚠ Current link is ' + mbps.toFixed(1) + ' Mbps (' + uplinkType + '), below the ' + minMbps +
+      ' Mbps recommended for auto-update. This may take a long time and could disrupt mesh connectivity. ' +
+      'Consider using a higher-bandwidth connection (Ethernet, WiFi mesh, or 8MHz HaLow) if available. ' + msg;
+  }
+
+  configConfirm(msg, { label: 'Update ' + channelLabel, danger: belowThreshold || channel === 'overlay' }, async function() {
+    // Disable immediately — before the request even resolves — so a
+    // second click during the network round-trip can't fire a duplicate
+    // trigger. The status poll below takes over showing real progress
+    // once the daemon actually starts working.
+    if (btn) btn.disabled = true;
+    try {
+      var r = await fetch(configBaseUrl() + '/api/admin/update-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: channel })
+      });
+      if (!r.ok) throw new Error('request failed');
+      notify('Update', 'Update triggered', { type: 'success' });
+      configStartUpdatePoll();
+    } catch(e) {
+      if (btn) btn.disabled = false;
+      notify('Update', 'Failed to trigger update', { type: 'error' });
+    }
+  });
 }
 
 function configRenderEdit(panel, cfg) {
@@ -206,10 +463,27 @@ function configRenderEdit(panel, cfg) {
     { section: 'GPS / CoT' },
     { label: 'GPS Enabled', key: 'gps', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}],
       hint: 'No on hardware with no GPS module — stops gpsd/gps-reader instead of leaving them polling for a fix that will never come.' },
+    { label: 'GPS Source', key: 'gps_source', type: 'select', options: [
+        {v:'receiver',l:'Receiver (hardware GPS)'},{v:'static',l:'Static (fixed location)'}
+      ], hint: 'Static reports a fixed position with no GPS module needed — e.g. a stationary gateway node.',
+      showIf: [{key:'gps', equals:'y'}] },
+    { label: 'Latitude', key: 'gps_static_lat', type: 'text', hint: 'Decimal degrees, e.g. 52.859337',
+      showIf: [{key:'gps', equals:'y'}, {key:'gps_source', equals:'static'}] },
+    { label: 'Longitude', key: 'gps_static_lon', type: 'text', hint: 'Decimal degrees, e.g. 6.513487',
+      showIf: [{key:'gps', equals:'y'}, {key:'gps_source', equals:'static'}] },
+    { label: 'Altitude', key: 'gps_static_alt', type: 'text', hint: 'Meters above sea level',
+      showIf: [{key:'gps', equals:'y'}, {key:'gps_source', equals:'static'}] },
     { label: 'Callsign', key: 'callsign', type: 'text', hint: 'Blank = hostname' },
     { label: 'CoT Type', key: 'cot_type', type: 'text', hint: 'Blank = a-f-G-E (equipment, no team). CoT/2525 type code.' },
-    { label: 'CoT Team', key: 'cot_team', type: 'text', hint: 'Blank = no team affiliation shown. Set to give this node a team-member identity instead.' },
-    { label: 'CoT Role', key: 'cot_role', type: 'text', hint: 'Blank = Team Member. Only shown when CoT Team is set.' },
+    { label: 'CoT Team', key: 'cot_team', type: 'select', options: [
+        {v:'',l:'No affiliation'},
+        {v:'White',l:'White'},{v:'Yellow',l:'Yellow'},{v:'Orange',l:'Orange'},{v:'Magenta',l:'Magenta'},
+        {v:'Red',l:'Red'},{v:'Maroon',l:'Maroon'},{v:'Purple',l:'Purple'},{v:'Dark Blue',l:'Dark Blue'},
+        {v:'Blue',l:'Blue'},{v:'Cyan',l:'Cyan'},{v:'Teal',l:'Teal'},{v:'Green',l:'Green'},
+        {v:'Dark Green',l:'Dark Green'},{v:'Brown',l:'Brown'}
+      ], hint: 'ATAK team-color affiliation. No affiliation = shown as equipment, no team.' },
+    { label: 'CoT Role', key: 'cot_role', type: 'text', hint: 'Blank = Team Member.',
+      showIf: [{key:'cot_team', notEmpty:true}] },
     { label: 'CoT Icon', key: 'cot_icon', type: 'text', hint: 'Blank = default icon for the type. Optional iconset path override.' },
     { section: 'Access Point' },
     { label: 'EUD Mode', key: 'eud', type: 'select', options: ['wired', 'wireless', 'both', 'auto', 'none'] },
@@ -231,8 +505,10 @@ function configRenderEdit(panel, cfg) {
     ], hint: 'Per-device symmetric bandwidth limit for connected EUDs' },
     { section: 'Services' },
     { label: 'Battery Monitor', key: 'battery_monitor', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
-    { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Trigger update check when internet is detected' },
+    { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Checks for a new release every 6h, and immediately when this setting is saved' },
     { label: 'Update URL', key: 'update_url', type: 'text', hint: 'Base URL for OTA tarball server (blank = disabled)' },
+    { label: 'Auto Update Overlay (kernel/firmware)', key: 'auto_update_overlay', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Updates the kernel/modules/firmware. No rollback if a bad overlay fails to boot — test on one node before enabling fleet-wide. Off by default.' },
+    { label: 'Auto Update Min Bandwidth (Mbit)', key: 'auto_update_min_mbps', type: 'text', hint: 'Automatic apply is skipped below this link speed. Manual "Update Now" and fleet-wide force update ignore it (with a warning).' },
     { section: 'Gateway' },
     { label: 'Gateway Enabled', key: 'gateway', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}], hint: 'Allow this node to act as a mesh gateway' },
     { label: 'NAT Masquerade', key: 'gateway_nat', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
@@ -266,14 +542,15 @@ function configRenderEdit(panel, cfg) {
     { label: 'RX End Beep', key: 'voice_beep_rx_end', type: 'select', options: [{v:'y',l:'On'},{v:'n',l:'Off'}] },
   ];
 
-  let html = (configTarget ? '<div class="cfg-target-label">Editing: ' + escHtml(configTarget) + '</div>' : '') + '<div class="card">';
+  let html = configRenderUpdateBanner(cfg) +
+    (configTarget ? '<div class="cfg-target-label">Editing: ' + escHtml(configTarget) + '</div>' : '') + '<div class="card">';
   fields.forEach(f => {
     if (f.section) {
       html += '</div><div class="card cfg-section"><div class="cfg-section-title">' + f.section + '</div>';
       return;
     }
     const curVal = f.voiceKey ? ((configVoiceData && configVoiceData[f.voiceKey]) || f.fallback || '') : (cfg[f.key] || '');
-    html += '<div class="cfg-row"><div class="cfg-label">' + f.label;
+    html += '<div class="cfg-row" id="cfg-row-' + f.key + '"><div class="cfg-label">' + f.label;
     if (f.hint) html += '<span class="hint">' + f.hint + '</span>';
     html += '</div>';
     if (f.type === 'select') {
@@ -304,11 +581,41 @@ function configRenderEdit(panel, cfg) {
   html += '</div></div>';
   panel.innerHTML = html;
 
+  // Dynamic show/hide: a field with `showIf` (an array of conditions,
+  // ANDed together — each either {key, equals} for an exact match or
+  // {key, notEmpty:true} for "has any value") only shows its row once
+  // every referenced control currently satisfies its condition.
+  // Re-evaluated whenever any controlling field changes, so e.g. picking
+  // GPS Source = Static reveals the latitude/longitude/altitude rows, or
+  // picking a CoT Team reveals CoT Role, without a page reload.
+  function configApplyShowIf() {
+    fields.forEach(f => {
+      if (!f.showIf) return;
+      const row = document.getElementById('cfg-row-' + f.key);
+      if (!row) return;
+      const visible = f.showIf.every(cond => {
+        const el = document.getElementById('cfg-f-' + cond.key);
+        if (!el) return false;
+        if (cond.notEmpty) return el.value !== '';
+        return el.value === cond.equals;
+      });
+      row.style.display = visible ? '' : 'none';
+    });
+  }
+  const showIfControllers = new Set();
+  fields.forEach(f => { if (f.showIf) f.showIf.forEach(cond => showIfControllers.add(cond.key)); });
+  showIfControllers.forEach(key => {
+    const el = document.getElementById('cfg-f-' + key);
+    if (el) el.addEventListener('change', configApplyShowIf);
+  });
+  configApplyShowIf();
+
   document.getElementById('cfg-back-btn').addEventListener('click', () => {
     configEditing = false;
     configFetch();
   });
   document.getElementById('cfg-save-btn').addEventListener('click', configSave);
+  configWireUpdateButtons();
 
   // Live hostname preview
   const hostnameInput = document.getElementById('cfg-f-node_hostname');
@@ -332,11 +639,27 @@ function configRenderEdit(panel, cfg) {
 }
 
 async function configSave() {
+  const panel = document.getElementById('cfg-content');
+  const saveBtn = document.getElementById('cfg-save-btn');
+  const backBtn = document.getElementById('cfg-back-btn');
+  const savedBtnText = saveBtn.textContent;
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving…';
+  if (backBtn) backBtn.disabled = true;
+  panel.querySelectorAll('.cfg-input').forEach(el => { el.disabled = true; });
+
+  function restoreEditable() {
+    saveBtn.disabled = false;
+    saveBtn.textContent = savedBtnText;
+    if (backBtn) backBtn.disabled = false;
+    panel.querySelectorAll('.cfg-input').forEach(el => { el.disabled = false; });
+  }
+
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','eud_bandwidth','mesh_ssid','mesh_key',
     'ipv4_network','regulatory_domain','halow_bw','multicast_mode','battery_monitor','admin_password','require_auth',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
-    'auto_update','update_url',
-    'gps','callsign','cot_type','cot_team','cot_role','cot_icon',
+    'auto_update','update_url','auto_update_overlay','auto_update_min_mbps',
+    'gps','gps_source','gps_static_lat','gps_static_lon','gps_static_alt','callsign','cot_type','cot_team','cot_role','cot_icon',
     'voice_mic_volume','voice_speaker_volume','voice_channel',
     'voice_beep_tx_start','voice_beep_rx_end','voice_gain','voice_enabled'];
   const config = {};
@@ -373,8 +696,12 @@ async function configSave() {
       if (!meshResult.ok) errors.push('Mesh: ' + (meshResult.error || 'unknown'));
       if (!voiceResult.ok) errors.push('Voice: ' + (voiceResult.error || 'unknown'));
       notify('Save Failed', errors.join(', '), {type:'error'});
+      restoreEditable();
     }
-  } catch(e) { notify('Save Failed', e.message, {type:'error'}); }
+  } catch(e) {
+    notify('Save Failed', e.message, {type:'error'});
+    restoreEditable();
+  }
 }
 
 // QOS Priority

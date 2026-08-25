@@ -2,6 +2,8 @@ let fleetInitialized = false;
 let fleetData = null;
 let fleetPollTimer = null;
 let fleetEditing = false;
+let fleetUpdateSummaryData = null;
+let fleetUpdatePollTimer = null;
 
 const QOS_BAND_OPTS = [
   {v:'0',l:'High (Voice)'},{v:'1',l:'Normal'},{v:'2',l:'Low (Bulk)'}
@@ -27,6 +29,8 @@ const MESH_FIELDS = [
   { section: 'Updates' },
   { key: 'auto_update', label: 'Auto Update', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}] },
   { key: 'update_url', label: 'Update URL', hint: 'Base URL for OTA tarball server (blank = disabled)' },
+  { key: 'auto_update_overlay', label: 'Auto Update Overlay', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Kernel/firmware — no rollback if it fails to boot' },
+  { key: 'auto_update_min_mbps', label: 'Auto Update Min Bandwidth (Mbit)', hint: 'Automatic apply is skipped below this — manual/force update ignores it' },
 ];
 
 const PROFILE_SECTIONS = [
@@ -88,10 +92,13 @@ function fleetActivate() {
   }
   fleetFetch();
   fleetPollTimer = setInterval(fleetFetch, 5000);
+  fleetFetchUpdateSummary();
+  fleetUpdatePollTimer = setInterval(fleetFetchUpdateSummary, 30000);
 }
 
 function fleetDeactivate() {
   if (fleetPollTimer) { clearInterval(fleetPollTimer); fleetPollTimer = null; }
+  if (fleetUpdatePollTimer) { clearInterval(fleetUpdatePollTimer); fleetUpdatePollTimer = null; }
 }
 
 async function fleetFetch() {
@@ -102,6 +109,19 @@ async function fleetFetch() {
   } catch(e) {
     document.getElementById('tab-fleet').innerHTML =
       '<div class="loading-msg">Failed to load fleet status</div>';
+  }
+}
+
+// Fanned out to every node (with a per-node timeout), so this runs on its
+// own slower interval rather than alongside the 5s config-status poll.
+async function fleetFetchUpdateSummary() {
+  try {
+    var r = await fetch('/api/admin/update-summary');
+    fleetUpdateSummaryData = await r.json();
+    fleetRender();
+  } catch(e) {
+    // Leave the last-known summary in place rather than blanking the banner
+    // over one failed poll.
   }
 }
 
@@ -157,6 +177,7 @@ function fleetRender() {
   html += '</div></div>';
 
   if (pending) html += fleetRenderPending(pending, d);
+  html += fleetRenderUpdateBanner();
 
   // Network config
   var meshCfg = prefs.mesh_config || {};
@@ -218,6 +239,113 @@ function fleetRender() {
   if (forceBtn) forceBtn.addEventListener('click', function() { fleetActivateConfig(true); });
   var cancelBtn = document.getElementById('fleet-cancel-btn');
   if (cancelBtn) cancelBtn.addEventListener('click', fleetCancelConfig);
+  var forceUpdateSwBtn = document.getElementById('fleet-force-update-sw-btn');
+  if (forceUpdateSwBtn) forceUpdateSwBtn.addEventListener('click', function() { fleetForceUpdate('software', forceUpdateSwBtn); });
+  var forceUpdateOvBtn = document.getElementById('fleet-force-update-ov-btn');
+  if (forceUpdateOvBtn) forceUpdateOvBtn.addEventListener('click', function() { fleetForceUpdate('overlay', forceUpdateOvBtn); });
+}
+
+// Renders a sticky "N of M nodes have an update available" banner, same
+// visual language as the staged-config banner above it, when any node's
+// own node-update status (polled via fleetFetchUpdateSummary) reports a
+// software or overlay update available.
+function fleetRenderUpdateBanner() {
+  if (!fleetUpdateSummaryData || !fleetUpdateSummaryData.nodes) return '';
+  var nodes = fleetUpdateSummaryData.nodes;
+  var withUpdate = nodes.filter(function(n) {
+    var s = n.status;
+    return s && ((s.software && s.software.available) || (s.overlay && s.overlay.available));
+  });
+  if (!withUpdate.length) return '';
+
+  var swNodes = nodes.filter(function(n) { return n.status && n.status.software && n.status.software.available; });
+  var ovNodes = nodes.filter(function(n) { return n.status && n.status.overlay && n.status.overlay.available; });
+  function belowCount(list) {
+    return list.filter(function(n) {
+      var s = n.status;
+      return s.uplink_type && s.uplink_type !== 'wired' && (s.uplink_mbps || 0) < 10;
+    }).length;
+  }
+  var swBelow = belowCount(swNodes);
+  var ovBelow = belowCount(ovNodes);
+
+  // Hide a channel's button while any of its nodes are actively applying
+  // (picked up on the existing 30s update-summary poll) — same idea as the
+  // per-node banner: don't leave a button clickable mid-operation.
+  function inProgressCount(list) {
+    return list.filter(function(n) {
+      var p = n.status && n.status.phase;
+      return p && p !== 'idle';
+    }).length;
+  }
+  var swApplying = inProgressCount(swNodes);
+  var ovApplying = inProgressCount(ovNodes);
+
+  var html = '<div class="fleet-pending">';
+  html += '<div class="fleet-pending-head"><div class="fleet-pending-title">Update Available</div></div>';
+  html += '<div class="fleet-pending-meta">' + withUpdate.length + ' of ' + nodes.length +
+    ' node' + (nodes.length !== 1 ? 's' : '') + ' have an update available';
+  var parts = [];
+  if (swNodes.length) parts.push(swNodes.length + ' MANET');
+  if (ovNodes.length) parts.push(ovNodes.length + ' Kernel/Drivers');
+  if (parts.length) html += ' (' + parts.join(', ') + ')';
+  html += '</div>';
+  html += '<div class="fleet-actions">';
+  if (swApplying) {
+    html += '<div class="fleet-pending-meta">' + swApplying + ' node' + (swApplying !== 1 ? 's' : '') + ' applying MANET update…</div>';
+  } else if (swNodes.length) {
+    html += '<button class="fleet-btn fleet-btn-primary" id="fleet-force-update-sw-btn" data-below="' +
+      swBelow + '" data-total="' + swNodes.length + '">Force Update MANET (' + swNodes.length + ')</button>';
+  }
+  if (ovApplying) {
+    html += '<div class="fleet-pending-meta">' + ovApplying + ' node' + (ovApplying !== 1 ? 's' : '') + ' applying Kernel/Drivers update…</div>';
+  } else if (ovNodes.length) {
+    html += '<button class="fleet-btn fleet-btn-danger" id="fleet-force-update-ov-btn" data-below="' +
+      ovBelow + '" data-total="' + ovNodes.length + '">Force Update Kernel/Drivers (' + ovNodes.length + ')</button>';
+  }
+  html += '</div></div>';
+  return html;
+}
+
+// channel is explicit ('software' or 'overlay') — separate buttons rather
+// than one combined action, so overlay (no rollback) is never triggered as
+// a side effect of a routine fleet-wide software push.
+function fleetForceUpdate(channel, btn) {
+  var below = parseInt(btn.getAttribute('data-below') || '0', 10);
+  var total = parseInt(btn.getAttribute('data-total') || '0', 10);
+  var channelLabel = channel === 'overlay' ? 'Kernel/Drivers' : 'MANET';
+
+  var msg = 'Force ' + channelLabel + ' update on all ' + total + ' node' + (total !== 1 ? 's' : '') +
+    ' with an update available now?';
+  if (channel === 'overlay') {
+    msg += ' The Kernel/Drivers channel updates kernel/firmware — there is no rollback if it fails to boot.';
+  }
+  if (below > 0) {
+    msg = '⚠ ' + below + ' of ' + total + ' node' + (total !== 1 ? 's' : '') +
+      (below === 1 ? ' is' : ' are') +
+      ' below the recommended bandwidth and may take a long time to update, ' +
+      'disrupting mesh connectivity during the download and reboot. ' + msg;
+  }
+  fleetConfirm(msg, { label: 'Force ' + channelLabel + ' Update', danger: below > 0 || channel === 'overlay' }, async function() {
+    // Disable immediately — before the request resolves — so a second
+    // click during the network round-trip can't fire a duplicate
+    // broadcast. fleetFetchUpdateSummary() below picks up real per-node
+    // progress (via status.phase) as soon as it lands.
+    btn.disabled = true;
+    try {
+      var r = await fetch('/api/admin/force-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: channel })
+      });
+      if (!r.ok) throw new Error('request failed');
+      fleetToast(channelLabel + ' update triggered on all nodes', 'success');
+      fleetFetchUpdateSummary();
+    } catch(e) {
+      btn.disabled = false;
+      fleetToast('Failed to trigger update', 'error');
+    }
+  });
 }
 
 function fleetRenderPending(pkg, status) {

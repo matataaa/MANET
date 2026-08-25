@@ -396,8 +396,8 @@ ask_questions() {
 
         # Automatic updates for MANET tools
         echo ""
-        read -p "Enable automatic updates for MANET tools? (Y/n): " AUTO_UPDATE
-        AUTO_UPDATE=${AUTO_UPDATE:-y}
+        read -p "Enable automatic updates for MANET tools? (y/N): " AUTO_UPDATE
+        AUTO_UPDATE=${AUTO_UPDATE:-n}
         if [ "$AUTO_UPDATE" = "y" ] || [ "$AUTO_UPDATE" = "Y" ]; then
                 AUTO_UPDATE="y"
                 echo "Automatic updates enabled."

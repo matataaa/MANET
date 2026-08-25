@@ -124,11 +124,23 @@ func assembleAdminStatus() AdminStatus {
 		"require_auth":         confGet(conf, "require_auth", "n"),
 		"auto_update":          confGet(conf, "auto_update", "n"),
 		"update_url":           confGet(conf, "update_url", ""),
+		"auto_update_overlay":  confGet(conf, "auto_update_overlay", "n"),
+		"auto_update_min_mbps": confGet(conf, "auto_update_min_mbps", "10"),
 		"eud_bandwidth":        confGet(conf, "eud_bandwidth", "0"),
 		"battery_monitor":      confGet(conf, "battery_monitor", "y"),
 		"voice_beep_tx_start":  confGet(conf, "voice_beep_tx_start", "y"),
 		"voice_beep_rx_end":    confGet(conf, "voice_beep_rx_end", "y"),
 		"voice_gain":           confGet(conf, "voice_gain", "3.0"),
+		"gps":                  confGet(conf, "gps", "y"),
+		"gps_source":           confGet(conf, "gps_source", "receiver"),
+		"gps_static_lat":       conf["gps_static_lat"],
+		"gps_static_lon":       conf["gps_static_lon"],
+		"gps_static_alt":       conf["gps_static_alt"],
+		"callsign":             conf["callsign"],
+		"cot_type":             conf["cot_type"],
+		"cot_team":             conf["cot_team"],
+		"cot_role":             conf["cot_role"],
+		"cot_icon":             conf["cot_icon"],
 	}
 
 	if currentConfig["halow_bw"] == "" {

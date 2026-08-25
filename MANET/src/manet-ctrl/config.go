@@ -14,19 +14,22 @@ import (
 )
 
 const (
-	RegistryFile     = "/var/run/mesh_node_registry"
-	MeshConfFile     = "/etc/mesh.conf"
-	MeshStateFile    = "/etc/mesh_ipv4_state"
-	PendingConfFile  = "/var/run/mesh_pending_config.json"
-	GPSStatusFile    = "/run/gps_status.json"
-	BatteryFile      = "/run/battery_status.json"
-	AckVersionFile   = "/var/run/mesh_config_ack_version"
-	FleetPrefsFile   = "/var/run/fleet_preferences.json"
-	NoMeshIfFile     = "/var/lib/no_mesh_if"
-	APInterfaceFile  = "/var/lib/ap_interface"
-	RefreshMS        = 15000
-	PerfAuthCookie   = "manet_perf_auth"
-	PerfAuthMaxAge   = 15552000
+	RegistryFile       = "/var/run/mesh_node_registry"
+	MeshConfFile       = "/etc/mesh.conf"
+	MeshStateFile      = "/etc/mesh_ipv4_state"
+	PendingConfFile    = "/var/run/mesh_pending_config.json"
+	GPSStatusFile      = "/run/gps_status.json"
+	BatteryFile        = "/run/battery_status.json"
+	AckVersionFile     = "/var/run/mesh_config_ack_version"
+	FleetPrefsFile     = "/var/run/fleet_preferences.json"
+	NoMeshIfFile       = "/var/lib/no_mesh_if"
+	APInterfaceFile    = "/var/lib/ap_interface"
+	UpdateStatusFile   = "/var/run/manet_update_status.json"
+	UpdateTriggerFile  = "/run/manet-update-trigger"
+	FleetUpdateAckFile = "/var/run/fleet_update_ack_ts"
+	RefreshMS          = 15000
+	PerfAuthCookie     = "manet_perf_auth"
+	PerfAuthMaxAge     = 15552000
 )
 
 var (
@@ -38,29 +41,29 @@ var (
 // --- JSON types matching frontend expectations ---
 
 type Node struct {
-	ID           string      `json:"id"`
-	Hostname     string      `json:"hostname"`
-	MAC          string      `json:"mac"`
-	IP           string      `json:"ip"`
-	TQ           *int        `json:"tq"`
-	IsMe         bool        `json:"is_me"`
-	IsDirect     bool        `json:"is_direct"`
-	IsGateway    bool        `json:"is_gateway"`
-	IsSelectedGW bool        `json:"is_selected_gw"`
-	GPS          GPS         `json:"gps"`
-	Uptime       string      `json:"uptime"`
-	CPU          string      `json:"cpu"`
-	Battery      *BatteryInfo `json:"battery"`
-	NTP          bool        `json:"ntp"`
-	State        string      `json:"state"`
-	Ch2G         string      `json:"ch_2g"`
-	Ch5G         string      `json:"ch_5g"`
-	Limp         bool        `json:"limp"`
-	AllMACs      []string    `json:"all_macs"`
+	ID           string                 `json:"id"`
+	Hostname     string                 `json:"hostname"`
+	MAC          string                 `json:"mac"`
+	IP           string                 `json:"ip"`
+	TQ           *int                   `json:"tq"`
+	IsMe         bool                   `json:"is_me"`
+	IsDirect     bool                   `json:"is_direct"`
+	IsGateway    bool                   `json:"is_gateway"`
+	IsSelectedGW bool                   `json:"is_selected_gw"`
+	GPS          GPS                    `json:"gps"`
+	Uptime       string                 `json:"uptime"`
+	CPU          string                 `json:"cpu"`
+	Battery      *BatteryInfo           `json:"battery"`
+	NTP          bool                   `json:"ntp"`
+	State        string                 `json:"state"`
+	Ch2G         string                 `json:"ch_2g"`
+	Ch5G         string                 `json:"ch_5g"`
+	Limp         bool                   `json:"limp"`
+	AllMACs      []string               `json:"all_macs"`
 	BestLink     map[string]interface{} `json:"best_link"`
-	HopCount     *int        `json:"hop_count"`
-	LastSeen     string      `json:"last_seen"`
-	Applets      []AppletBrief `json:"applets,omitempty"`
+	HopCount     *int                   `json:"hop_count"`
+	LastSeen     string                 `json:"last_seen"`
+	Applets      []AppletBrief          `json:"applets,omitempty"`
 }
 
 type AppletBrief struct {
@@ -120,35 +123,36 @@ type EUD struct {
 type GPS struct {
 	Available bool   `json:"available"`
 	Connected bool   `json:"connected"`
+	Source    string `json:"source,omitempty"`
 	Lat       string `json:"lat"`
 	Lon       string `json:"lon"`
 	Alt       string `json:"alt"`
 }
 
 type StatusData struct {
-	Nodes        []Node            `json:"nodes"`
-	MyMAC        string            `json:"my_mac"`
-	MyHostname   string            `json:"my_hostname"`
-	MyIP         string            `json:"my_ip"`
-	MeshSSID     string            `json:"mesh_ssid"`
-	Network      string            `json:"network"`
-	GatewayCount int               `json:"gateway_count"`
-	SelectedGW   string            `json:"selected_gw"`
-	Neighbors    []BatNeighbor     `json:"neighbors"`
-	Edges        []Edge            `json:"edges"`
-	Timestamp    int64             `json:"timestamp"`
+	Nodes        []Node        `json:"nodes"`
+	MyMAC        string        `json:"my_mac"`
+	MyHostname   string        `json:"my_hostname"`
+	MyIP         string        `json:"my_ip"`
+	MeshSSID     string        `json:"mesh_ssid"`
+	Network      string        `json:"network"`
+	GatewayCount int           `json:"gateway_count"`
+	SelectedGW   string        `json:"selected_gw"`
+	Neighbors    []BatNeighbor `json:"neighbors"`
+	Edges        []Edge        `json:"edges"`
+	Timestamp    int64         `json:"timestamp"`
 }
 
 type ThrottleInfo struct {
-	Raw            string `json:"raw"`
-	Undervoltage   bool   `json:"undervoltage"`
-	FreqCapped     bool   `json:"freq_capped"`
-	Throttled      bool   `json:"throttled"`
-	SoftTempLimit  bool   `json:"soft_temp_limit"`
-	WasUndervolt   bool   `json:"was_undervoltage"`
-	WasFreqCapped  bool   `json:"was_freq_capped"`
-	WasThrottled   bool   `json:"was_throttled"`
-	WasSoftTemp    bool   `json:"was_soft_temp_limit"`
+	Raw           string `json:"raw"`
+	Undervoltage  bool   `json:"undervoltage"`
+	FreqCapped    bool   `json:"freq_capped"`
+	Throttled     bool   `json:"throttled"`
+	SoftTempLimit bool   `json:"soft_temp_limit"`
+	WasUndervolt  bool   `json:"was_undervoltage"`
+	WasFreqCapped bool   `json:"was_freq_capped"`
+	WasThrottled  bool   `json:"was_throttled"`
+	WasSoftTemp   bool   `json:"was_soft_temp_limit"`
 }
 
 type NetworkState struct {
@@ -175,22 +179,24 @@ type SystemStats struct {
 }
 
 type LocalData struct {
-	Hostname   string            `json:"hostname"`
-	IP         string            `json:"ip"`
-	MAC        string            `json:"mac"`
-	Uptime     string            `json:"uptime"`
-	Battery    *BatteryInfo      `json:"battery"`
-	GPS        GPS               `json:"gps"`
-	Interfaces []Iface           `json:"interfaces"`
-	EUDs       []EUD             `json:"euds"`
-	Services   map[string]bool   `json:"services"`
-	EUDMode    string            `json:"eud_mode"`
-	APSSID     string            `json:"ap_ssid"`
-	MeshSSID   string            `json:"mesh_ssid"`
-	Throttle   *ThrottleInfo     `json:"throttle,omitempty"`
-	Network    *NetworkState     `json:"network,omitempty"`
-	System     *SystemStats      `json:"system,omitempty"`
-	Airtime    *AirtimeInfo      `json:"airtime,omitempty"`
+	Hostname   string          `json:"hostname"`
+	IP         string          `json:"ip"`
+	MAC        string          `json:"mac"`
+	Uptime     string          `json:"uptime"`
+	Battery    *BatteryInfo    `json:"battery"`
+	GPS        GPS             `json:"gps"`
+	Interfaces []Iface         `json:"interfaces"`
+	EUDs       []EUD           `json:"euds"`
+	Services   map[string]bool `json:"services"`
+	EUDMode    string          `json:"eud_mode"`
+	APSSID     string          `json:"ap_ssid"`
+	MeshSSID   string          `json:"mesh_ssid"`
+	Throttle   *ThrottleInfo   `json:"throttle,omitempty"`
+	Network    *NetworkState   `json:"network,omitempty"`
+	System     *SystemStats    `json:"system,omitempty"`
+	Airtime    *AirtimeInfo    `json:"airtime,omitempty"`
+	UplinkMbps float64         `json:"uplink_mbps"`
+	UplinkType string          `json:"uplink_type"`
 }
 
 type BatOriginator struct {
@@ -206,6 +212,7 @@ type BatNeighbor struct {
 	Iface    string  `json:"iface"`
 	MAC      string  `json:"mac"`
 	TQ       int     `json:"tq"`
+	RawTP    float64 `json:"-"`
 	LastSeen float64 `json:"-"`
 }
 

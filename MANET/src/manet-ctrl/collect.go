@@ -173,7 +173,7 @@ func round1(x float64) float64 { return math.Round(x*10) / 10 }
 // buildLinkBudget converts raw station stats into a link-budget view. The
 // morse driver presents S1G as a 5 GHz alias: reported bitrates are 20x the
 // real over-the-air rate, so divide when the interface is HaLow.
-func buildLinkBudget(st *StationLink, iface, halowBW string) map[string]interface{} {
+func buildLinkBudget(st *StationLink, iface, halowBW string, batTPMbps float64) map[string]interface{} {
 	isHalow := halowBW != "" && iface == "wlan2"
 	scale := 1.0
 	if isHalow {
@@ -195,6 +195,18 @@ func buildLinkBudget(st *StationLink, iface, halowBW string) map[string]interfac
 		// after the /20 above — "expected throughput" already reads
 		// ~7.5Mbps raw, not ~150Mbps). Use it as-is.
 		m["expected_mbps"] = round1(st.ExpectedMbps)
+		m["expected_source"] = "driver"
+	} else if batTPMbps > 0 {
+		// mt7915e (WiFi mesh) doesn't report "expected throughput" to
+		// mac80211 at all, so there's no driver figure to fall back on.
+		// batman-adv's own BATMAN_V throughput metric (same probe-derived
+		// number shown in Topology) is the next best thing — live-tested
+		// against real iperf3 on a wlan1 link and found to sit ~40-45%
+		// below actual achieved TCP throughput, i.e. a conservative
+		// estimate rather than an inflated one. Tag the source so the UI
+		// can flag it as an estimate instead of implying a driver reading.
+		m["expected_mbps"] = round1(batTPMbps)
+		m["expected_source"] = "batman"
 	}
 	if st.TxPackets > 0 {
 		m["retry_pct"] = round1(float64(st.TxRetries) * 100 / float64(st.TxPackets))
@@ -279,8 +291,12 @@ func runBatctlNeighbors() []BatNeighbor {
 			continue
 		}
 		raw, _ := strconv.ParseFloat(m[3], 64)
+		var rawTP float64
+		if isBatmanV() {
+			rawTP = raw
+		}
 		neighbors = append(neighbors, BatNeighbor{
-			Iface: m[4], MAC: normMAC(m[1]), TQ: normTQ(raw), LastSeen: lastSeen,
+			Iface: m[4], MAC: normMAC(m[1]), TQ: normTQ(raw), RawTP: rawTP, LastSeen: lastSeen,
 		})
 	}
 	return neighbors
@@ -297,7 +313,13 @@ func runBatctlGateways() []BatGateway {
 		if line == "" || strings.HasPrefix(line, "Gateway") || !macRE.MatchString(line) {
 			continue
 		}
-		selected := strings.HasPrefix(line, "=>")
+		// batctl marks the selected gateway with a leading "*" — same
+		// convention already handled for the originator table (origRE's
+		// optional leading group). Previously checked for "=>", which this
+		// batctl version (2025.4) doesn't emit, so Selected was always
+		// false and every gate/uplink computation that depends on it
+		// silently fell back to "no gateway found".
+		selected := strings.HasPrefix(line, "*")
 		mac := macRE.FindString(line)
 		tq := 0
 		if m := regexp.MustCompile(`\(\s*([\d.]+)\s*\)`).FindStringSubmatch(line); len(m) > 1 {
@@ -694,9 +716,33 @@ func getInterfaces() []Iface {
 			iface.Role = "bat"
 			iface.Health = "info"
 			iface.Detail = "batman-adv virtual interface"
-			if state == "DOWN" {
+			// bat0's kernel operstate is always "unknown" — batman-adv
+			// never wires up carrier detection on the virtual device — so
+			// showing the raw operstate as the badge is meaningless (it
+			// reads "UNKNOWN" whether the mesh is fully healthy or has no
+			// slaves at all). Derive a real state from batctl's slave list
+			// instead: how many mesh radios are actually enslaved and active.
+			activeSlaves := 0
+			for _, s := range batSlaves {
+				if s == "active" {
+					activeSlaves++
+				}
+			}
+			switch {
+			case state == "DOWN":
 				iface.Health = "fault"
 				iface.Faults = append(iface.Faults, "Interface is DOWN")
+				iface.State = "DOWN"
+			case len(batSlaves) == 0:
+				iface.Health = "fault"
+				iface.Faults = append(iface.Faults, "No mesh interfaces enslaved")
+				iface.State = "NO SLAVES"
+			case activeSlaves == 0:
+				iface.Health = "warn"
+				iface.Faults = append(iface.Faults, "No active mesh slaves")
+				iface.State = "DEGRADED"
+			default:
+				iface.State = "ACTIVE"
 			}
 		case name == "br0":
 			iface.Role = "bridge"
@@ -1360,6 +1406,7 @@ func getGPS(regNode RegistryNode) GPS {
 	// be up and reporting (connected) with no fix yet, and that state must
 	// survive into the registry-fallback return too, not just the have-fix one.
 	connected := false
+	source := ""
 	data, err := os.ReadFile(GPSStatusFile)
 	if err == nil {
 		var g struct {
@@ -1367,16 +1414,19 @@ func getGPS(regNode RegistryNode) GPS {
 			Lat       float64 `json:"latitude"`
 			Lon       float64 `json:"longitude"`
 			Alt       float64 `json:"altitude"`
+			Source    string  `json:"source"`
 			Timestamp int64   `json:"timestamp"`
 		}
 		if json.Unmarshal(data, &g) == nil {
 			if g.Timestamp > 0 && time.Now().Unix()-g.Timestamp < 30 {
 				connected = true
 			}
+			source = g.Source
 			if g.HasFix {
 				return GPS{
 					Available: true,
 					Connected: connected,
+					Source:    source,
 					Lat:       fmt.Sprintf("%f", g.Lat),
 					Lon:       fmt.Sprintf("%f", g.Lon),
 					Alt:       fmt.Sprintf("%f", g.Alt),
@@ -1386,6 +1436,7 @@ func getGPS(regNode RegistryNode) GPS {
 	}
 	gps := registryGPS(regNode)
 	gps.Connected = connected
+	gps.Source = source
 	return gps
 }
 

@@ -22,7 +22,90 @@ var (
 	localCache     *LocalData
 	localCacheTime time.Time
 	localCacheTTL  = 3 * time.Second
+
+	batSnapMu   sync.Mutex
+	batSnap     *batmanSnapshot
+	batSnapTime time.Time
+	batSnapTTL  = 3 * time.Second
 )
+
+// batmanSnapshot is the shared batctl o/n/gwl read used by both the topology
+// graph (assembleStatusData) and the mesh tab (apiMesh). These three calls
+// were the expensive/duplicated part of /api/mesh — it was re-running them
+// fresh on every request even though the topology cache above was already
+// polling the exact same tables every 3s. Sharing one cache means an
+// uncoordinated mesh-tab refresh can no longer double the batctl load.
+type batmanSnapshot struct {
+	TQMap     map[string]int
+	OrigMap   map[string]BatOriginator
+	Neighbors []BatNeighbor
+	Gateways  []BatGateway
+}
+
+func cachedBatmanSnapshot() batmanSnapshot {
+	batSnapMu.Lock()
+	defer batSnapMu.Unlock()
+	if batSnap != nil && time.Since(batSnapTime) < batSnapTTL {
+		return *batSnap
+	}
+	tqMap, origMap := runBatctlOriginators()
+	snap := batmanSnapshot{
+		TQMap:     tqMap,
+		OrigMap:   origMap,
+		Neighbors: runBatctlNeighbors(),
+		Gateways:  runBatctlGateways(),
+	}
+	batSnap = &snap
+	batSnapTime = time.Now()
+	return snap
+}
+
+// computeUplink reports this node's current best throughput toward its
+// mesh gateway, for node-update's auto-update bandwidth gate. A node that
+// is itself the selected gateway has no mesh hop in the way — report it as
+// wired with no ceiling, matching the "ethernet always OK" assumption.
+// Otherwise reuse the same batman-adv throughput estimate already computed
+// for the topology "Real Rate" column, for the route toward whichever
+// gateway is currently selected.
+func computeUplink() (mbps float64, uplinkType string) {
+	// If this node is itself running as the mesh gateway (gw_mode=server),
+	// there's no mesh hop between it and the internet — updates download
+	// over its own uplink directly. batman-adv's gwl/originator tables
+	// never list a node as a gateway candidate to itself, so this can't be
+	// detected via selectedGW below (that comparison was always false in
+	// practice) — it has to come from local gw_mode instead.
+	if out, err := runCmdStdout(5*time.Second, "batctl", "gw_mode"); err == nil &&
+		strings.HasPrefix(strings.TrimSpace(out), "server") {
+		return 0, "wired"
+	}
+
+	snap := cachedBatmanSnapshot()
+
+	selectedGW := ""
+	for _, gw := range snap.Gateways {
+		if gw.Selected {
+			selectedGW = gw.MAC
+			break
+		}
+	}
+	// No selected gateway found is NOT the same as "wired, no ceiling" —
+	// that would make the bandwidth gate always pass when we actually have
+	// no idea what the link looks like. Report unknown so callers fail
+	// closed instead.
+	if selectedGW == "" {
+		return 0, "unknown"
+	}
+
+	orig, ok := snap.OrigMap[selectedGW]
+	if !ok || orig.RawTP <= 0 {
+		return 0, "unknown"
+	}
+	uplinkType = "wifi-mesh"
+	if orig.Iface == "wlan2" {
+		uplinkType = "halow-mesh"
+	}
+	return orig.RawTP, uplinkType
+}
 
 func cachedStatusData() StatusData {
 	statusCacheMu.Lock()
@@ -95,6 +178,7 @@ func assembleLocalData() LocalData {
 	gps := getGPS(myReg)
 	throttle := getThrottle()
 	network := getNetworkState()
+	uplinkMbps, uplinkType := computeUplink()
 
 	return LocalData{
 		Hostname:   hostname,
@@ -113,6 +197,8 @@ func assembleLocalData() LocalData {
 		Network:    network,
 		System:     getSystemStats(),
 		Airtime:    currentAirtime(),
+		UplinkMbps: uplinkMbps,
+		UplinkType: uplinkType,
 	}
 }
 
@@ -124,9 +210,10 @@ func assembleStatusData() StatusData {
 	myHostname := getMyHostname()
 	myBattery := getBattery()
 
-	tqMap, origMap := runBatctlOriginators()
-	neighbors := runBatctlNeighbors()
-	gateways := runBatctlGateways()
+	snap := cachedBatmanSnapshot()
+	tqMap, origMap := snap.TQMap, snap.OrigMap
+	neighbors := snap.Neighbors
+	gateways := snap.Gateways
 	nowTS := fmt.Sprintf("%d", time.Now().Unix())
 
 	// Build neighbor MAC set for direct detection

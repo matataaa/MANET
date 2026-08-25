@@ -80,3 +80,40 @@ release asset consumed by `.github/workflows/rpi5-release.yml`. There is no
 local fetch/vendoring script for this board today, so the version has to be
 obtained from whoever publishes updates to that release asset and copied in
 by hand.
+
+## Publishing an overlay OTA update
+
+For what happens on the node side once this is published — settings,
+the bandwidth gate, manual/fleet-wide update actions — see
+[`MANET/docs/AUTO_UPDATE.md`](../docs/AUTO_UPDATE.md).
+
+Separate from the full-image build above: `node-update`'s opt-in overlay
+channel (`auto_update_overlay`, default off — see
+[`MANET/docs/VERSIONING.md`](../docs/VERSIONING.md)) pulls a per-board
+version file and tarball from `update_url`, decoupled from the SBC overlay
+version bump described above (you can bump `manet_version.txt` for the next
+full image without publishing an OTA overlay update, and vice versa).
+
+**CM4**:
+
+```sh
+packaging/fetch-cm4-overlay.sh
+packaging/build-overlay-tarball.sh kernel-work/packages/cm4-sbc-overlay cm4-sbc-overlay.tar.gz
+```
+
+Write the `Bundled version` value from the generated `VENDORED_FROM.md` into
+a plain-text `cm4-overlay-version.txt`. Host both files at `update_url`.
+
+**RPi5**:
+
+```sh
+gh release download rpi5-sbc-overlay-current --pattern rpi5-sbc-overlay.tar.gz
+```
+
+The asset is already root-relative and needs no rebuild. Hand-write its
+known version into a plain-text `rpi5-overlay-version.txt`. Host both files
+at `update_url`.
+
+In both cases the version file must only be bumped once you're satisfied the
+paired tarball is good — any node with `auto_update_overlay=y` will pull and
+apply it on its next check, and there's no rollback if it fails to boot.

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -322,6 +323,141 @@ func apiAdminStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, assembleAdminStatus())
 }
 
+// apiUpdateStatus returns node-update's own status file verbatim — the
+// software/overlay detect results and current uplink reading it writes on
+// every check cycle, regardless of whether auto_update is enabled.
+func apiUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile(UpdateStatusFile)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{
+			"software":    map[string]interface{}{"available": false},
+			"overlay":     map[string]interface{}{"available": false},
+			"uplink_mbps": 0,
+			"uplink_type": "unknown",
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(data)
+}
+
+// apiUpdateNow triggers a manual, deliberate update on this node — the
+// UI has already shown the operator the bandwidth warning before calling
+// this. Writes the trigger file node-update's SIGUSR1 handler reads, then
+// signals it directly (systemctl reload is already used for SIGHUP/recheck,
+// so this is a distinct signal rather than overloading that path).
+func apiUpdateNow(w http.ResponseWriter, r *http.Request) {
+	body := readBody(r)
+	channel := jsonStr(body, "channel", "")
+	if channel != "software" && channel != "overlay" && channel != "both" {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, or both"})
+		return
+	}
+	if err := os.WriteFile(UpdateTriggerFile, []byte(channel), 0644); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+	if _, err := runCmd(5*time.Second, "pkill", "-USR1", "-x", "node-update"); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to signal node-update: " + err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
+// apiForceUpdate broadcasts a fleet-wide update trigger — every node picks
+// it up within one Alfred poll cycle (~10s) and applies via the same local
+// mechanism as a manual per-node "Update Now" (see fleet.go,
+// fleetProcessUpdatePackage), bypassing each node's bandwidth gate the same
+// way a manual trigger does. The Fleet Control UI has already shown the
+// aggregate bandwidth warning before calling this.
+func apiForceUpdate(w http.ResponseWriter, r *http.Request) {
+	body := readBody(r)
+	channel := jsonStr(body, "channel", "")
+	if channel != "software" && channel != "overlay" && channel != "both" {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, or both"})
+		return
+	}
+	if !broadcastUpdatePackage(channel) {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to broadcast update trigger"})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
+// Peer's plain HTTP port only ever redirects to HTTPS (see main.go), and
+// every node's cert is self-signed — HTTPS + peerTLSConfig is the pattern
+// already used for peer-to-peer calls elsewhere (see peerProxyRequest).
+func getPeerUpdateStatus(peerIP string, timeout time.Duration) map[string]interface{} {
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: &http.Transport{TLSClientConfig: peerTLSConfig},
+	}
+	resp, err := client.Get(fmt.Sprintf("https://%s/api/admin/update-status", peerIP))
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+	var result map[string]interface{}
+	json.Unmarshal(body, &result)
+	return result
+}
+
+// apiUpdateSummary aggregates every fleet node's update-status (including
+// this one) for the Fleet Control "N of M nodes have an update available"
+// banner. Read-only, fanned out in parallel with a short per-node timeout
+// so one unreachable node can't stall the whole response.
+func apiUpdateSummary(w http.ResponseWriter, r *http.Request) {
+	registry := parseRegistry()
+	myMAC := getMyMAC()
+
+	type nodeSummary struct {
+		Hostname string      `json:"hostname"`
+		IP       string      `json:"ip"`
+		Status   interface{} `json:"status"`
+		Reached  bool        `json:"reached"`
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	nodes := make([]nodeSummary, 0, len(registry))
+
+	for _, rn := range registry {
+		rn := rn
+		ip := rn["IPV4_ADDRESS"]
+		hostname := rn["HOSTNAME"]
+		isMe := normMAC(rn["MAC_ADDRESS"]) == myMAC
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var status map[string]interface{}
+			reached := false
+			if isMe {
+				data, err := os.ReadFile(UpdateStatusFile)
+				if err == nil && json.Unmarshal(data, &status) == nil {
+					reached = true
+				}
+			} else if ip != "" {
+				if s := getPeerUpdateStatus(ip, 3*time.Second); s != nil {
+					status = s
+					reached = true
+				}
+			}
+			mu.Lock()
+			nodes = append(nodes, nodeSummary{Hostname: hostname, IP: ip, Status: status, Reached: reached})
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	writeJSON(w, 200, map[string]interface{}{"nodes": nodes})
+}
+
 func apiFleetPreferences(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		writeJSON(w, 200, loadFleetPreferences())
@@ -426,9 +562,10 @@ func apiRegistry(w http.ResponseWriter, r *http.Request) {
 }
 
 func apiMesh(w http.ResponseWriter, r *http.Request) {
-	_, origMap := runBatctlOriginators()
-	neighbors := runBatctlNeighbors()
-	gateways := runBatctlGateways()
+	snap := cachedBatmanSnapshot()
+	origMap := snap.OrigMap
+	neighbors := snap.Neighbors
+	gateways := snap.Gateways
 	conf := loadKVFile(MeshConfFile)
 	macInfo := meshMACLookup()
 
@@ -500,7 +637,7 @@ func apiMesh(w http.ResponseWriter, r *http.Request) {
 		entry["iface"] = n.Iface
 		entry["last_seen"] = fmt.Sprintf("%d", now-int64(n.LastSeen))
 		if st, ok := stations[n.MAC]; ok {
-			entry["link"] = buildLinkBudget(st, n.Iface, halowBW)
+			entry["link"] = buildLinkBudget(st, n.Iface, halowBW, n.RawTP)
 		}
 		neighList = append(neighList, entry)
 	}
@@ -779,9 +916,78 @@ var saveableKeys = map[string]bool{
 	"dns_servers": true,
 	"eud_bandwidth": true,
 	"qos_enabled": true, "qos_voice_band": true, "qos_cot_band": true, "qos_chat_band": true,
-	"auto_update": true, "update_url": true,
-	"gps": true,
+	"auto_update": true, "update_url": true, "auto_update_overlay": true, "auto_update_min_mbps": true,
+	"gps": true, "gps_source": true, "gps_static_lat": true, "gps_static_lon": true, "gps_static_alt": true,
 	"callsign": true, "cot_type": true, "cot_team": true, "cot_role": true, "cot_icon": true,
+}
+
+// keyDescriptions documents a subset of saveableKeys for `mesh config keys`
+// and any future admin UI. Keys with no entry here still show up in
+// apiConfigKeys, just without a description.
+var keyDescriptions = map[string]string{
+	"node_hostname":        "Hostname prefix for this node (full hostname adds mesh SSID + MAC suffix)",
+	"eud":                  "Enable End User Device access (WiFi AP / wired bridge)",
+	"lan_ap_ssid":          "SSID for the EUD-facing WiFi access point",
+	"lan_ap_key":           "WPA2-PSK passphrase for the EUD-facing WiFi access point",
+	"lan_ap_channel":       "Channel for the EUD-facing WiFi access point",
+	"lan_ap_bw":            "Channel bandwidth for the EUD-facing WiFi access point",
+	"max_euds_per_node":    "Maximum number of EUD clients this node will serve",
+	"mesh_ssid":            "Mesh network name shared by all nodes",
+	"mesh_key":             "SAE (WPA3) passphrase for the mesh backhaul",
+	"ipv4_network":         "Base IPv4 CIDR the mesh allocates node addresses from",
+	"regulatory_domain":    "Wireless regulatory domain (country code)",
+	"halow_bw":             "802.11ah HaLow channel bandwidth",
+	"battery_monitor":      "Enable Waveshare UPS HAT battery monitoring",
+	"admin_password":       "Password gating write/control API access when require_auth is set",
+	"require_auth":         "Require admin_password for control/config endpoints",
+	"gateway":              "Enable gateway election and internet uplink for the mesh",
+	"gateway_nat":          "Enable NAT/masquerade on the elected gateway node",
+	"gateway_mss_clamp":    "Enable TCP MSS clamping on the gateway uplink",
+	"gateway_bandwidth":    "Uplink bandwidth cap advertised by the gateway",
+	"multicast_mode":       "Mesh multicast handling: flood or optimized (IGMP snooping)",
+	"voice_mic_volume":     "PTT microphone input gain",
+	"voice_speaker_volume": "PTT speaker output volume",
+	"voice_channel":        "Default PTT voice channel",
+	"voice_rx_channels":    "Additional PTT channels to receive on",
+	"voice_ptt_mode":       "Hardware PTT trigger mode",
+	"voice_gain":           "PTT audio gain applied before encoding",
+	"voice_enabled":        "Enable the PTT voice service",
+	"voice_beep_tx_start":  "Play a beep when PTT transmission starts",
+	"voice_beep_rx_end":    "Play a beep when incoming PTT transmission ends",
+	"dns_servers":          "Upstream DNS servers for .mesh resolution fallthrough",
+	"eud_bandwidth":        "Bandwidth cap applied to connected EUD clients",
+	"qos_enabled":          "Enable tc prio QoS bands on br0",
+	"qos_voice_band":       "QoS priority band assigned to voice traffic",
+	"qos_cot_band":         "QoS priority band assigned to CoT traffic",
+	"qos_chat_band":        "QoS priority band assigned to chat/bulk traffic",
+	"auto_update":          "Enable automatic OTA tools tarball updates",
+	"update_url":           "URL node-update polls for tarball updates",
+	"auto_update_overlay":  "Enable automatic overlay (no-rollback) updates",
+	"auto_update_min_mbps": "Minimum measured bandwidth required before an auto-update proceeds",
+	"gps":                  "Enable GPS (gpsd) on this node",
+	"gps_source":           "GPS source: receiver (gpsd) or static",
+	"gps_static_lat":       "Static latitude reported when gps_source=static",
+	"gps_static_lon":       "Static longitude reported when gps_source=static",
+	"gps_static_alt":       "Static altitude reported when gps_source=static",
+	"callsign":             "Callsign used in CoT position reports",
+	"cot_type":             "CoT type code broadcast for this node's position",
+	"cot_team":             "CoT team/affiliation for this node's position",
+	"cot_role":             "CoT role for this node's position",
+	"cot_icon":             "CoT icon override for this node's position",
+}
+
+func apiConfigKeys(w http.ResponseWriter, r *http.Request) {
+	keys := make([]map[string]interface{}, 0, len(saveableKeys))
+	for k := range saveableKeys {
+		keys = append(keys, map[string]interface{}{
+			"key":         k,
+			"description": keyDescriptions[k],
+		})
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return keys[i]["key"].(string) < keys[j]["key"].(string)
+	})
+	writeJSON(w, 200, map[string]interface{}{"keys": keys})
 }
 
 func apiAdminSave(w http.ResponseWriter, r *http.Request) {
@@ -856,7 +1062,7 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	// Apply EUD mode changes
 	if updates["eud"] != "" {
 		eud := conf["eud"]
-		if eud == "wireless" || eud == "both" || eud == "auto" {
+		if eudWantsAP(eud) {
 			// The reconcile script itself selects/regenerates the AP
 			// interface (hostapd.conf, ap-interface-setup.service,
 			// ap-txpower.service) and stops any stale mesh
@@ -893,10 +1099,15 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		applied["eud_mode_applied"] = true
 	}
 
-	// Apply AP settings
+	// Apply AP settings. Gated on eud actually wanting an AP: the web UI's
+	// Config tab always resends the node's current (unchanged) lan_ap_*
+	// values on every save, not just when the user edited them, so this
+	// would otherwise fire on an eud=wired/none save too -- restarting
+	// hostapd right after the eud block above may have just stopped and
+	// disabled it.
 	apChanged := updates["lan_ap_ssid"] != "" || updates["lan_ap_key"] != "" ||
 		updates["lan_ap_channel"] != "" || updates["lan_ap_bw"] != ""
-	if apChanged {
+	if apChanged && eudWantsAP(conf["eud"]) {
 		applyHostapdConfig(conf)
 		runCmd(10*time.Second, "systemctl", "restart", "hostapd")
 		applied["ap_restarted"] = true
@@ -956,10 +1167,20 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	// re-runs on a live gps= change — a stop/restart-only toggle here
 	// looks like it worked but silently reverts on the node's next
 	// reboot in both directions.
-	if updates["gps"] != "" {
+	//
+	// gps_source=static (a node with no receiver reporting a fixed
+	// position, e.g. a stationary gateway) never needs gpsd at all --
+	// gps-reader itself re-reads gps_source/gps_static_* on every poll
+	// tick and writes the configured position straight into
+	// /run/gps_status.json, so no restart is needed here for lat/lon/alt
+	// edits alone, only for gps or gps_source actually changing.
+	if updates["gps"] != "" || updates["gps_source"] != "" {
 		if conf["gps"] == "n" {
 			runCmd(5*time.Second, "systemctl", "disable", "--now", "gps-reader")
 			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd")
+		} else if conf["gps_source"] == "static" {
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd")
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gps-reader")
 		} else {
 			if _, err := exec.LookPath("gpsd"); err != nil {
 				runCmd(60*time.Second, "apt-get", "install", "-y", "gpsd", "gpsd-clients")
@@ -1012,7 +1233,7 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		applied["qos_applied"] = true
 	}
 
-	if updates["auto_update"] != "" || updates["update_url"] != "" {
+	if updates["auto_update"] != "" || updates["update_url"] != "" || updates["auto_update_overlay"] != "" || updates["auto_update_min_mbps"] != "" {
 		runCmd(5*time.Second, "systemctl", "reload", "node-update")
 		applied["node_update_reloaded"] = true
 	}
@@ -1804,6 +2025,13 @@ func applyHalowBW(conf map[string]string) {
 	}
 	runCmd(5*time.Second, "systemctl", "daemon-reload")
 	runCmd(10*time.Second, "bash", "-c", "systemctl restart 'wpa_supplicant-s1g-wlan*.service' 2>/dev/null || true")
+}
+
+// eudWantsAP reports whether the given eud= mode requires an AP interface
+// (hostapd running), as opposed to wired/none which only use the mesh
+// radios and must keep hostapd stopped.
+func eudWantsAP(eud string) bool {
+	return eud == "wireless" || eud == "both" || eud == "auto"
 }
 
 func applyHostapdConfig(conf map[string]string) {

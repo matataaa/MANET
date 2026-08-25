@@ -2,6 +2,7 @@
 var hwInitialized = false;
 var hwPttTimer = null;
 var hwPttData = null;
+var hwUpdateStatus = null;
 
 function hardwareActivate() {
   var panel = document.getElementById('tab-hardware');
@@ -23,7 +24,18 @@ function hardwareActivate() {
   }
   hardwareUpdate();
   hwPttFetch();
+  hwFetchUpdateStatus();
   hwPttTimer = setInterval(hwPttFetchLive, 1000);
+}
+
+async function hwFetchUpdateStatus() {
+  try {
+    var r = await fetch('/api/admin/update-status');
+    hwUpdateStatus = await r.json();
+    hwRenderSystem();
+  } catch (e) {
+    hwUpdateStatus = null;
+  }
 }
 
 function hardwareDeactivate() {
@@ -105,8 +117,9 @@ function hwRenderIfaces() {
 
   el.innerHTML = ifaces.map(function(i) {
     var dot = i.health === 'ok' ? 'dot-ok' : i.health === 'fault' ? 'dot-bad' : i.health === 'warn' ? 'dot-warn' : 'dot-info';
-    var badge = i.state === 'UP' ? '<span class="hw-badge hw-badge-up">UP</span>' :
+    var badge = (i.state === 'UP' || i.state === 'ACTIVE') ? '<span class="hw-badge hw-badge-up">' + escHtml(i.state) + '</span>' :
                 i.state === 'UNKNOWN' ? '<span class="hw-badge hw-badge-unknown">UNKNOWN</span>' :
+                i.state === 'DEGRADED' ? '<span class="hw-badge hw-badge-warn">DEGRADED</span>' :
                 '<span class="hw-badge hw-badge-down">' + escHtml(i.state || '?') + '</span>';
     var rows = hwRow('Role', hwRoleLabel(i.role));
     if (i.addrs && i.addrs.length) rows += hwRow('Addresses', i.addrs.map(escHtml).join('<br>'));
@@ -128,7 +141,11 @@ function hwRenderGPS() {
               connected ? '<span class="hw-badge hw-badge-down">NO FIX</span>' :
               '<span class="hw-badge hw-badge-down">OFFLINE</span>';
 
+  var sourceLabel = gps && gps.source === 'static' ? 'Static (fixed position)' :
+                     gps && gps.source === 'receiver' ? 'Receiver (gpsd)' : '';
+
   var rows = '';
+  if (sourceLabel) rows += hwRow('Source', sourceLabel);
   if (hasFix) {
     rows += hwRow('Latitude', gps.lat || '--');
     rows += hwRow('Longitude', gps.lon || '--');
@@ -149,6 +166,12 @@ function hwRenderSystem() {
   var el = document.getElementById('hw-system');
   var rows = '';
   rows += hwRow('Hostname', LOCAL_DATA.hostname || '--');
+  if (hwUpdateStatus) {
+    var sw = hwUpdateStatus.software, ov = hwUpdateStatus.overlay;
+    var updateBadge = '<span class="hw-badge hw-badge-warn">Update available</span>';
+    if (sw) rows += hwRow('MANET Version', 'v' + escHtml(sw.local || '--') + (sw.available ? ' ' + updateBadge : ''));
+    if (ov) rows += hwRow('Kernel/Drivers Version', escHtml(ov.local || '--') + (ov.available ? ' ' + updateBadge : ''));
+  }
   rows += hwRow('IP Address', LOCAL_DATA.ip || '--');
   rows += hwRow('MAC', '<span style="font-family:monospace">' + (LOCAL_DATA.mac || '--') + '</span>');
   rows += hwRow('Uptime', LOCAL_DATA.uptime || '--');

@@ -10,9 +10,16 @@ Companion documents:
 - `kernel-work/real_work/PORTING-MORSE-DRIVER.md` — deep diagnostic guide for the
   CM4 SPI debugging (symptom → cause tables, wire-level analysis). Read it before
   re-porting to a newer kernel.
-- `docs/armbian_6.18_morse_build.txt` — **historical**: the original Rock 3A
-  approach (Armbian stock kernel + headers + container build + manual sed patches).
-  Superseded by the Gateworks driver branch + `build-r3a.sh` described below.
+- `docs/archive/armbian_6.18_morse_build.txt` and `docs/archive/armbian_6.6_morse_build.txt`
+  — the original Armbian-based Rock 3A build guides this doc superseded, kept
+  for reference. The API-change table below was pulled out of the 6.18 one
+  since it's not Rock 3A-specific; the rest of both files is Rock 3A/Armbian-
+  specific build detail.
+
+**Rock 3A note:** Rock 3A/Radxa board support was removed from the shipped
+project (2026-08-20) after this record was written. The Rock 3A rows/sections
+below are kept as historical record of the port, not a live target — CM4/RPi5
+are the actively supported boards.
 
 **Status:** working on bench hardware as of 2026-06. CM4 nodes (`pi`, `pi2`) run
 `6.18.33-manet` with the HaLow link carrying ~32.5 Mbps batman throughput.
@@ -62,8 +69,29 @@ Harvey. On top of the 1.16.4 release the branch adds:
 | `7239876` | 6.16+ `ieee80211_is_s1g_short_beacon` signature / S1G beacon parsing changes — local helpers, also covers backports to 6.12.39 / 6.15.7 |
 | `dec5bc2` | misc compile errors (`debug.h`, `firmware.h`, `pageset.c`) |
 
-The API-change cheat sheet (6.12 → 6.18) from the original port still applies and
-lives in `docs/armbian_6.18_morse_build.txt` ("Summary of API Changes").
+The API-change cheat sheet from the original port still applies (kept here
+inline now that the old Rock 3A build guide it lived in has been deleted —
+this table itself isn't Rock 3A-specific, it's general kernel 6.12→6.18 API
+drift that affects every target):
+
+| Component | Old API | New API |
+|-----------|---------|---------|
+| Timer | `from_timer()` | `timer_container_of()` |
+| Timer | `del_timer_sync()` | `timer_delete_sync()` |
+| HRTimer | `hrtimer_init()` + `.function =` | `hrtimer_setup()` |
+| CRC7 | `crc7_be_byte()` | Removed (use `crc7_be()`) |
+| mac80211 | `.config(hw, changed)` | `.config(hw, radio_idx, changed)` |
+| mac80211 | `.get_txpower(hw, vif, dbm)` | `.get_txpower(hw, vif, link_id, dbm)` |
+| mac80211 | `.set_frag_threshold(hw, val)` | `.set_frag_threshold(hw, radio_idx, val)` |
+| mac80211 | `.set_rts_threshold(hw, val)` | `.set_rts_threshold(hw, radio_idx, val)` |
+| cfg80211 | `.set_wiphy_params(wiphy, changed)` | `.set_wiphy_params(wiphy, radio_idx, changed)` |
+| S1G Beacon | `ieee80211_is_s1g_short_beacon(fc)` | `ieee80211_is_s1g_short_beacon(fc, var, len)` |
+| S1G Beacon | `bcn->u.s1g_short_beacon.variable` | `bcn->u.s1g_beacon.variable` (unified) |
+
+Files that needed patches for this: `morse_compat.h` (new — compat shims),
+`mac.c`, `cac.c`, `mesh.c`, `bss_stats.c`, `yaps.c`, `yaps-hw.c` (+ hrtimer
+fix), `watchdog.c` (+ hrtimer fix), `vendor_ie.c` (+ S1G beacon fix),
+`wiphy.c`, `debug.h`, `dot11ah/ie.c` (+ S1G beacon fix), `dot11ah/s1g_channels.c`.
 
 **When updating the driver:** pull/rebase the Gateworks branch rather than
 re-deriving these. Our local SPI work (§3) sits as an uncommitted diff on top of

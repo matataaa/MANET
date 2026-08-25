@@ -13,7 +13,7 @@ These files are automatically injected into the OS image by the provisioning scr
 - `alfred`
   The Almighty Lightweight Fact Remote Exchange Daemon. Used to distribute information (like hostnames or sensor data) across the batman-adv mesh network without requiring a central server.
 
-- `batman`
+- `batctl`
   The B.A.T.M.A.N. (Better Approach To Mobile Adhoc Networking) routing protocol utility.
 
 - `wpa_supplicant_s1g`
@@ -21,3 +21,12 @@ These files are automatically injected into the OS image by the provisioning scr
 
 - `wpa_cli_s1g`
   The command-line client for interacting with the S1G supplicant. Used to check status, scan for networks, and configure the HaLow connection manually.
+
+- `morse_cli`
+  Morse Micro's HaLow radio control/diagnostic CLI — channel/bandwidth queries and driver-level radio state used by `manet-ctrl` for topology and hardware status.
+
+- `chronyc`
+  Command-line client for the `chrony` NTP daemon — used for mesh time-sync diagnostics.
+
+- `openvlm`
+  Driver/CLI for the OpenVLM push-to-talk HID device used by the voice PTT feature.
