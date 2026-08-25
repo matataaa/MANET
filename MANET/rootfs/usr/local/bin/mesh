@@ -4,7 +4,7 @@
 
 set -euo pipefail
 API="https://127.0.0.1/api"
-CURL="curl -sfk"
+CURL="curl -sk"
 
 usage() {
   cat <<'USAGE'
@@ -27,29 +27,55 @@ Commands:
   help                Show this help
 
 Config keys:
-  node_hostname       Hostname prefix
-  mesh_ssid           Mesh network SSID
-  mesh_key            Mesh SAE (WPA3) key
-  ipv4_network        Mesh IPv4 subnet (e.g. 10.30.2.0/24)
-  regulatory_domain   WiFi regulatory domain (US, EU, JP, AU)
-  halow_bw            HaLow bandwidth (1MHz, 2MHz, 4MHz, 8MHz)
-  multicast_mode      Multicast delivery: flood (default) or optimized
-  eud                 EUD mode: wired, wireless, both, auto, none
-  lan_ap_ssid         WiFi AP SSID
-  lan_ap_key          WiFi AP password
-  lan_ap_channel      AP channel (e.g. 36 for 5GHz)
-  lan_ap_bw           AP bandwidth (20, 40, 80)
-  max_euds_per_node   Max EUD clients per node
-  acs                 Auto channel selection (y/n)
-  battery_monitor     Battery monitoring (y/n)
-  auto_update         Auto update on carrier (y/n)
-  update_url          OTA update server base URL (blank = disabled)
-  admin_password      Admin/perf auth key
-  require_auth        Require auth for write ops (y/n, default: n)
-  gateway             Gateway mode (y/n)
-  gateway_nat         NAT masquerade (y/n)
-  gateway_mss_clamp   MSS clamping (y/n)
-  gateway_bandwidth   Bandwidth advertisement (e.g. 5M/5M)
+  node_hostname         Hostname prefix
+  mesh_ssid             Mesh network SSID
+  mesh_key              Mesh SAE (WPA3) key
+  ipv4_network          Mesh IPv4 subnet (e.g. 10.30.2.0/24)
+  regulatory_domain     WiFi regulatory domain (US, EU, JP, AU)
+  halow_bw              HaLow bandwidth (1MHz, 2MHz, 4MHz, 8MHz)
+  multicast_mode        Multicast delivery: flood (default) or optimized
+  eud                   EUD mode: wired, wireless, both, auto, none
+  lan_ap_ssid           WiFi AP SSID
+  lan_ap_key            WiFi AP password
+  lan_ap_channel        AP channel (e.g. 36 for 5GHz)
+  lan_ap_bw             AP bandwidth (20, 40, 80)
+  max_euds_per_node     Max EUD clients per node
+  battery_monitor       Battery monitoring (y/n)
+  auto_update           Auto update on carrier (y/n)
+  auto_update_overlay   Auto-update overlay (no-rollback) updates (y/n)
+  auto_update_min_mbps  Min bandwidth required before auto-update proceeds
+  update_url            OTA update server base URL (blank = disabled)
+  admin_password        Admin/perf auth key
+  require_auth          Require auth for write ops (y/n, default: n)
+  gateway               Gateway mode (y/n)
+  gateway_nat           NAT masquerade (y/n)
+  gateway_mss_clamp     MSS clamping (y/n)
+  gateway_bandwidth     Bandwidth advertisement (e.g. 5M/5M)
+  voice_enabled         Enable the PTT voice service (y/n)
+  voice_channel         Default PTT voice channel
+  voice_rx_channels     Additional PTT channels to receive on
+  voice_ptt_mode        Hardware PTT trigger mode
+  voice_mic_volume      PTT microphone input gain
+  voice_speaker_volume  PTT speaker output volume
+  voice_gain            PTT audio gain applied before encoding
+  voice_beep_tx_start   Beep when PTT transmission starts (y/n)
+  voice_beep_rx_end     Beep when incoming PTT transmission ends (y/n)
+  dns_servers           Upstream DNS servers for .mesh fallthrough
+  eud_bandwidth         Bandwidth cap applied to connected EUD clients
+  qos_enabled           Enable tc prio QoS bands on br0 (y/n)
+  qos_voice_band        QoS priority band for voice traffic
+  qos_cot_band          QoS priority band for CoT traffic
+  qos_chat_band         QoS priority band for chat/bulk traffic
+  gps                   Enable GPS (gpsd) on this node (y/n)
+  gps_source            GPS source: receiver (gpsd) or static
+  gps_static_lat        Static latitude when gps_source=static
+  gps_static_lon        Static longitude when gps_source=static
+  gps_static_alt        Static altitude when gps_source=static
+  callsign              Callsign used in CoT position reports
+  cot_type              CoT type code for this node's position
+  cot_team              CoT team/affiliation for this node's position
+  cot_role              CoT role for this node's position
+  cot_icon              CoT icon override for this node's position
 USAGE
 }
 
@@ -163,31 +189,15 @@ else:
 }
 
 cmd_config_keys() {
-  cat <<'KEYS'
-node_hostname         Hostname prefix
-mesh_ssid             Mesh network SSID
-mesh_key              Mesh SAE (WPA3) key
-ipv4_network          Mesh IPv4 subnet
-regulatory_domain     WiFi regulatory domain (US, EU, JP, AU)
-halow_bw              HaLow bandwidth (1MHz, 2MHz, 4MHz, 8MHz)
-multicast_mode        Multicast: flood (default) or optimized
-eud                   EUD mode: wired, wireless, both, auto, none
-lan_ap_ssid           WiFi AP SSID
-lan_ap_key            WiFi AP password
-lan_ap_channel        AP channel
-lan_ap_bw             AP bandwidth (20, 40, 80)
-max_euds_per_node     Max EUD clients per node
-acs                   Auto channel selection (y/n)
-battery_monitor       Battery monitoring (y/n)
-auto_update           Auto update on carrier (y/n)
-update_url            OTA update server base URL (blank = disabled)
-admin_password        Admin/perf auth key
-require_auth          Require auth for write ops (y/n, default: n)
-gateway               Gateway mode (y/n)
-gateway_nat           NAT masquerade (y/n)
-gateway_mss_clamp     MSS clamping (y/n)
-gateway_bandwidth     Bandwidth advertisement (e.g. 5M/5M)
-KEYS
+  local d
+  d=$($CURL "$API/config/keys") || { echo "Error: cannot reach manet-ctrl API"; exit 1; }
+  echo "$d" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+keys = d.get('keys', [])
+for k in keys:
+    print('{:<22s} {}'.format(k.get('key', ''), k.get('description', '')))
+"
 }
 
 cmd_radio_info() {
@@ -220,7 +230,7 @@ for r in radios:
 cmd_radio_txpower() {
   local iface=$1 dbm=$2
   $CURL -X POST -H 'Content-Type: application/json' \
-    -d "{\"interface\":\"$iface\",\"dbm\":$dbm}" "$API/control/txpower" | python3 -c "
+    -d "{\"iface\":\"$iface\",\"dbm\":$dbm}" "$API/control/txpower" | python3 -c "
 import sys, json
 r = json.load(sys.stdin)
 if r.get('ok'): print(f'TX power set to {$dbm} dBm on $iface')
@@ -231,7 +241,7 @@ else: print(f'Error: {r.get(\"error\", \"unknown\")}'); sys.exit(1)
 cmd_radio_interface() {
   local iface=$1 action=$2
   $CURL -X POST -H 'Content-Type: application/json' \
-    -d "{\"name\":\"$iface\",\"action\":\"$action\"}" "$API/control/interface" | python3 -c "
+    -d "{\"iface\":\"$iface\",\"state\":\"$action\"}" "$API/control/interface" | python3 -c "
 import sys, json
 r = json.load(sys.stdin)
 if r.get('ok'): print(f'Interface $iface set to $action')
@@ -278,9 +288,7 @@ for s in svcs:
 
 cmd_perf_ping() {
   local target=$1
-  $CURL -X POST -H 'Content-Type: application/json' \
-    -d "{\"target\":\"$target\",\"count\":10}" "$API/perf/ping/run" >/dev/null 2>&1 || true
-  $CURL "$API/perf/ping/stream" 2>/dev/null || ping -c 10 "$target"
+  ping -c 10 "$target"
 }
 
 cmd_reboot() {

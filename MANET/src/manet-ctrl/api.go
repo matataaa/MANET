@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -918,6 +919,75 @@ var saveableKeys = map[string]bool{
 	"auto_update": true, "update_url": true, "auto_update_overlay": true, "auto_update_min_mbps": true,
 	"gps": true, "gps_source": true, "gps_static_lat": true, "gps_static_lon": true, "gps_static_alt": true,
 	"callsign": true, "cot_type": true, "cot_team": true, "cot_role": true, "cot_icon": true,
+}
+
+// keyDescriptions documents a subset of saveableKeys for `mesh config keys`
+// and any future admin UI. Keys with no entry here still show up in
+// apiConfigKeys, just without a description.
+var keyDescriptions = map[string]string{
+	"node_hostname":        "Hostname prefix for this node (full hostname adds mesh SSID + MAC suffix)",
+	"eud":                  "Enable End User Device access (WiFi AP / wired bridge)",
+	"lan_ap_ssid":          "SSID for the EUD-facing WiFi access point",
+	"lan_ap_key":           "WPA2-PSK passphrase for the EUD-facing WiFi access point",
+	"lan_ap_channel":       "Channel for the EUD-facing WiFi access point",
+	"lan_ap_bw":            "Channel bandwidth for the EUD-facing WiFi access point",
+	"max_euds_per_node":    "Maximum number of EUD clients this node will serve",
+	"mesh_ssid":            "Mesh network name shared by all nodes",
+	"mesh_key":             "SAE (WPA3) passphrase for the mesh backhaul",
+	"ipv4_network":         "Base IPv4 CIDR the mesh allocates node addresses from",
+	"regulatory_domain":    "Wireless regulatory domain (country code)",
+	"halow_bw":             "802.11ah HaLow channel bandwidth",
+	"battery_monitor":      "Enable Waveshare UPS HAT battery monitoring",
+	"admin_password":       "Password gating write/control API access when require_auth is set",
+	"require_auth":         "Require admin_password for control/config endpoints",
+	"gateway":              "Enable gateway election and internet uplink for the mesh",
+	"gateway_nat":          "Enable NAT/masquerade on the elected gateway node",
+	"gateway_mss_clamp":    "Enable TCP MSS clamping on the gateway uplink",
+	"gateway_bandwidth":    "Uplink bandwidth cap advertised by the gateway",
+	"multicast_mode":       "Mesh multicast handling: flood or optimized (IGMP snooping)",
+	"voice_mic_volume":     "PTT microphone input gain",
+	"voice_speaker_volume": "PTT speaker output volume",
+	"voice_channel":        "Default PTT voice channel",
+	"voice_rx_channels":    "Additional PTT channels to receive on",
+	"voice_ptt_mode":       "Hardware PTT trigger mode",
+	"voice_gain":           "PTT audio gain applied before encoding",
+	"voice_enabled":        "Enable the PTT voice service",
+	"voice_beep_tx_start":  "Play a beep when PTT transmission starts",
+	"voice_beep_rx_end":    "Play a beep when incoming PTT transmission ends",
+	"dns_servers":          "Upstream DNS servers for .mesh resolution fallthrough",
+	"eud_bandwidth":        "Bandwidth cap applied to connected EUD clients",
+	"qos_enabled":          "Enable tc prio QoS bands on br0",
+	"qos_voice_band":       "QoS priority band assigned to voice traffic",
+	"qos_cot_band":         "QoS priority band assigned to CoT traffic",
+	"qos_chat_band":        "QoS priority band assigned to chat/bulk traffic",
+	"auto_update":          "Enable automatic OTA tools tarball updates",
+	"update_url":           "URL node-update polls for tarball updates",
+	"auto_update_overlay":  "Enable automatic overlay (no-rollback) updates",
+	"auto_update_min_mbps": "Minimum measured bandwidth required before an auto-update proceeds",
+	"gps":                  "Enable GPS (gpsd) on this node",
+	"gps_source":           "GPS source: receiver (gpsd) or static",
+	"gps_static_lat":       "Static latitude reported when gps_source=static",
+	"gps_static_lon":       "Static longitude reported when gps_source=static",
+	"gps_static_alt":       "Static altitude reported when gps_source=static",
+	"callsign":             "Callsign used in CoT position reports",
+	"cot_type":             "CoT type code broadcast for this node's position",
+	"cot_team":             "CoT team/affiliation for this node's position",
+	"cot_role":             "CoT role for this node's position",
+	"cot_icon":             "CoT icon override for this node's position",
+}
+
+func apiConfigKeys(w http.ResponseWriter, r *http.Request) {
+	keys := make([]map[string]interface{}, 0, len(saveableKeys))
+	for k := range saveableKeys {
+		keys = append(keys, map[string]interface{}{
+			"key":         k,
+			"description": keyDescriptions[k],
+		})
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return keys[i]["key"].(string) < keys[j]["key"].(string)
+	})
+	writeJSON(w, 200, map[string]interface{}{"keys": keys})
 }
 
 func apiAdminSave(w http.ResponseWriter, r *http.Request) {
