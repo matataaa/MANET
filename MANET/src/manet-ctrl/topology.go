@@ -199,6 +199,7 @@ func assembleLocalData() LocalData {
 		Airtime:    currentAirtime(),
 		UplinkMbps: uplinkMbps,
 		UplinkType: uplinkType,
+		CoreDown:   coreServicesDown(),
 	}
 }
 
