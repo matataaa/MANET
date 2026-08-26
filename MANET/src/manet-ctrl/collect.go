@@ -622,6 +622,7 @@ type iwDev struct {
 	TxPower string
 	Freq    string
 	Wiphy   string
+	Width   string
 }
 
 func getInterfaces() []Iface {
@@ -709,6 +710,7 @@ func getInterfaces() []Iface {
 			iface.Channel = iw.Channel
 			iface.FreqMHz = iw.Freq
 			iface.TxPowerDBM = iw.TxPower
+			iface.WidthMHz = iw.Width
 		}
 
 		// Classify role — AP check must precede batSlaves so no_mesh_if wins
@@ -877,6 +879,13 @@ func parseIWDev() map[string]iwDev {
 				if m := regexp.MustCompile(`(\d+)\s*MHz`).FindStringSubmatch(trimmed); len(m) > 1 {
 					d.Freq = m[1]
 				}
+				// Same "channel N (FFFF MHz), width: W MHz, center1: ..."
+				// line carries the operating channel width -- a second,
+				// later MHz occurrence the Freq regex above doesn't reach
+				// since FindStringSubmatch only returns the first match.
+				if m := regexp.MustCompile(`width:\s*(\d+)\s*MHz`).FindStringSubmatch(trimmed); len(m) > 1 {
+					d.Width = m[1]
+				}
 			}
 			devs[current] = d
 		}
@@ -956,6 +965,13 @@ func enrichIfacesWithHalow(ifaces []Iface) []Iface {
 		if freq, ok := info["freq_mhz"]; ok {
 			ifaces[i].FreqMHz = freq
 		}
+		// Same reasoning as the Channel/FreqMHz override above: the generic
+		// `iw dev` width comes from the driver's internal VHT-mapped ghost
+		// representation, not the real S1G channel width -- confirmed live
+		// on EUD4 (wlan2 reported width_mhz=40 despite actually running
+		// HaLow at 2MHz). HaLow's real bandwidth is HalowBW, already set
+		// above; clear the meaningless generic value rather than report it.
+		ifaces[i].WidthMHz = ""
 		if cap, ok := HalowBWTxPowerCapDBM[ifaces[i].HalowBW]; ok {
 			ifaces[i].TxPowerCapDBM = cap
 		}

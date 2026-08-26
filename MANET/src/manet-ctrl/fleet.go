@@ -156,9 +156,28 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	if updates["qos_enabled"] != "" || updates["qos_voice_band"] != "" || updates["qos_cot_band"] != "" || updates["qos_chat_band"] != "" {
 		applyQoSFromConf(conf)
 	}
-	if updates["halow_bw"] != "" {
-		applyHalowBW(conf)
+	_, bwChanged := updates["halow_bw"]
+	_, chChanged := updates["halow_channel"]
+	if bwChanged || chChanged {
+		applyFleetHalowBW(conf)
 	}
+}
+
+// applyFleetHalowBW validates halow_bw/halow_channel against this node's own
+// regulatory domain before applying — a fleet push may span nodes on
+// different domains (e.g. US and EU), so a channel/bandwidth combo valid on
+// the node that staged the config is not guaranteed valid here. Unlike
+// apiAdminSave (which can reject the whole save before it is persisted),
+// fleet config is already committed fleet-wide by the time it activates —
+// so an invalid combination is logged and skipped rather than applied,
+// leaving this node's current working HaLow config running.
+func applyFleetHalowBW(conf map[string]string) {
+	domain := resolveHalowDomain(conf)
+	if err := validateHalowChannel(domain, effectiveHalowBW(conf), conf["halow_channel"]); err != nil {
+		log.Printf("fleet: skipping halow_bw/halow_channel apply, invalid for this node's domain %q: %v", domain, err)
+		return
+	}
+	applyHalowBW(conf)
 }
 
 func fleetPollAlfred() {

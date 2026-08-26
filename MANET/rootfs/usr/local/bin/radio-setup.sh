@@ -1292,6 +1292,37 @@ done
 # === HALOW CONFIGURATION ===
 # ============================================================================
 
+# Ground-truth legal HaLow channel list per regulatory domain + bandwidth,
+# reverse-engineered from the compiled wpa_supplicant_s1g binary's
+# s1g_op_classes table (see api.go's halowChannelTable for the same table,
+# kept byte-consistent between the two). Returns 1 (invalid) for any
+# domain/bw not covered here -- that includes EU + anything but 1MHz, and
+# every domain other than US/EU.
+halow_channel_valid() {
+    local domain="$1" bw="$2" ch="$3" list=""
+    case "$domain" in
+        US)
+            case "$bw" in
+                1MHz) list="1 3 5 7 9 11 13 15 17 19 21 23 25 27 29 31 33 35 37 39 41 43 45 47 49 51" ;;
+                2MHz) list="2 6 10 14 18 22 26 30 34 38 42 46 50" ;;
+                4MHz) list="8 16 24 32 40 48" ;;
+                8MHz) list="12 28 44" ;;
+            esac
+            ;;
+        EU)
+            case "$bw" in
+                1MHz) list="1 3 5 7 9" ;;
+            esac
+            ;;
+    esac
+    [ -z "$list" ] && return 1
+    local c
+    for c in $list; do
+        [ "$c" = "$ch" ] && return 0
+    done
+    return 1
+}
+
 for WLAN in $(cat /var/lib/halow_if | head -n 1); do
     if [ "$needs_rerun" -eq 1 ]; then
         echo " > Rename pending — deferring HaLow wpa config for $WLAN to post-reboot re-run"
@@ -1321,6 +1352,7 @@ EOF
             case "$halow_bw" in
                 1MHz)  S1G_OP_CLASS=68; S1G_CHANNEL=11; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
                 2MHz)  S1G_OP_CLASS=69; S1G_CHANNEL=10; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2400 ;;
+                4MHz)  S1G_OP_CLASS=70; S1G_CHANNEL=24; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2200 ;;
                 # op_class 72 / channel 8 is rejected outright by
                 # wpa_supplicant_s1g ("error determining S1G operating
                 # channel width from operating class") — confirmed live on
@@ -1336,6 +1368,35 @@ EOF
             esac
             S1G_COUNTRY="US"
             S1G_MBCA=1
+            if [ -n "${halow_channel:-}" ]; then
+                if halow_channel_valid "US" "$halow_bw" "$halow_channel"; then
+                    S1G_CHANNEL="$halow_channel"
+                else
+                    echo " > WARNING: halow_channel=$halow_channel is not valid for US/$halow_bw -- falling back to default channel $S1G_CHANNEL"
+                fi
+            fi
+            ;;
+        EU)
+            case "$halow_bw" in
+                1MHz)  S1G_OP_CLASS=66; S1G_CHANNEL=5; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
+                # The compiled wpa_supplicant_s1g op-class table has no
+                # 2MHz/4MHz/8MHz entry for EU at all -- EU is genuinely
+                # 1MHz-only on this hardware/firmware. apiAdminSave rejects
+                # an EU + non-1MHz halow_bw save outright; provisioning has
+                # no save-time reject path, so fall back to the only real
+                # EU width instead of writing an invalid op_class/channel
+                # pair into the s1g wpa_supplicant conf.
+                *)     S1G_OP_CLASS=66; S1G_CHANNEL=5; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
+            esac
+            S1G_COUNTRY="$HALOW_REGULATORY_DOMAIN"
+            S1G_MBCA=0
+            if [ -n "${halow_channel:-}" ]; then
+                if halow_channel_valid "EU" "1MHz" "$halow_channel"; then
+                    S1G_CHANNEL="$halow_channel"
+                else
+                    echo " > WARNING: halow_channel=$halow_channel is not valid for EU/1MHz -- falling back to default channel $S1G_CHANNEL"
+                fi
+            fi
             ;;
         *)
             case "$halow_bw" in
