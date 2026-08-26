@@ -123,10 +123,11 @@ ip -6 addr show dev br0
 
 ```bash
 # Full mesh topology as JSON (all nodes, links, TQ values)
-curl -s http://localhost/api/data | python3 -m json.tool
+# plain http:// now 301-redirects to https:// on current builds — use -sk
+curl -sk https://localhost/api/data | python3 -m json.tool
 
 # Local node state only (interfaces, services, IP, channel)
-curl -s http://localhost/api/local | python3 -m json.tool
+curl -sk https://localhost/api/local | python3 -m json.tool
 ```
 
 ### 7. Alfred & Node Manager
@@ -228,7 +229,7 @@ dmesg | grep -iE 'morse|wifi|wlan|bat0|mesh|mt7915|brcmfmac' | tail -30
 ### No IPv4 on br0
 
 **Symptom**: Node has no 10.x.x.x address.
-**Check**: `journalctl -u node-manager` — look for IP allocation errors. Verify peers are visible via `curl -s http://localhost/api/data` (see §6).
+**Check**: `journalctl -u node-manager` — look for IP allocation errors. Verify peers are visible via `curl -sk https://localhost/api/data` (see §6).
 
 ### AP not broadcasting
 
@@ -315,9 +316,16 @@ systemctl is-enabled mesh-provision 2>/dev/null || echo "done"
 
 ### Via node-update (official path)
 
+`node-update` is a long-running daemon (`node-update.service`), not a one-shot
+script — there is no `node-update.sh`. It rechecks on its own schedule, and a
+plain `SIGHUP` re-check is gated by a 1-hour in-memory cooldown. To force an
+immediate check+apply that bypasses the cooldown and bandwidth gate (the same
+thing a UI "Update Now" click does):
+
 ```bash
-# Manual trigger (checks internet, compares versions, downloads tarball)
-sudo node-update.sh
+# channel is "software", "overlay", or "both"
+echo both | sudo tee /run/manet-update-trigger
+sudo pkill -USR1 -x node-update
 
 # Check current version
 cat /etc/manet_version.txt
