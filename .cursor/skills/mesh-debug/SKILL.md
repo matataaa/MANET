@@ -27,6 +27,23 @@ For **repository layout** and where provisioning sources of truth live, see `MAN
 sshpass -p '$MESH_PASSWORD' ssh -o StrictHostKeyChecking=no $MESH_USER@$NODE_IP
 ```
 
+### Reaching mesh-only nodes (ProxyJump)
+
+Per `.cursor/mesh-nodes.env`, only one node is typically LAN-reachable directly (e.g. EUD4) — the rest sit on the mesh-only subnet and need a jump through it. Plain `ssh -J` combined with `sshpass` for both hops is unreliable in practice (silently fails, e.g. exit code 5, with no useful error). Use an explicit nested `ProxyCommand` instead — this has been confirmed to work reliably for both `ssh` and `scp`:
+
+```bash
+sshpass -p '$MESH_PASSWORD' ssh -o StrictHostKeyChecking=no \
+  -o ProxyCommand="sshpass -p '$MESH_PASSWORD' ssh -o StrictHostKeyChecking=no -W %h:%p $MESH_USER@$JUMP_IP" \
+  $MESH_USER@$NODE_IP "<command>"
+
+# scp works the same way — same -o ProxyCommand, target as user@host:path
+sshpass -p '$MESH_PASSWORD' scp -o StrictHostKeyChecking=no \
+  -o ProxyCommand="sshpass -p '$MESH_PASSWORD' ssh -o StrictHostKeyChecking=no -W %h:%p $MESH_USER@$JUMP_IP" \
+  local_file $MESH_USER@$NODE_IP:/tmp/
+```
+
+A HaLow-only-backhaul node's file transfers can be genuinely slow (a ~13MB combined payload took ~5.5 minutes over one such link) without being stuck — let a single `scp` run with a generous timeout to completion rather than wrapping it in a second polling/timeout loop with its own shorter deadline; killing the wrapper is easy to mistake for the transfer itself failing.
+
 For sudo commands in non-interactive SSH, pipe the password:
 
 ```bash
