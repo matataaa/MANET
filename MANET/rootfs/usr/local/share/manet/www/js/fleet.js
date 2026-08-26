@@ -14,10 +14,12 @@ const MESH_FIELDS = [
   { key: 'mesh_key', label: 'Mesh Key', dangerous: true, type: 'password' },
   { key: 'ipv4_network', label: 'IPv4 Network', dangerous: true },
   { key: 'halow_bw', label: 'HaLow Bandwidth', type: 'select', options: ['1MHz','2MHz','4MHz','8MHz'] },
+  { key: 'halow_channel', label: 'HaLow Channel', hint: 'Blank = Auto. Validated per-node against its own regulatory domain on apply, since a fleet push can span nodes on different domains.' },
   { key: 'multicast_mode', label: 'Multicast Mode', type: 'select', options: [
     {v:'flood',l:'Flood (recommended ≤10 nodes)'},{v:'optimized',l:'Optimized IGMP (10+ nodes)'}
   ] },
   { key: 'regulatory_domain', label: 'Reg Domain' },
+  { key: 'halow_regulatory_domain', label: 'HaLow Reg Domain', hint: 'Blank = inherit Reg Domain. Overrides it for HaLow specifically (e.g. MM8108 nodes running HaLow on a different domain than their WiFi radios).' },
   { key: 'dns_servers', label: 'DNS Servers', hint: 'Comma-separated (e.g. 8.8.8.8,8.8.4.4)' },
   { key: 'admin_password', label: 'Admin Password', type: 'password' },
   { key: 'require_auth', label: 'Require Auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },

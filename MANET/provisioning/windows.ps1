@@ -33,6 +33,8 @@ $Script:ADMIN_PW          = ""
 $Script:AUTO_UPDATE       = ""
 $Script:REGULATORY_DOMAIN = ""
 $Script:HALOW_REGULATORY_DOMAIN = ""
+$Script:HALOW_BW          = ""
+$Script:HALOW_CHANNEL     = ""
 $Script:NODE_HOSTNAME     = ""
 $Script:RPI_IMAGER_PATH   = $null
 
@@ -79,6 +81,61 @@ function Get-HalowRegulatoryDomain {
     $wifiDomain = $wifiDomain.ToUpper()
     if (Test-EuHalowRegion -domain $wifiDomain) { return "EU" }
     return $wifiDomain
+}
+
+# Ground-truth legal HaLow channel list per regulatory domain + bandwidth,
+# kept byte-consistent with radio-setup.sh's halow_channel_valid() (see
+# MANET/rootfs/usr/local/bin/radio-setup.sh). Returns an empty array for
+# any domain/bw not covered here -- that includes EU + anything but 1MHz,
+# and every domain other than US/EU (those are out of scope for this
+# feature and get no channel validation at all).
+function Get-HalowChannelsForDomainBw {
+    param([string]$domain, [string]$bw)
+    switch ($domain) {
+        "US" {
+            switch ($bw) {
+                "1MHz" { return @(1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47,49,51) }
+                "2MHz" { return @(2,6,10,14,18,22,26,30,34,38,42,46,50) }
+                "4MHz" { return @(8,16,24,32,40,48) }
+                "8MHz" { return @(12,28,44) }
+            }
+        }
+        "EU" {
+            switch ($bw) {
+                "1MHz" { return @(1,3,5,7,9) }
+            }
+        }
+    }
+    return @()
+}
+
+# Default channel for a given (in-scope) regulatory domain + bandwidth.
+function Get-HalowDefaultChannelForDomainBw {
+    param([string]$domain, [string]$bw)
+    switch ($domain) {
+        "US" {
+            switch ($bw) {
+                "1MHz" { return 11 }
+                "2MHz" { return 10 }
+                "4MHz" { return 24 }
+                "8MHz" { return 12 }
+            }
+        }
+        "EU" {
+            switch ($bw) {
+                "1MHz" { return 5 }
+            }
+        }
+    }
+    return $null
+}
+
+# freq_MHz = (start_kHz + channel*500) / 1000, start is 902000 for US
+# (and every out-of-scope domain) or 863000 for EU.
+function Get-HalowFreqMhzForChannel {
+    param([string]$domain, [int]$channel)
+    $start = if ($domain -eq "EU") { 863000 } else { 902000 }
+    return [math]::Round(($start + $channel * 500) / 1000.0, 1)
 }
 
 function Calculate-Capacity {
@@ -394,6 +451,57 @@ function Ask-Questions {
         }
     }
 
+    # HaLow Bandwidth
+    if ($Script:HALOW_REGULATORY_DOMAIN -eq "EU") {
+        $halowBwOptions = @("1MHz")
+        $halowBwDefault = "1MHz"
+    } else {
+        $halowBwOptions = @("1MHz","2MHz","4MHz","8MHz")
+        $halowBwDefault = "2MHz"
+    }
+    while ($true) {
+        $bw = Read-Host "Enter HaLow bandwidth (options: $($halowBwOptions -join '/'), default: $halowBwDefault)"
+        if ([string]::IsNullOrWhiteSpace($bw)) { $bw = $halowBwDefault }
+        if ($halowBwOptions -contains $bw) {
+            $Script:HALOW_BW = $bw
+            Write-Host "Using HaLow bandwidth: $($Script:HALOW_BW)"
+            break
+        } else {
+            Write-Host "ERROR: Invalid HaLow bandwidth: $bw" -ForegroundColor Red
+            Write-Host "Valid options for $($Script:HALOW_REGULATORY_DOMAIN): $($halowBwOptions -join ', ')"
+        }
+    }
+
+    # HaLow Channel
+    $halowChannelList = Get-HalowChannelsForDomainBw -domain $Script:HALOW_REGULATORY_DOMAIN -bw $Script:HALOW_BW
+    if ($halowChannelList.Count -gt 0) {
+        $halowDefaultChannel = Get-HalowDefaultChannelForDomainBw -domain $Script:HALOW_REGULATORY_DOMAIN -bw $Script:HALOW_BW
+        $halowDefaultFreq    = Get-HalowFreqMhzForChannel -domain $Script:HALOW_REGULATORY_DOMAIN -channel $halowDefaultChannel
+        $halowChannelDesc = ($halowChannelList | ForEach-Object {
+            $freq = Get-HalowFreqMhzForChannel -domain $Script:HALOW_REGULATORY_DOMAIN -channel $_
+            "$_ ($freq MHz)"
+        }) -join ", "
+        Write-Host "Available channels for $($Script:HALOW_REGULATORY_DOMAIN)/$($Script:HALOW_BW): $halowChannelDesc"
+
+        while ($true) {
+            $ch = Read-Host "Enter HaLow channel [or press Enter for Auto (channel $halowDefaultChannel, $halowDefaultFreq MHz)]"
+            if ([string]::IsNullOrWhiteSpace($ch)) { $Script:HALOW_CHANNEL = ""; break }
+            if ($ch -match '^\d+$' -and ($halowChannelList -contains [int]$ch)) {
+                $Script:HALOW_CHANNEL = $ch
+                Write-Host "Using HaLow channel: $($Script:HALOW_CHANNEL)"
+                break
+            } else {
+                Write-Host "ERROR: Invalid HaLow channel for $($Script:HALOW_REGULATORY_DOMAIN)/$($Script:HALOW_BW): $ch" -ForegroundColor Red
+                Write-Host "Valid channels: $($halowChannelList -join ', ')"
+            }
+        }
+    } else {
+        # Out-of-scope domain (not US or EU) -- no ground-truth channel
+        # table exists, so accept whatever's typed (or empty for Auto)
+        # without validation.
+        $Script:HALOW_CHANNEL = Read-Host "Enter HaLow channel [or press Enter for Auto]"
+    }
+
     $hn = Read-Host "Enter node hostname [or press Enter for auto]"
     $Script:NODE_HOSTNAME = if ([string]::IsNullOrWhiteSpace($hn)) { "" } else { $hn }
     if ($Script:NODE_HOSTNAME) {
@@ -472,6 +580,8 @@ LAN_AP_KEY="$($Script:LAN_AP_KEY)"
 MAX_EUDS_PER_NODE="$($Script:MAX_EUDS_PER_NODE)"
 REGULATORY_DOMAIN="$($Script:REGULATORY_DOMAIN)"
 HALOW_REGULATORY_DOMAIN="$($Script:HALOW_REGULATORY_DOMAIN)"
+HALOW_BW="$($Script:HALOW_BW)"
+HALOW_CHANNEL="$($Script:HALOW_CHANNEL)"
 MESH_SSID="$($Script:MESH_SSID)"
 MESH_SAE_KEY="$($Script:MESH_SAE_KEY)"
 LAN_CIDR_BLOCK="$($Script:LAN_CIDR_BLOCK)"
@@ -499,6 +609,8 @@ function Load-Config {
                 "MAX_EUDS_PER_NODE"       { $Script:MAX_EUDS_PER_NODE        = [int]$Matches[2] }
                 "REGULATORY_DOMAIN"       { $Script:REGULATORY_DOMAIN        = $Matches[2] }
                 "HALOW_REGULATORY_DOMAIN" { $Script:HALOW_REGULATORY_DOMAIN  = $Matches[2] }
+                "HALOW_BW"                { $Script:HALOW_BW                  = $Matches[2] }
+                "HALOW_CHANNEL"           { $Script:HALOW_CHANNEL             = $Matches[2] }
                 "MESH_SSID"               { $Script:MESH_SSID                = $Matches[2] }
                 "MESH_SAE_KEY"            { $Script:MESH_SAE_KEY              = $Matches[2] }
                 "LAN_CIDR_BLOCK"          { $Script:LAN_CIDR_BLOCK            = $Matches[2] }
@@ -515,6 +627,9 @@ function Load-Config {
     if (-not $Script:HALOW_REGULATORY_DOMAIN) {
         $Script:HALOW_REGULATORY_DOMAIN = Get-HalowRegulatoryDomain -wifiDomain $Script:REGULATORY_DOMAIN
     }
+    if (-not $Script:HALOW_BW) {
+        $Script:HALOW_BW = if ($Script:HALOW_REGULATORY_DOMAIN -eq "EU") { "1MHz" } else { "2MHz" }
+    }
 
     Write-Host "--- Loaded Configuration ---"
     Write-Host "  EUD Connection: $($Script:EUD_CONNECTION)"
@@ -525,6 +640,8 @@ function Load-Config {
     }
     Write-Host "  Regulatory Domain: $($Script:REGULATORY_DOMAIN)"
     Write-Host "  HaLow Regulatory Region: $($Script:HALOW_REGULATORY_DOMAIN)"
+    Write-Host "  HaLow Bandwidth: $($Script:HALOW_BW)"
+    Write-Host "  HaLow Channel: $(if ($Script:HALOW_CHANNEL) { $Script:HALOW_CHANNEL } else { 'Auto' })"
     Write-Host "  Mesh SSID: $($Script:MESH_SSID)"
     Write-Host "  Mesh SAE Key: $($Script:MESH_SAE_KEY)"
     Write-Host "  LAN CIDR Block: $($Script:LAN_CIDR_BLOCK)"
@@ -622,6 +739,8 @@ $templateContent = $templateContent `
     -replace '__RADIO_PW__',                $Script:RADIO_PW `
     -replace '__REGULATORY_DOMAIN__',       $Script:REGULATORY_DOMAIN `
     -replace '__HALOW_REGULATORY_DOMAIN__', $Script:HALOW_REGULATORY_DOMAIN `
+    -replace '__HALOW_BW__',                $Script:HALOW_BW `
+    -replace '__HALOW_CHANNEL__',           $Script:HALOW_CHANNEL `
     -replace '__ADMIN_PW__',                $Script:ADMIN_PW `
     -replace '__AUTO_UPDATE__',             $Script:AUTO_UPDATE `
     -replace '__NODE_HOSTNAME__',           $Script:NODE_HOSTNAME

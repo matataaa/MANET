@@ -102,7 +102,16 @@ function configRenderView(panel, cfg) {
       { label: 'Mesh Key', key: 'mesh_key', masked: true },
       { label: 'IPv4 Network', key: 'ipv4_network' },
       { label: 'Regulatory Domain', key: 'regulatory_domain' },
+      { label: 'HaLow Regulatory Domain', key: 'halow_regulatory_domain', fmt: function(v) { return v || 'Inherit'; } },
       { label: 'HaLow Bandwidth', key: 'halow_bw' },
+      { label: 'HaLow Channel', key: 'halow_channel', fmt: function(v) {
+        if (!v) return 'Auto';
+        var domain = cfg.halow_regulatory_domain || cfg.regulatory_domain || 'US';
+        var startKHz = { US: 902000, EU: 863000 }[domain];
+        var ch = parseInt(v, 10);
+        if (startKHz && !isNaN(ch)) return v + ' (' + ((startKHz + ch * 500) / 1000) + ' MHz)';
+        return v;
+      } },
       { label: 'Multicast Mode', key: 'multicast_mode', fmt: function(v) { return v === 'optimized' ? 'Optimized (IGMP)' : 'Flood (default)'; } },
     ]},
     { title: 'Services', fields: [
@@ -453,9 +462,14 @@ function configRenderEdit(panel, cfg) {
     { label: 'Mesh Key', key: 'mesh_key', type: 'password' },
     { label: 'IPv4 Network', key: 'ipv4_network', type: 'text' },
     { label: 'Regulatory Domain', key: 'regulatory_domain', type: 'select', options: ['US', 'EU', 'JP', 'AU'] },
+    { label: 'HaLow Regulatory Domain', key: 'halow_regulatory_domain', type: 'select', options: [
+      {v:'',l:'Inherit from Regulatory Domain'},'US','EU','JP','AU'
+    ], hint: 'Overrides the regulatory domain for the HaLow radio specifically, independent of the WiFi Regulatory Domain above (e.g. an MM8108 unit can run HaLow on a different domain than its 2.4/5GHz radios). Empty = inherit.' },
     { label: 'HaLow Bandwidth', key: 'halow_bw', type: 'select', options: [
       {v:'1MHz',l:'1 MHz'},{v:'2MHz',l:'2 MHz'},{v:'4MHz',l:'4 MHz'},{v:'8MHz',l:'8 MHz'}
-    ], hint: 'Primary channel width for 802.11ah mesh. EU supports 1-2 MHz only. Narrower = longer range.' },
+    ], hint: 'Primary channel width for 802.11ah mesh. EU supports 1MHz only. Narrower = longer range.' },
+    { label: 'HaLow Channel', key: 'halow_channel', type: 'select', options: [{v:'',l:'Auto'}],
+      hint: 'Explicit HaLow channel for the current regulatory domain/bandwidth. Auto (default) picks the standard channel for that combination.' },
     { label: 'Multicast Mode', key: 'multicast_mode', type: 'select', options: [
       {v:'flood',l:'Flood (recommended ≤10 nodes)'},
       {v:'optimized',l:'Optimized IGMP (10+ nodes)'}
@@ -610,6 +624,69 @@ function configRenderEdit(panel, cfg) {
   });
   configApplyShowIf();
 
+  // HaLow Bandwidth's own options aren't fully static either — EU's real
+  // driver-compiled channel plan only has a 1MHz entry (see the field's
+  // hint), so offering 2/4/8MHz there would let the user pick a combination
+  // the save rejects outright. Domains not listed here keep the full set.
+  const HALOW_BW_OPTIONS = [
+    {v:'1MHz',l:'1 MHz'},{v:'2MHz',l:'2 MHz'},{v:'4MHz',l:'4 MHz'},{v:'8MHz',l:'8 MHz'}
+  ];
+  const HALOW_BW_BY_DOMAIN = { EU: ['1MHz'] };
+
+  // HaLow Channel's option list isn't static like other selects — the legal
+  // channels (and what "Auto" actually resolves to) depend on the current
+  // Regulatory Domain + HaLow Bandwidth, so it's rebuilt from
+  // /api/halow/channels on load and whenever either of those two fields
+  // changes.
+  async function configRefreshHalowChannels() {
+    const chEl = document.getElementById('cfg-f-halow_channel');
+    const domainEl = document.getElementById('cfg-f-regulatory_domain');
+    const halowRegDomainEl = document.getElementById('cfg-f-halow_regulatory_domain');
+    const bwEl = document.getElementById('cfg-f-halow_bw');
+    if (!chEl || !domainEl || !bwEl) return;
+
+    // halow_regulatory_domain overrides regulatory_domain when set, mirroring
+    // resolveHalowDomain's server-side precedence — this only decides what
+    // the picker narrows against client-side; the server still validates
+    // for real on save.
+    const resolvedDomain = (halowRegDomainEl && halowRegDomainEl.value) ? halowRegDomainEl.value : domainEl.value;
+
+    const allowedBw = HALOW_BW_BY_DOMAIN[resolvedDomain] || HALOW_BW_OPTIONS.map(o => o.v);
+    const currentBw = bwEl.value;
+    bwEl.innerHTML = HALOW_BW_OPTIONS.filter(o => allowedBw.includes(o.v))
+      .map(o => '<option value="' + o.v + '">' + o.l + '</option>').join('');
+    bwEl.value = allowedBw.includes(currentBw) ? currentBw : allowedBw[0];
+
+    const current = chEl.value;
+    try {
+      const url = configBaseUrl() + '/api/halow/channels?domain=' + encodeURIComponent(resolvedDomain) +
+        '&bw=' + encodeURIComponent(bwEl.value);
+      const r = await fetch(url);
+      const d = await r.json();
+      let opts = '<option value="">Auto (Channel ' + d.default_channel +
+        (d.default_freq_mhz ? ', ' + d.default_freq_mhz + ' MHz' : '') + ')</option>';
+      (d.channels || []).forEach(c => {
+        opts += '<option value="' + c.channel + '">' + c.channel +
+          (c.freq_mhz ? ' (' + c.freq_mhz + ' MHz)' : '') + '</option>';
+      });
+      chEl.innerHTML = opts;
+      // Keep the previously-selected explicit channel if it is still legal
+      // for the new domain/bw; otherwise fall back to Auto rather than
+      // silently submitting a channel that no longer applies.
+      chEl.value = Array.from(chEl.options).some(o => o.value === current) ? current : '';
+    } catch (e) {
+      // Transient fetch failure — leave whatever options are already
+      // rendered rather than wiping the picker.
+    }
+  }
+  const halowDomainEl = document.getElementById('cfg-f-regulatory_domain');
+  const halowRegDomainSelectEl = document.getElementById('cfg-f-halow_regulatory_domain');
+  const halowBwEl = document.getElementById('cfg-f-halow_bw');
+  if (halowDomainEl) halowDomainEl.addEventListener('change', configRefreshHalowChannels);
+  if (halowRegDomainSelectEl) halowRegDomainSelectEl.addEventListener('change', configRefreshHalowChannels);
+  if (halowBwEl) halowBwEl.addEventListener('change', configRefreshHalowChannels);
+  configRefreshHalowChannels();
+
   document.getElementById('cfg-back-btn').addEventListener('click', () => {
     configEditing = false;
     configFetch();
@@ -656,7 +733,7 @@ async function configSave() {
   }
 
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','eud_bandwidth','mesh_ssid','mesh_key',
-    'ipv4_network','regulatory_domain','halow_bw','multicast_mode','battery_monitor','admin_password','require_auth',
+    'ipv4_network','regulatory_domain','halow_regulatory_domain','halow_bw','halow_channel','multicast_mode','battery_monitor','admin_password','require_auth',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
     'auto_update','update_url','auto_update_overlay','auto_update_min_mbps',
     'gps','gps_source','gps_static_lat','gps_static_lon','gps_static_alt','callsign','cot_type','cot_team','cot_role','cot_icon',

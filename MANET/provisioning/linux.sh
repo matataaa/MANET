@@ -66,6 +66,62 @@ halow_regulatory_domain_for_wifi_domain() {
     fi
 }
 
+# Ground-truth legal HaLow channel list per regulatory domain + bandwidth,
+# kept byte-consistent with radio-setup.sh's halow_channel_valid() (see
+# MANET/rootfs/usr/local/bin/radio-setup.sh). Prints nothing (empty) for
+# any domain/bw not covered here -- that includes EU + anything but 1MHz,
+# and every domain other than US/EU (those are out of scope for this
+# feature and get no channel validation at all).
+halow_channels_for_domain_bw() {
+    local domain="$1" bw="$2"
+    case "$domain" in
+        US)
+            case "$bw" in
+                1MHz) echo "1 3 5 7 9 11 13 15 17 19 21 23 25 27 29 31 33 35 37 39 41 43 45 47 49 51" ;;
+                2MHz) echo "2 6 10 14 18 22 26 30 34 38 42 46 50" ;;
+                4MHz) echo "8 16 24 32 40 48" ;;
+                8MHz) echo "12 28 44" ;;
+            esac
+            ;;
+        EU)
+            case "$bw" in
+                1MHz) echo "1 3 5 7 9" ;;
+            esac
+            ;;
+    esac
+}
+
+# Default channel for a given (in-scope) regulatory domain + bandwidth.
+halow_default_channel_for_domain_bw() {
+    local domain="$1" bw="$2"
+    case "$domain" in
+        US)
+            case "$bw" in
+                1MHz) echo "11" ;;
+                2MHz) echo "10" ;;
+                4MHz) echo "24" ;;
+                8MHz) echo "12" ;;
+            esac
+            ;;
+        EU)
+            case "$bw" in
+                1MHz) echo "5" ;;
+            esac
+            ;;
+    esac
+}
+
+# freq_MHz = (start_kHz + channel*500) / 1000, start is 902000 for US
+# (and every out-of-scope domain) or 863000 for EU.
+halow_freq_mhz_for_channel() {
+    local domain="$1" ch="$2" start
+    case "$domain" in
+        EU) start=863000 ;;
+        *) start=902000 ;;
+    esac
+    awk -v start="$start" -v ch="$ch" 'BEGIN { printf "%.1f", (start + ch * 500) / 1000 }'
+}
+
 # Function to calculate network capacity
 calculate_capacity() {
         local cidr=$1
@@ -364,6 +420,73 @@ ask_questions() {
         fi
     done
 
+    # HaLow Bandwidth
+    if [ "$HALOW_REGULATORY_DOMAIN" = "EU" ]; then
+        halow_bw_options="1MHz"
+        halow_bw_default="1MHz"
+    else
+        halow_bw_options="1MHz 2MHz 4MHz 8MHz"
+        halow_bw_default="2MHz"
+    fi
+    while true; do
+        read -p "Enter HaLow bandwidth (options: ${halow_bw_options// //}, default: $halow_bw_default): " HALOW_BW
+        HALOW_BW=${HALOW_BW:-$halow_bw_default}
+
+        halow_bw_valid=0
+        for opt in $halow_bw_options; do
+            [ "$HALOW_BW" = "$opt" ] && halow_bw_valid=1 && break
+        done
+
+        if [ "$halow_bw_valid" -eq 1 ]; then
+            echo "Using HaLow bandwidth: $HALOW_BW"
+            break
+        else
+            echo "ERROR: Invalid HaLow bandwidth: $HALOW_BW"
+            echo "Valid options for $HALOW_REGULATORY_DOMAIN: $halow_bw_options"
+        fi
+    done
+
+    # HaLow Channel
+    halow_channel_list=$(halow_channels_for_domain_bw "$HALOW_REGULATORY_DOMAIN" "$HALOW_BW")
+    if [ -n "$halow_channel_list" ]; then
+        halow_default_channel=$(halow_default_channel_for_domain_bw "$HALOW_REGULATORY_DOMAIN" "$HALOW_BW")
+        halow_default_freq=$(halow_freq_mhz_for_channel "$HALOW_REGULATORY_DOMAIN" "$halow_default_channel")
+
+        halow_channel_desc=""
+        for ch in $halow_channel_list; do
+            ch_freq=$(halow_freq_mhz_for_channel "$HALOW_REGULATORY_DOMAIN" "$ch")
+            halow_channel_desc="${halow_channel_desc}${ch} (${ch_freq} MHz), "
+        done
+        halow_channel_desc="${halow_channel_desc%, }"
+        echo "Available channels for $HALOW_REGULATORY_DOMAIN/$HALOW_BW: $halow_channel_desc"
+
+        while true; do
+            read -p "Enter HaLow channel [or press Enter for Auto (channel $halow_default_channel, ${halow_default_freq} MHz)]: " HALOW_CHANNEL
+
+            if [ -z "$HALOW_CHANNEL" ]; then
+                break
+            fi
+
+            halow_channel_valid=0
+            for ch in $halow_channel_list; do
+                [ "$HALOW_CHANNEL" = "$ch" ] && halow_channel_valid=1 && break
+            done
+
+            if [ "$halow_channel_valid" -eq 1 ]; then
+                echo "Using HaLow channel: $HALOW_CHANNEL"
+                break
+            else
+                echo "ERROR: Invalid HaLow channel for $HALOW_REGULATORY_DOMAIN/$HALOW_BW: $HALOW_CHANNEL"
+                echo "Valid channels: $halow_channel_list"
+            fi
+        done
+    else
+        # Out-of-scope domain (not US or EU) -- no ground-truth channel
+        # table exists, so accept whatever's typed (or empty for Auto)
+        # without validation.
+        read -p "Enter HaLow channel [or press Enter for Auto]: " HALOW_CHANNEL
+    fi
+
     read -p "Enter node hostname [or press Enter for auto]: " NODE_HOSTNAME
     NODE_HOSTNAME=${NODE_HOSTNAME:-}
     if [ -n "$NODE_HOSTNAME" ]; then
@@ -461,6 +584,8 @@ LAN_AP_KEY="$LAN_AP_KEY"
 MAX_EUDS_PER_NODE="$MAX_EUDS_PER_NODE"
 REGULATORY_DOMAIN="$REGULATORY_DOMAIN"
 HALOW_REGULATORY_DOMAIN="$HALOW_REGULATORY_DOMAIN"
+HALOW_BW="$HALOW_BW"
+HALOW_CHANNEL="$HALOW_CHANNEL"
 MESH_SSID="$MESH_SSID"
 MESH_SAE_KEY="$MESH_SAE_KEY"
 LAN_CIDR_BLOCK="$LAN_CIDR_BLOCK"
@@ -483,6 +608,12 @@ load_config() {
         # Source the file to load the variables into this script
         source "$CONFIG_FILE"
         HALOW_REGULATORY_DOMAIN=${HALOW_REGULATORY_DOMAIN:-$(halow_regulatory_domain_for_wifi_domain "$REGULATORY_DOMAIN")}
+        if [ "$HALOW_REGULATORY_DOMAIN" = "EU" ]; then
+                HALOW_BW=${HALOW_BW:-1MHz}
+        else
+                HALOW_BW=${HALOW_BW:-2MHz}
+        fi
+        HALOW_CHANNEL=${HALOW_CHANNEL:-}
         GPS_ENABLED=${GPS_ENABLED:-y}
 
         # Display the loaded settings
@@ -496,6 +627,8 @@ load_config() {
         fi
         echo "  Regulatory Domain: $REGULATORY_DOMAIN"
         echo "  HaLow Regulatory Region: $HALOW_REGULATORY_DOMAIN"
+        echo "  HaLow Bandwidth: $HALOW_BW"
+        echo "  HaLow Channel: ${HALOW_CHANNEL:-Auto}"
         echo "  Mesh SSID: $MESH_SSID"
         echo "  Mesh SAE Key: $MESH_SAE_KEY"
         echo "  LAN CIDR Block: $LAN_CIDR_BLOCK"
@@ -730,6 +863,8 @@ flash_rpi() {
             -e "s|__RADIO_PW__|${RADIO_PW}|g" \
             -e "s|__REGULATORY_DOMAIN__|${REGULATORY_DOMAIN}|g" \
             -e "s|__HALOW_REGULATORY_DOMAIN__|${HALOW_REGULATORY_DOMAIN}|g" \
+            -e "s|__HALOW_BW__|${HALOW_BW}|g" \
+            -e "s|__HALOW_CHANNEL__|${HALOW_CHANNEL}|g" \
             -e "s|__ADMIN_PW__|${ADMIN_PW}|g" \
             -e "s|__AUTO_UPDATE__|${AUTO_UPDATE}|g" \
             -e "s|__NODE_HOSTNAME__|${NODE_HOSTNAME}|g" \

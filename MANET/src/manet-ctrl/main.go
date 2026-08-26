@@ -466,6 +466,7 @@ func main() {
 	mux.HandleFunc("/api/qos", apiQoS)
 	mux.HandleFunc("/api/registry", apiRegistry)
 	mux.HandleFunc("/api/config/keys", apiConfigKeys)
+	mux.HandleFunc("/api/halow/channels", apiHalowChannels)
 
 	// Control APIs (all destructive — require auth)
 	mux.HandleFunc("/api/control/interface", requireAuth(apiControlInterface))
