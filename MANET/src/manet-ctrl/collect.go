@@ -1372,6 +1372,24 @@ func getAllServices() []ServiceInfo {
 	return results
 }
 
+// coreServicesDown reports which "core"-category services (per
+// serviceRegistry) are not currently active, for the header health
+// indicator. manet-ctrl itself is skipped: if it weren't running, this
+// response would never reach the browser at all.
+func coreServicesDown() []string {
+	var down []string
+	for _, svc := range serviceRegistry {
+		if svc.Category != "core" || svc.ID == "manet-ctrl" {
+			continue
+		}
+		_, props := findActiveUnit(svc.Units)
+		if props["ActiveState"] != "active" {
+			down = append(down, svc.ID)
+		}
+	}
+	return down
+}
+
 func serviceAction(serviceID, action string) (bool, string) {
 	for _, svc := range serviceRegistry {
 		if svc.ID != serviceID {

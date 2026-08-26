@@ -197,6 +197,7 @@ type LocalData struct {
 	Airtime    *AirtimeInfo    `json:"airtime,omitempty"`
 	UplinkMbps float64         `json:"uplink_mbps"`
 	UplinkType string          `json:"uplink_type"`
+	CoreDown   []string        `json:"core_down,omitempty"`
 }
 
 type BatOriginator struct {
