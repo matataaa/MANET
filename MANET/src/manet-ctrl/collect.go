@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -1390,8 +1391,10 @@ func serviceAction(serviceID, action string) (bool, string) {
 		if unit == "" {
 			return false, "no unit found"
 		}
+		log.Printf("service action: %s systemctl %s %s", serviceID, action, unit)
 		out, err := runCmd(10*time.Second, "systemctl", action, unit)
 		if err != nil {
+			log.Printf("service action failed: %s systemctl %s %s: %s", serviceID, action, unit, strings.TrimSpace(out))
 			return false, strings.TrimSpace(out)
 		}
 		return true, ""
