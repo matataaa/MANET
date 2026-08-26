@@ -1,7 +1,13 @@
 [Unit]
 Description=BATMAN bat0 HaLow re-enslave watchdog
+# Wants=/After=, not Requires=: this watchdog's own job is recovering
+# batman-enslave.service, so it must survive that service being
+# intentionally bounced (e.g. by morse-spi-watchdog.sh's gpio_recover()) —
+# Requires= would propagate that stop to itself, silently killing the
+# recovery watchdog exactly when a radio fault needs it. See the matching
+# note on alfred.service's generation in radio-setup.sh.
 After=batman-enslave.service
-Requires=batman-enslave.service
+Wants=batman-enslave.service
 
 [Service]
 Type=simple

@@ -1591,12 +1591,20 @@ systemctl enable batman-enslave.service
 systemctl enable batman-enslave-watch.service
 
 # Alfred master listener for mesh data messages
+#
+# Wants=/After=, not Requires=, on batman-enslave.service: Requires=
+# propagates a stop, so every time morse-spi-watchdog.sh's gpio_recover()
+# bounces batman-enslave.service for radio-fault recovery, alfred (and
+# batman-enslave-watch.service, same reasoning) got silently stopped as a
+# side effect and never restarted — the confirmed root cause of alfred
+# being found cleanly `inactive` for days with no crash/error anywhere.
+# Restart=always below doesn't help; this was a deliberate stop, not a
+# crash. Wants=/After= keeps normal startup ordering without the cascade.
 cat <<- EOF > /etc/systemd/system/alfred.service
 [Unit]
 Description=B.A.T.M.A.N. Advanced Layer 2 Forwarding Daemon
-After=network-online.target
-Wants=network-online.target
-Requires=batman-enslave.service
+After=network-online.target batman-enslave.service
+Wants=network-online.target batman-enslave.service
 
 [Service]
 Type=simple
