@@ -33,6 +33,7 @@ Config keys:
   ipv4_network          Mesh IPv4 subnet (e.g. 10.30.2.0/24)
   regulatory_domain     WiFi regulatory domain (US, EU, JP, AU)
   halow_bw              HaLow bandwidth (1MHz, 2MHz, 4MHz, 8MHz)
+  mesh_5ghz_bw          5GHz mesh channel width: 20 (deterministic, default) or 80 (higher throughput, fleet-wide only)
   multicast_mode        Multicast delivery: flood (default) or optimized
   eud                   EUD mode: wired, wireless, both, auto, none
   lan_ap_ssid           WiFi AP SSID
