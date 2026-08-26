@@ -392,6 +392,14 @@ HALOW_REGULATORY_DOMAIN=$(grep "^halow_regulatory_domain=" /etc/mesh.conf 2>/dev
 HALOW_REGULATORY_DOMAIN=${HALOW_REGULATORY_DOMAIN:-$REGULATORY_DOMAIN}
 REG=$REGULATORY_DOMAIN
 
+# 5GHz mesh channel width. Default 20MHz (safe/deterministic — see ACS.md
+# "Decision: 20MHz-only 5GHz mesh"): wpa_supplicant's mesh mode has no
+# config-level fix for a primary-channel mismatch bug on VHT80, so an
+# absent key must resolve to the narrower, deterministic width, not the
+# legacy 80MHz default. Set to "80" explicitly to opt back into VHT80.
+MESH_5GHZ_BW=$(grep "^mesh_5ghz_bw=" /etc/mesh.conf 2>/dev/null | cut -d'=' -f2)
+MESH_5GHZ_BW=${MESH_5GHZ_BW:-20}
+
 echo REGDOMAIN=$REGULATORY_DOMAIN > /etc/default/crda
 
 uses_eu_halow_region() {
@@ -1009,6 +1017,19 @@ for WLAN in $(cat /var/lib/mesh_if); do
 
     echo " > Setting SAE key/SSID for $WLAN (${FREQ} MHz) ..."
 
+    # 5GHz mesh links default to 20MHz-only (disable_ht40 + disable_vht) —
+    # both are required together (disable_ht40 alone breaks mesh join
+    # outright, live-confirmed). See ACS.md "Decision: 20MHz-only 5GHz
+    # mesh" for why: wpa_supplicant's own coex-scan-driven primary/
+    # secondary reselection has no config-level fix for mesh mode, so
+    # VHT80 links can silently mismatch primary channel between nodes.
+    WIDTH_LINES=""
+    if [[ "$FREQ" -ge 5000 && "$MESH_5GHZ_BW" != "80" ]]; then
+        WIDTH_LINES="    disable_ht40=1
+    disable_vht=1
+"
+    fi
+
 cat <<-EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf
 ctrl_interface=/var/run/wpa_supplicant
 country=$CFG80211_REGDOM
@@ -1024,7 +1045,7 @@ network={
     ieee80211w=2
     mesh_fwding=0
     group_rekey=0
-}
+${WIDTH_LINES}}
 EOF
 
     # Create the network interface config

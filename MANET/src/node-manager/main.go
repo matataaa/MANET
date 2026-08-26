@@ -52,6 +52,9 @@ func main() {
 
 	loop := func() {
 		radioStateSync()
+		if _, iface5 := meshIfaces(); iface5 != "" {
+			reconcile5GHzWidth(iface5)
+		}
 		if acsEnabled {
 			runACSTick()
 		} else {
@@ -244,6 +247,136 @@ func ensureStaticChannels() {
 
 func wpaConfPath(iface string) string {
 	return "/etc/wpa_supplicant/wpa_supplicant-" + iface + ".conf"
+}
+
+func wpaLobbyConfPath(iface string) string {
+	return "/etc/wpa_supplicant/wpa_supplicant-" + iface + "-lobby.conf"
+}
+
+// mesh5GHzWidthKey is the fleet-wide mesh.conf toggle for 5GHz mesh
+// channel width. See ACS.md "Decision: 20MHz-only 5GHz mesh" and "Mixed-
+// width peering" — this must never be mixed per-node in normal operation,
+// hence one key applied identically across the fleet, not a per-radio
+// override.
+const mesh5GHzWidthKey = "mesh_5ghz_bw"
+
+// desiredMeshWidth reads mesh_5ghz_bw from mesh.conf. Absent, empty, or
+// anything other than "80" resolves to "20" — deliberate default-to-safe
+// (deterministic, lower-throughput 20MHz link), not default-to-legacy
+// (non-deterministic VHT80). Matches the lan_ap_bw-style "default read
+// with fallback" convention used elsewhere in this codebase's shell
+// scripts.
+func desiredMeshWidth() string {
+	if loadConf(mesh5GHzWidthKey) == "80" {
+		return "80"
+	}
+	return "20"
+}
+
+// setMeshWidthKeys makes path's network={} block match want20: adds
+// "disable_ht40=1"/"disable_vht=1" if missing when want20 is true, removes
+// them if present when want20 is false. Returns whether the file was
+// actually changed. A no-op (false) if the file doesn't exist or already
+// matches — this is a plain compare-and-fix, not a template rewrite.
+func setMeshWidthKeys(path string, want20 bool) bool {
+	if !fileExists(path) {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("[acs] reading %s: %v", path, err)
+		return false
+	}
+
+	lines := strings.Split(string(data), "\n")
+	out := make([]string, 0, len(lines)+2)
+	inNetwork := false
+	hasHT40, hasVHT := false, false
+	changed := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == "network={":
+			inNetwork = true
+			out = append(out, line)
+			continue
+		case inNetwork && trimmed == "}":
+			if want20 {
+				if !hasHT40 {
+					out = append(out, "    disable_ht40=1")
+					changed = true
+				}
+				if !hasVHT {
+					out = append(out, "    disable_vht=1")
+					changed = true
+				}
+			}
+			inNetwork = false
+			out = append(out, line)
+			continue
+		case inNetwork && trimmed == "disable_ht40=1":
+			hasHT40 = true
+			if !want20 {
+				changed = true
+				continue // drop the line
+			}
+		case inNetwork && trimmed == "disable_vht=1":
+			hasVHT = true
+			if !want20 {
+				changed = true
+				continue // drop the line
+			}
+		}
+		out = append(out, line)
+	}
+
+	if !changed {
+		return false
+	}
+
+	result := strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
+	if err := os.WriteFile(path, []byte(result), 0644); err != nil {
+		log.Printf("[acs] writing %s: %v", path, err)
+		return false
+	}
+	return true
+}
+
+// reconcile5GHzWidth keeps iface's 5GHz mesh wpa_supplicant config —
+// both the live conf and its -lobby.conf (mesh-boot-lobby.service
+// re-copies the lobby conf over the live one on every boot, so both need
+// the fix to survive a reboot) — in sync with the fleet-wide
+// mesh_5ghz_bw setting. Idempotent: a fast no-op read-and-compare once
+// both files already match, one wpa_supplicant restart only when
+// something actually changed. Not a rate-limited retry loop like
+// setIfaceFrequency's ACS self-heal — there's no failure mode here to
+// back off from, just "does the config match, if not fix it once."
+func reconcile5GHzWidth(iface string) {
+	if iface == "" {
+		return
+	}
+	want20 := desiredMeshWidth() != "80"
+
+	liveChanged := setMeshWidthKeys(wpaConfPath(iface), want20)
+	lobbyChanged := setMeshWidthKeys(wpaLobbyConfPath(iface), want20)
+	if !liveChanged && !lobbyChanged {
+		return
+	}
+
+	target := "80MHz (VHT80)"
+	if want20 {
+		target = "20MHz (disable_ht40+disable_vht)"
+	}
+	log.Printf("[acs] %s 5GHz mesh width now targets %s, restarting wpa_supplicant", iface, target)
+
+	if !radioIfaceEnabled(iface) {
+		return
+	}
+	svc := "wpa_supplicant@" + iface + ".service"
+	if err := exec.Command("systemctl", "restart", svc).Run(); err != nil {
+		log.Printf("[acs] restart %s: %v", svc, err)
+	}
 }
 
 // acsCycleInterval matches upstream's scan cadence (its main loop runs
