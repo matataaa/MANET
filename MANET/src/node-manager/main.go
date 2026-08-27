@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -234,15 +235,46 @@ func ensureStaticIfaceChannel(iface, confPath, staticFreq, band string) {
 // Static mode permanently parks the mesh on the same frequencies ACS uses
 // as its lobby/rendezvous pair (lobbyFreq24/lobbyFreq5, channel_election.go)
 // — there's only one "the fixed, always-known channel" concept in this
-// codebase, not two, so both modes share the same constants.
+// codebase, not two, so both modes share the same constants. The 5GHz side
+// can be overridden via mesh_5ghz_channel (see desiredStatic5GHzFreq).
 func ensureStaticChannels() {
 	iface24, iface5 := meshIfaces()
 	if iface24 != "" {
 		ensureStaticIfaceChannel(iface24, wpaConfPath(iface24), lobbyFreq24, "2.4 GHz")
 	}
 	if iface5 != "" {
-		ensureStaticIfaceChannel(iface5, wpaConfPath(iface5), lobbyFreq5, "5 GHz")
+		ensureStaticIfaceChannel(iface5, wpaConfPath(iface5), desiredStatic5GHzFreq(), "5 GHz")
 	}
+}
+
+// mesh5GHzChannelKey lets static mode (acs=n) pin the 5GHz mesh to one of
+// the same candidate channels ACS elects between, instead of always parking
+// on the hardcoded lobby channel (36/5180MHz). Ignored entirely under ACS
+// mode, which elects its own channel via channel_election.go.
+const mesh5GHzChannelKey = "mesh_5ghz_channel"
+
+// desiredStatic5GHzFreq reads mesh_5ghz_channel from mesh.conf as a channel
+// number (e.g. "149") and returns its MHz frequency, but only if it's one
+// of band5Channels' known candidates — matching the same physical channels
+// ACS already elects between and are known to work on this hardware/driver.
+// Absent, unparseable, or any other value resolves to lobbyFreq5, preserving
+// today's default behavior for every node that never sets this key.
+func desiredStatic5GHzFreq() string {
+	chStr := loadConf(mesh5GHzChannelKey)
+	if chStr == "" {
+		return lobbyFreq5
+	}
+	num, err := strconv.Atoi(chStr)
+	if err != nil {
+		return lobbyFreq5
+	}
+	freq := 5000 + num*5
+	for _, cand := range band5Channels {
+		if cand == freq {
+			return strconv.Itoa(freq)
+		}
+	}
+	return lobbyFreq5
 }
 
 func wpaConfPath(iface string) string {

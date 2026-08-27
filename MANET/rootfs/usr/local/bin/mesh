@@ -35,6 +35,8 @@ Config keys:
   halow_bw              HaLow bandwidth (1MHz, 2MHz, 4MHz, 8MHz)
   halow_channel         HaLow channel for the current domain/bandwidth (blank = Auto)
   mesh_5ghz_bw          5GHz mesh channel width: 20 (deterministic, default) or 80 (higher throughput, fleet-wide only)
+  acs                   5GHz/2.4GHz channel mode: n (default, static/pinned) or y (automatic election)
+  mesh_5ghz_channel     Pinned 5GHz channel used when acs=n (blank = default 36). Ignored when acs=y.
   multicast_mode        Multicast delivery: flood (default) or optimized
   eud                   EUD mode: wired, wireless, both, auto, none
   lan_ap_ssid           WiFi AP SSID

@@ -15,6 +15,13 @@ const MESH_FIELDS = [
   { key: 'ipv4_network', label: 'IPv4 Network', dangerous: true },
   { key: 'halow_bw', label: 'HaLow Bandwidth', type: 'select', options: ['1MHz','2MHz','4MHz','8MHz'] },
   { key: 'halow_channel', label: 'HaLow Channel', hint: 'Blank = Auto. Validated per-node against its own regulatory domain on apply, since a fleet push can span nodes on different domains.' },
+  { key: 'acs', label: '5GHz Mesh Channel Mode', dangerous: true, type: 'select', options: [
+    {v:'n',l:'Static (pinned channel)'},{v:'y',l:'Automatic (ACS)'}
+  ], hint: 'Must match across the fleet — nodes on different modes won\'t elect/scan together.' },
+  { key: 'mesh_5ghz_bw', label: '5GHz Mesh Width', dangerous: true, type: 'select', options: [
+    {v:'20',l:'20 MHz (default)'},{v:'80',l:'80 MHz'}
+  ], hint: 'Never mix widths across nodes. 80MHz + Automatic mode is the combination known to sometimes mismatch primary channel between peers.' },
+  { key: 'mesh_5ghz_channel', label: '5GHz Pinned Channel', dangerous: true, hint: 'Only used when 5GHz Mesh Channel Mode is Static. Blank = default 36. Must match across the fleet.' },
   { key: 'multicast_mode', label: 'Multicast Mode', type: 'select', options: [
     {v:'flood',l:'Flood (recommended ≤10 nodes)'},{v:'optimized',l:'Optimized IGMP (10+ nodes)'}
   ] },
