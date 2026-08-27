@@ -185,6 +185,24 @@ their fast 5GHz link after a baseline redeploy + reboot cycle.
 
 ## Open issue: 5GHz primary channel doesn't reliably match between nodes
 
+**2026-08-27 update — a real fix was found, see
+[`wpa-supplicant-mesh-noscan.md`](wpa-supplicant-mesh-noscan.md).** The
+"Fix design" and gate-run sections below (2026-08-26) concluded no
+config-level fix exists in mainline wpa_supplicant and this section's
+"Decision" chose 20MHz-only mesh instead. That conclusion has been
+superseded: OpenWrt maintains a small, already-written patch pair
+(`300-noscan.patch` + `301-mesh-noscan.patch`) that adds a real `noscan`
+`wpa_ssid` field and wires it into the exact mesh coex-scan function
+responsible for this bug (`ibss_mesh_setup_freq()`/
+`ibss_mesh_select_40mhz()` in `wpa_supplicant/wpa_supplicant.c` — not
+`hostapd`'s `ieee80211n_check_40mhz()` as originally traced below, a
+related but separate function this fork's own mesh path never reaches).
+Read the linked doc before repeating any of the "no fix exists" research
+below — it's still accurate as a historical record of why 20MHz-only was
+chosen at the time, but is no longer the last word on whether a fix is
+possible. Nothing from that doc has shipped yet; `mesh_5ghz_bw` is still
+`20`/`80`-only as of this update.
+
 **Symptom:** EUD3 and EUD4 both correctly elect the same channel (both
 logged `elected channel 5220`/channel 44, matching votes), but EUD3's
 *actual live radio* lands on channel 48 instead — same 80MHz spectrum block
@@ -968,6 +986,10 @@ it as a live-patched state.
 
 ## Related docs and memory
 
+- [`wpa-supplicant-mesh-noscan.md`](wpa-supplicant-mesh-noscan.md) — the
+  2026-08-27 finding that a real fix for the "Open issue" above exists,
+  plus its build plan. Read this before redoing the "no fix exists"
+  research in that section.
 - `node-architecture.md` — general node architecture, doesn't currently
   cover ACS (this doc fills that gap).
 - `VERSIONING.md` — unrelated to ACS, but referenced by the auto-update doc
