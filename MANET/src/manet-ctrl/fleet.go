@@ -168,14 +168,20 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	if updates["gps"] != "" || updates["gps_source"] != "" {
 		if conf["gps"] == "n" {
 			runCmd(5*time.Second, "systemctl", "disable", "--now", "gps-reader")
+			// gpsd.socket must be disabled too — see api.go's matching
+			// block for why (socket activation silently respawns gpsd
+			// otherwise).
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd.socket")
 			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd")
 		} else if conf["gps_source"] == "static" {
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd.socket")
 			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd")
 			runCmd(5*time.Second, "systemctl", "enable", "--now", "gps-reader")
 		} else {
 			if _, err := exec.LookPath("gpsd"); err != nil {
 				runCmd(60*time.Second, "apt-get", "install", "-y", "gpsd", "gpsd-clients")
 			}
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gpsd.socket")
 			runCmd(5*time.Second, "systemctl", "enable", "--now", "gpsd")
 			runCmd(5*time.Second, "systemctl", "enable", "--now", "gps-reader")
 		}
