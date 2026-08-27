@@ -1932,7 +1932,9 @@ func applyWPAConfig(conf map[string]string) {
 	}
 
 	ssidRE := regexp.MustCompile(`ssid="[^"]*"`)
-	pskRE := regexp.MustCompile(`psk="[^"]*"`)
+	// 802.11s mesh mode only supports key_mgmt NONE or SAE — there is no
+	// PSK path for a mesh interface, so every wlan*.conf mesh network
+	// (2.4GHz, 5GHz, and HaLow's -s1g) uses sae_password, never psk.
 	saeRE := regexp.MustCompile(`sae_password="[^"]*"`)
 
 	restartS1G := false
@@ -1950,11 +1952,9 @@ func applyWPAConfig(conf map[string]string) {
 		text := string(data)
 		text = ssidRE.ReplaceAllString(text, fmt.Sprintf(`ssid="%s"`, ssid))
 		if key != "" {
+			text = saeRE.ReplaceAllString(text, fmt.Sprintf(`sae_password="%s"`, key))
 			if strings.Contains(name, "s1g") {
-				text = saeRE.ReplaceAllString(text, fmt.Sprintf(`sae_password="%s"`, key))
 				restartS1G = true
-			} else {
-				text = pskRE.ReplaceAllString(text, fmt.Sprintf(`psk="%s"`, key))
 			}
 		}
 		os.WriteFile(path, []byte(text), 0644)
