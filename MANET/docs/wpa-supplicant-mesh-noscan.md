@@ -11,9 +11,23 @@ and before assuming "no fix exists" is still true.
 **2026-08-27 update — hardware-validated on EUD3/EUD4, fix confirmed (§9).**
 20/20 independent restarts (both VHT80 and HT40-only, 5 restarts × 2 nodes
 each) landed on the identical channel/width/center1 on both sides, zero
-deviation. Not yet deployed anywhere permanent — `mesh_5ghz_bw` is back to
-`20` on the fleet, the live test was fully reverted. §8 is the build log,
-§9 is the hardware test. Deployment shape (§6) is still an open decision.
+deviation. §9's test itself was fully reverted afterward — §8 is the build
+log, §9 is that (reverted) hardware test.
+
+**2026-08-27/28, later — actually deployed and left running, superseding
+the "not yet deployed" status above.** Per the user's explicit request
+once §9 and the ACS self-heal (`ACS.md`) both tested clean, the patched
+`wpa_supplicant` (`noscan=1`+`max_oper_chwidth=1`, `mesh_5ghz_bw=80`) was
+deployed to EUD3+EUD4 a second time and **left running** as an extended
+soak test — this is a different, later action than §9, not the same test
+re-described. Confirmed still live and healthy as of the 2026-08-28
+cold-boot fix work in `ACS.md` (which rebooted both nodes with this
+deployment in place and re-confirmed it survived). Rollback binaries and
+a dated note file (`/root/DEPLOYED-2026-08-27-noscan-selfheal.txt`) are
+on both nodes. **This deployment is currently a live-SSH-only artifact,
+not yet packaged** — see the "Deployment shape" work in progress (§6 and
+the follow-on packaging-pipeline design in `ACS.md`) for landing it
+properly so a fleet software update doesn't silently revert it.
 
 ## 1. Why this exists: AW7916/AW7915, and does 40MHz dodge the bug?
 
