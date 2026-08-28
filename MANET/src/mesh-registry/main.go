@@ -27,6 +27,7 @@ const (
 	nodesFile    = "/var/lib/manet/known_nodes.json"
 	confFile     = "/etc/mesh.conf"
 	appletsDir   = "/usr/local/share/manet/applets"
+	meshIfFile   = "/var/lib/mesh_if"
 	interval     = 15 * time.Second
 )
 
@@ -118,6 +119,7 @@ func collectLocal() NodeInfo {
 
 	mcs := collectMCS()
 	tourguideState := loadKV("/var/run/tourguide_state")
+	iface24, iface5 := meshIfaces()
 
 	return NodeInfo{
 		Hostname:               hostname,
@@ -133,8 +135,8 @@ func collectLocal() NodeInfo {
 		GPSLat:                 gpsLat,
 		GPSLon:                 gpsLon,
 		GPSAlt:                 gpsAlt,
-		Ch2G:                   getChannel("2.4"),
-		Ch5G:                   getChannel("5"),
+		Ch2G:                   getChannel(iface24),
+		Ch5G:                   getChannel(iface5),
 		IsLimp:                 boolStr(fileExists("/var/run/mesh_limp_mode")),
 		Timestamp:              fmt.Sprintf("%d", time.Now().Unix()),
 		Applets:                scanApplets(),
@@ -632,41 +634,81 @@ func getGPS() (string, string, string) {
 	return "", "", ""
 }
 
-func getChannel(band string) string {
+// ifaceExists reports whether a network interface with the given name
+// currently exists.
+func ifaceExists(name string) bool {
+	_, err := net.InterfaceByName(name)
+	return err == nil
+}
+
+// meshIfaces reads /var/lib/mesh_if — the fleet-wide source of truth for
+// which physical interfaces are actually mesh radios, written by
+// radio-setup.sh (line 0 = 2.4GHz mesh interface, line 1 = 5GHz mesh
+// interface, either can be empty). This deliberately excludes any
+// onboard/AP-only interface (radio-setup.sh's is_nonmesh_wifi/no_mesh_if
+// handling), which is why getChannel() must be scoped through this rather
+// than scanning `iw dev` output blind.
+//
+// Duplicated from node-manager's meshIfaces() (main.go) since mesh-registry
+// and node-manager are separate Go modules with no shared package — keep
+// this in sync with that implementation's file format/parsing.
+func meshIfaces() (iface24, iface5 string) {
+	data, err := os.ReadFile(meshIfFile)
+	if err != nil {
+		if ifaceExists("wlan0") {
+			return "wlan0", ""
+		}
+		return "", ""
+	}
+	lines := strings.Fields(strings.TrimSpace(string(data)))
+	if len(lines) > 0 && ifaceExists(lines[0]) {
+		iface24 = lines[0]
+	}
+	if len(lines) > 1 && ifaceExists(lines[1]) {
+		iface5 = lines[1]
+	}
+	return
+}
+
+// getChannel returns the current channel number of the named interface, as
+// reported by `iw dev`, scoped strictly to that interface's own block in
+// the output. iface == "" (no mesh radio on that band, e.g. a HaLow-only
+// node with no 5GHz mesh interface at all) returns "" immediately without
+// running `iw dev` — this is what prevents an unrelated interface (e.g. the
+// onboard AP running hostapd on wlan3) from ever leaking its channel into
+// this node's reported value.
+func getChannel(iface string) string {
+	if iface == "" {
+		return ""
+	}
 	out, err := exec.Command("iw", "dev").Output()
 	if err != nil {
 		return ""
 	}
 	lines := strings.Split(string(out), "\n")
+	blockStart := -1
 	for i, line := range lines {
-		if strings.Contains(line, "channel") {
-			ch := strings.TrimSpace(line)
-			freq := 0
-			if parts := strings.Fields(ch); len(parts) >= 2 {
-				if f, err := strconv.Atoi(parts[1]); err == nil {
-					freq = f
-				}
-				// Try extracting from parenthetical
-				for _, p := range parts {
-					p = strings.Trim(p, "()")
-					if f, err := strconv.Atoi(p); err == nil && f > 100 {
-						freq = f
-					}
-				}
-			}
-			if band == "2.4" && freq >= 2400 && freq <= 2500 {
-				return extractChannelNum(lines, i)
-			}
-			if band == "5" && freq >= 5000 && freq <= 6000 {
-				return extractChannelNum(lines, i)
-			}
+		if strings.TrimSpace(line) == "Interface "+iface {
+			blockStart = i
+			continue
+		}
+		if blockStart == -1 {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Interface ") {
+			// Reached the next interface's block without finding a
+			// channel line for ours.
+			break
+		}
+		if strings.HasPrefix(trimmed, "channel") {
+			return extractChannelNum(trimmed)
 		}
 	}
 	return ""
 }
 
-func extractChannelNum(lines []string, idx int) string {
-	line := strings.TrimSpace(lines[idx])
+func extractChannelNum(line string) string {
 	fields := strings.Fields(line)
 	if len(fields) >= 2 {
 		return fields[1]
