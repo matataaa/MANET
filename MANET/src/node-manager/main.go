@@ -35,6 +35,13 @@ func main() {
 	log.SetPrefix("[node-manager] ")
 	log.Printf("starting (version %s)", Version)
 
+	// Must run before any width/static-channel reconcile below, at every
+	// startup — this is what closes the OTA gap noscanCapable's own comment
+	// describes: an OTA lands the patched binary but never runs
+	// radio-setup.sh (first-provision only), so nothing else regenerates
+	// the systemd drop-in wpa_supplicant@ actually needs to run it.
+	ensureNoscanDropIn()
+
 	acsEnabled := loadConf("acs") == "y"
 	if acsEnabled {
 		log.Println("ACS (automatic channel selection) enabled")
@@ -53,6 +60,7 @@ func main() {
 
 	loop := func() {
 		radioStateSync()
+		ensureNoscanDropIn()
 		if _, iface5 := meshIfaces(); iface5 != "" {
 			reconcile5GHzWidth(iface5)
 		}
@@ -359,20 +367,89 @@ const mesh5GHzWidthKey = "mesh_5ghz_bw"
 // naming, not by import (separate Go modules/binaries, no shared package).
 const patchedWpaSupplicantPath = "/usr/sbin/wpa_supplicant_mesh"
 
+// noscanDropInPath is the systemd drop-in that actually points
+// wpa_supplicant@<iface> at patchedWpaSupplicantPath. ensureNoscanDropIn
+// (below) is what creates/removes it — this must stay in sync with the
+// binary's presence on every boot, not just at first provision.
+const noscanDropInPath = "/etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf"
+
+const noscanDropInContent = "[Service]\nExecStart=\nExecStart=" + patchedWpaSupplicantPath +
+	" -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I\n"
+
 // noscanCapable reports whether this node has the patched wpa_supplicant
-// installed and executable. This is the ONLY signal permitted to gate
-// writing noscan=1 (or any other patch-added key) into a mesh
-// wpa_supplicant conf file — no binary-content scanning, no version
-// parsing. The stock system wpa_supplicant fails to parse an entire
-// network={} block on an unrecognized key and exits (status=255),
+// BOTH installed and actually wired into the unit that runs it. This is the
+// ONLY signal permitted to gate writing noscan=1 (or any other patch-added
+// key) into a mesh wpa_supplicant conf file — no binary-content scanning,
+// no version parsing. The stock system wpa_supplicant fails to parse an
+// entire network={} block on an unrecognized key and exits (status=255),
 // dropping that radio out of the mesh — see
 // docs/wpa-supplicant-mesh-noscan.md for the incident this guards against.
+//
+// Checking only the binary's presence was a real, reviewed-and-caught bug:
+// radio-setup.sh (which originally generated noscanDropInPath) only runs at
+// first provision, never on an OTA software update — an existing fleet node
+// taking an update gets the binary but keeps running wpa_supplicant@ under
+// the OLD unit (still pointed at stock) until something regenerates the
+// drop-in. ensureNoscanDropIn below is that "something" (called once at
+// startup and once per loop tick, so it self-heals within one 15s tick of
+// either the binary or the drop-in changing state), but this check also
+// verifies the drop-in directly rather than trusting ensureNoscanDropIn ran
+// first — no ordering assumption, no window where a true binary-presence
+// read could gate a write before the unit is actually wired to use it.
 func noscanCapable() bool {
 	info, err := os.Stat(patchedWpaSupplicantPath)
+	if err != nil || info.IsDir() || info.Mode()&0111 == 0 {
+		return false
+	}
+	dropIn, err := os.ReadFile(noscanDropInPath)
 	if err != nil {
 		return false
 	}
-	return !info.IsDir() && info.Mode()&0111 != 0
+	return string(dropIn) == noscanDropInContent
+}
+
+// ensureNoscanDropIn keeps noscanDropInPath in sync with
+// patchedWpaSupplicantPath's presence — the fix for the OTA gap described
+// on noscanCapable above. Idempotent and cheap (a stat plus, on the common
+// no-change path, one more stat/read); safe to call every loop tick, not
+// just at startup, so it also self-heals if the binary is later removed.
+// Only ever writes/removes this one drop-in file — never touches
+// 10-mesh-prep.conf (radio-setup.sh's own drop-in in the same directory)
+// or any wpa_supplicant conf.
+func ensureNoscanDropIn() {
+	capableNow := false
+	if info, err := os.Stat(patchedWpaSupplicantPath); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+		capableNow = true
+	}
+
+	existing, readErr := os.ReadFile(noscanDropInPath)
+	upToDate := readErr == nil && string(existing) == noscanDropInContent
+
+	if capableNow == upToDate {
+		return
+	}
+
+	if capableNow {
+		if err := os.MkdirAll(filepath.Dir(noscanDropInPath), 0755); err != nil {
+			log.Printf("[acs] mkdir %s: %v", filepath.Dir(noscanDropInPath), err)
+			return
+		}
+		if err := os.WriteFile(noscanDropInPath, []byte(noscanDropInContent), 0644); err != nil {
+			log.Printf("[acs] write %s: %v", noscanDropInPath, err)
+			return
+		}
+		log.Printf("[acs] wpa_supplicant_mesh present, wired %s", noscanDropInPath)
+	} else {
+		if err := os.Remove(noscanDropInPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[acs] remove %s: %v", noscanDropInPath, err)
+			return
+		}
+		log.Printf("[acs] wpa_supplicant_mesh absent, removed %s", noscanDropInPath)
+	}
+
+	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+		log.Printf("[acs] daemon-reload after noscan drop-in change: %v", err)
+	}
 }
 
 // desiredMeshWidth reads mesh_5ghz_bw from mesh.conf. Absent, empty, or

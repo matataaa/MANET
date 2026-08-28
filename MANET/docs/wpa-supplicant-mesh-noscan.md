@@ -254,11 +254,26 @@ generic upstream tag that might carry different build flags.
 landed: `/usr/sbin/wpa_supplicant_mesh` (built from
 `MANET/src/wpa-supplicant-mesh/`, packaged via
 `packaging/build-rpi5-tarball.sh` and `packaging/build-tools-tarball.sh`),
-wired in fleet-wide via the static drop-in
-`MANET/rootfs/etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf`
-— every `wpa_supplicant@<iface>` instance points at the new binary, but
-every patch-added config key stays strictly opt-in per-conf-file, so this
-is safe to roll out fleet-wide even to nodes that never set `noscan=1`.
+wired in fleet-wide via a systemd drop-in
+(`/etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf`)
+**generated at runtime by `node-manager` (`ensureNoscanDropIn`,
+`node-manager/main.go`) — not shipped as a static rootfs file.** A static
+file was tried first and reverted after review: `radio-setup.sh` only
+runs at first provision, never on an OTA update, so a static file whose
+sole enforcement point was "does the binary exist" left an existing
+fleet node that took an OTA with the binary present but the *old* unit
+still pointed at stock — `node-manager`'s own capability check
+(`noscanCapable`) only looked at the binary too, so it would have
+reported the node as noscan-capable and started writing `noscan=1` into
+a conf that stock wpa_supplicant can't parse. `ensureNoscanDropIn` runs
+at `node-manager` startup and every 15s tick — the one thing guaranteed
+to run after every boot including an OTA reboot — and `noscanCapable`
+itself now checks the drop-in's actual content, not just the binary's
+presence, so there's no ordering assumption between the two. Every
+`wpa_supplicant@<iface>` instance points at the new binary once it's
+wired, but every patch-added config key stays strictly opt-in per-conf-
+file, so this is safe to roll out fleet-wide even to nodes that never
+set `noscan=1`.
 The rest of this section is kept as historical context for *why* that
 choice was made; it's no longer an open question.
 

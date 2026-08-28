@@ -47,9 +47,13 @@ Go services use).
 
 ## On-device install path
 
-`/usr/sbin/wpa_supplicant_mesh` — wired up via a static systemd drop-in
-(`MANET/rootfs/etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf`),
-not a per-interface generated unit. Every key the patch adds is opt-in
+`/usr/sbin/wpa_supplicant_mesh` — wired up via a systemd drop-in
+(`/etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf`)
+generated and kept in sync at runtime by `node-manager`
+(`ensureNoscanDropIn`, `src/node-manager/main.go`), not shipped as a
+static rootfs file — see `docs/wpa-supplicant-mesh-noscan.md` §6 for why
+a static file was tried and reverted (it can't survive an OTA update on
+an already-provisioned node). Every key the patch adds is opt-in
 per-`network={}`-block (`noscan=1`, etc.), so pointing every
 `wpa_supplicant@<iface>` instance fleet-wide at this binary is safe by
 construction — a conf file that never sets `noscan=1` gets byte-identical
