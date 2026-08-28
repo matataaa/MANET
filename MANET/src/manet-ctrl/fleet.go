@@ -161,6 +161,31 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	if bwChanged || chChanged {
 		applyFleetHalowBW(conf)
 	}
+	// Mirrors apiAdminSave's gps block (api.go) — a stop/restart-only
+	// toggle here looks like it worked but silently reverts on the node's
+	// next reboot, since radio-setup.sh only sets gpsd's boot-enabled
+	// state once at first provisioning.
+	if updates["gps"] != "" || updates["gps_source"] != "" {
+		if conf["gps"] == "n" {
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gps-reader")
+			// gpsd.socket must be disabled too — see api.go's matching
+			// block for why (socket activation silently respawns gpsd
+			// otherwise).
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd.socket")
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd")
+		} else if conf["gps_source"] == "static" {
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd.socket")
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd")
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gps-reader")
+		} else {
+			if _, err := exec.LookPath("gpsd"); err != nil {
+				runCmd(60*time.Second, "apt-get", "install", "-y", "gpsd", "gpsd-clients")
+			}
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gpsd.socket")
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gpsd")
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gps-reader")
+		}
+	}
 }
 
 // applyFleetHalowBW validates halow_bw/halow_channel against this node's own

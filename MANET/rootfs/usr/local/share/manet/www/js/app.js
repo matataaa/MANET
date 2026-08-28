@@ -215,6 +215,7 @@ async function fetchData() {
 function onDataUpdated() {
   if (activeTab === 'dashboard') dashboardUpdate();
   else if (activeTab === 'nodes') nodesUpdate();
+  else if (activeTab === 'mesh') meshFetch();
   pollAppletBadges();
 }
 

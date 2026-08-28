@@ -1218,14 +1218,23 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	if updates["gps"] != "" || updates["gps_source"] != "" {
 		if conf["gps"] == "n" {
 			runCmd(5*time.Second, "systemctl", "disable", "--now", "gps-reader")
+			// gpsd.socket must be disabled too, not just gpsd.service — if
+			// the socket unit stays enabled, systemd's socket activation
+			// silently respawns gpsd the next time anything connects to
+			// its port, undoing the disable within seconds (confirmed live:
+			// the service stops, then "Starting gpsd.service..." appears in
+			// the journal ~15-25s later with no explicit request).
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd.socket")
 			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd")
 		} else if conf["gps_source"] == "static" {
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd.socket")
 			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd")
 			runCmd(5*time.Second, "systemctl", "enable", "--now", "gps-reader")
 		} else {
 			if _, err := exec.LookPath("gpsd"); err != nil {
 				runCmd(60*time.Second, "apt-get", "install", "-y", "gpsd", "gpsd-clients")
 			}
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gpsd.socket")
 			runCmd(5*time.Second, "systemctl", "enable", "--now", "gpsd")
 			runCmd(5*time.Second, "systemctl", "enable", "--now", "gps-reader")
 		}
@@ -1936,7 +1945,9 @@ func applyWPAConfig(conf map[string]string) {
 	}
 
 	ssidRE := regexp.MustCompile(`ssid="[^"]*"`)
-	pskRE := regexp.MustCompile(`psk="[^"]*"`)
+	// 802.11s mesh mode only supports key_mgmt NONE or SAE — there is no
+	// PSK path for a mesh interface, so every wlan*.conf mesh network
+	// (2.4GHz, 5GHz, and HaLow's -s1g) uses sae_password, never psk.
 	saeRE := regexp.MustCompile(`sae_password="[^"]*"`)
 
 	restartS1G := false
@@ -1954,11 +1965,9 @@ func applyWPAConfig(conf map[string]string) {
 		text := string(data)
 		text = ssidRE.ReplaceAllString(text, fmt.Sprintf(`ssid="%s"`, ssid))
 		if key != "" {
+			text = saeRE.ReplaceAllString(text, fmt.Sprintf(`sae_password="%s"`, key))
 			if strings.Contains(name, "s1g") {
-				text = saeRE.ReplaceAllString(text, fmt.Sprintf(`sae_password="%s"`, key))
 				restartS1G = true
-			} else {
-				text = pskRE.ReplaceAllString(text, fmt.Sprintf(`psk="%s"`, key))
 			}
 		}
 		os.WriteFile(path, []byte(text), 0644)

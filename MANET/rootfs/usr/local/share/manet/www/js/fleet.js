@@ -66,7 +66,14 @@ const PROFILE_SECTIONS = [
       {v:'20',l:'20 MHz'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
     ] },
   ]},
+  { id: 'gps', cat: 'GPS', fields: [
+    { key: 'gps', label: 'GPS Enabled', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
+    { key: 'gps_source', label: 'GPS Source', type: 'select', options: [
+      {v:'receiver',l:'Receiver (hardware GPS)'},{v:'static',l:'Static (fixed location)'}
+    ], hint: 'Static coordinates are set per-node in that node\'s own Config, not here' },
+  ]},
   { id: 'voice', cat: 'Voice', fields: [
+    { key: 'voice_enabled', label: 'Voice Enabled', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { key: 'voice_ptt_mode', label: 'PTT Mode', type: 'select', options: [
       {v:'openvlm',l:'OpenVLM HID'},{v:'gpio',l:'GPIO Button'},{v:'always',l:'Always On'},{v:'vox',l:'VOX (auto)'}
     ] },
