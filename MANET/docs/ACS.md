@@ -1609,6 +1609,138 @@ hardware-verified — added to "What needs testing" below.
       EU-domain node with a stale/cross-domain persisted value, and the
       exactly-2-node-mesh vote-swap edge case noted in this doc's own
       "Follow-up correction" above (doesn't apply to this fleet's size).
+- [~] **EU-domain phy-capability filtering** — tested 2026-08-28 on
+      EUD4 (`iw reg set DE`/`GB`/`FR`/`NL`/`SE`, live, no reboot, no
+      `mesh.conf` change — EUD3 left untouched as reference), and it
+      found a real gap in a claim this doc has repeated since
+      2026-08-26, not a code bug. **Marked partial, not passed** — see
+      the dedicated writeup below.
+
+## Finding, 2026-08-28: EU/ETSI does not disable UNII-3 at the per-frequency level this code reads — the safety claim needs correcting
+
+This doc has stated, since the original "New risk found during
+validation" paragraph (2026-08-26) through `activeBand5Channels`'s own
+code comments (`scan.go`) and the `manet-architect`-validated self-heal
+design, that 5745-5825 (UNII-3) is "illegal under ETSI" and would show
+up as `(disabled)` in `iw phy info` under a European regulatory domain
+— the entire premise `activeBand5Channels`/`freqAvailableOnPhy` were
+built on. **Tested directly on real hardware for the first time
+2026-08-28 (EUD4, `iw reg set DE`/`GB`/`FR`/`NL`/`SE`) and this premise
+does not hold.**
+
+**What actually happens**: under every ETSI country tested, all 8 of
+`band5Channels`'s candidates (including all five UNII-3 entries)
+remained listed as usable in `iw phy info`, just at reduced transmit
+power (13dBm most ETSI countries, 23dBm GB, vs 30dBm under US) — never
+flagged `(disabled)`, `(no IR)`, or `(radar detection)`. The `[acs]
+5GHz candidates this cycle: [...]` log line, watched live during the
+test, stayed the full 8-candidate list the entire time the node was
+set to an ETSI domain. Real-world ETSI restricts UNII-3 to
+**indoor-only use** (a `NO-OUTDOOR` rule) — this is a country-level
+rule visible only in `iw reg get`'s per-country rule table, structurally
+invisible to `iw phy info`'s per-frequency flag listing, which is the
+only thing `phyUsableFreqs` (`scan.go`) parses. `noscan`/`disable_vht`
+and everything else built and tested this week works correctly and
+safely regardless of this finding — nothing malfunctioned, no restart
+fired toward anything, the mesh was never disrupted. The gap is narrower
+and more specific: **the phy-capability filter cannot see or enforce
+the specific kind of EU restriction (indoor-only, not outright
+prohibition) that actually applies to UNII-3**, so on a real EU
+deployment this code would currently let outdoor mesh nodes elect and
+transmit on UNII-3 channels that are restricted to indoor use under
+real ETSI rules — a genuine compliance gap this project's own outdoor
+MANET use case would trigger, not a hypothetical.
+
+**Also confirmed, so the guard's underlying mechanism isn't a total
+unknown**: the parsing itself is correct where a real per-frequency
+`(disabled)` flag does exist — 5845/5865/5885 (outside `band5Channels`,
+not real ACS candidates, but present in the phy's frequency list) *did*
+correctly show `(disabled)` under DE/GB and would correctly be excluded
+by this same code. The gap is specifically "ETSI's actual UNII-3
+restriction shape doesn't map to any per-frequency flag `iw phy info`
+exposes," not "the parser is broken."
+
+**Not independently testable as a result**: the self-heal's
+`freqAvailableOnPhy` legality guard (`acs_selfheal.go`) and the
+cold-boot bias fix's cross-domain-ignore property both depend on the
+same phy-capability primitive to ever see an illegal target in the
+first place. Since no ETSI country in this hardware's actual regulatory
+database disables any of `band5Channels`'s 8 candidates or either lobby
+frequency, there is currently no real, black-box-reproducible path to
+get `electBand` to elect an "illegal" target on this hardware at all —
+with or without `iw reg set`. Both of those guards' code was already
+read and confirmed structurally correct during earlier design/code
+review (they correctly consult whatever `freqAvailableOnPhy` reports),
+but the specific end-to-end "EU domain → illegal target elected → guard
+blocks it" scenario remains unverified, and per this finding, may not
+be reproducible until the underlying filter is extended.
+
+**Decision needed, not made here**: either (a) treat this as an
+accepted, documented limitation — HaLow/2.4GHz already exist as
+lower-bandwidth EU-legal fallbacks, and if this fleet's real EU
+deployments are expected to stay indoors or simply not use 5GHz
+outdoors in the EU by policy rather than by code enforcement, this may
+be an acceptable gap to leave open with clear documentation (this
+section) rather than more code — or (b) extend `phyUsableFreqs`/
+`activeBand5Channels` to also parse `iw reg get`'s per-country rule
+table for `NO-OUTDOOR`(and any other rule-level, not frequency-level,
+restrictions) and cross-reference it against the candidate list — real
+additional work, not yet scoped. This is a compliance/policy call as
+much as an engineering one — worth a decision from the user before
+either path is taken, not something to resolve unilaterally given the
+real-world regulatory stakes.
+
+### Correction, same day — the root cause above was narrower than first framed
+
+Pulled the actual `wireless-regdb` source (`db.txt`, the literal file
+`iw`/cfg80211's regulatory database compiles from) for the countries
+tested, rather than continuing to reason from the live `iw phy info`
+output alone:
+
+| Country | Rule for 5725-5875 MHz |
+|---|---|
+| DE, FR, NL, SE | `25 mW`, **no flags at all** — no `NO-OUTDOOR`, no restriction beyond the power cap |
+| GB | `200 mW`, **`NO-OUTDOOR`** |
+| US | `30 dBm (1000mW)`, `AUTO-BW`, no outdoor restriction |
+
+**This changes the finding's scope, and the earlier framing above
+overstated it.** Mainland EU member states (DE/FR/NL/SE — the ones
+actually tested, and representative of ETSI-harmonized EU regulation
+generally) do **not** restrict this band to indoor-only at all — they
+simply cap transmit power far lower than the US (25mW/~14dBm vs
+1000mW/30dBm), with no indoor/outdoor distinction whatsoever. The
+`NO-OUTDOOR` restriction is specifically a **UK/Ofcom** rule — and the
+UK is not in the EU, not bound by ETSI/CEPT harmonization, and sets its
+own national rules independently.
+
+**And the power cap itself is very likely already correctly enforced,
+with no code change needed**: Linux's cfg80211 regulatory framework
+computes the actual maximum transmit power for the current
+channel+country and enforces it in the driver/hardware directly — this
+is the whole purpose of the regulatory-domain mechanism, not an
+informational-only field. `radio-setup.sh` already sets the correct
+country code via `regulatory_domain` at boot. So as long as that's
+configured correctly, the radio physically cannot exceed 25mW on this
+band while set to a mainland-EU country, regardless of what
+`activeBand5Channels`/`electBand` elect — the kernel itself is the
+enforcement layer here, independent of and underneath anything in
+`node-manager`.
+
+**Revised bottom line**: there is likely no real compliance gap for
+mainland EU deployments from this finding at all — the original
+"outdoor MANET nodes could violate ETSI" framing above was based on an
+assumption (broad EU indoor-only restriction) that this authoritative
+source doesn't support. The one remaining edge worth naming explicitly:
+a **UK-specific** deployment, where `NO-OUTDOOR` is real and does apply
+— worth confirming directly whether `iw phy info`'s human-readable
+output actually surfaces a `NO-OUTDOOR`-equivalent flag string the way
+it does `(disabled)`/`(no IR)`/`(radar detection)` (not confirmed either
+way — today's GB test noted the higher power ceiling but didn't
+specifically check for or rule out an additional flag string on that
+band's line). If this project has no near-term UK deployment plans,
+this is now a much smaller, better-understood, arguably-not-worth-
+building item than the original finding suggested — worth confirming
+that's an acceptable read before spending more effort here.
 
 ## Implementation — 2026-08-26, fleet-wide toggle (`mesh_5ghz_bw`)
 
