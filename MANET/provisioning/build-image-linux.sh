@@ -296,6 +296,19 @@ ask_questions() {
     GPS_ENABLED=${GPS_ENABLED:-y}
     if [ "$GPS_ENABLED" = "y" ] || [ "$GPS_ENABLED" = "Y" ]; then GPS_ENABLED="y"; else GPS_ENABLED="n"; fi
 
+    # HALOW_BW/HALOW_CHANNEL: previously referenced by firstrun.sh.template
+    # (halow_bw=__HALOW_BW__ / halow_channel=__HALOW_CHANNEL__) with no
+    # prompt, save/load, or sed substitution anywhere in this script -- a
+    # fresh image wrote the literal placeholder text into /etc/mesh.conf
+    # instead of a real value. Default matches radio-setup.sh's own runtime
+    # fallback (halow_bw="${halow_bw:-4MHz}") for consistency between
+    # "value baked at image time" and "value radio-setup.sh would pick
+    # anyway if this were left unset" -- not an arbitrary new default.
+    read -p "HaLow bandwidth (1MHz/2MHz/4MHz/8MHz) [4MHz]: " HALOW_BW
+    HALOW_BW=${HALOW_BW:-4MHz}
+    read -p "HaLow channel [blank for Auto]: " HALOW_CHANNEL
+    HALOW_CHANNEL=${HALOW_CHANNEL:-}
+
     echo "----------------------------------"
 }
 
@@ -323,6 +336,8 @@ RADIO_PW="$RADIO_PW"
 ADMIN_PW="$ADMIN_PW"
 AUTO_UPDATE="$AUTO_UPDATE"
 NODE_HOSTNAME="$NODE_HOSTNAME"
+HALOW_BW="$HALOW_BW"
+HALOW_CHANNEL="$HALOW_CHANNEL"
 EOF
         echo "Configuration saved to $CONFIG_DIR/$config_name.conf"
     fi
@@ -334,6 +349,8 @@ load_config() {
     source "$CONFIG_FILE"
     HALOW_REGULATORY_DOMAIN=${HALOW_REGULATORY_DOMAIN:-$(halow_regulatory_domain_for_wifi_domain "$REGULATORY_DOMAIN")}
     GPS_ENABLED=${GPS_ENABLED:-y}
+    HALOW_BW=${HALOW_BW:-4MHz}
+    HALOW_CHANNEL=${HALOW_CHANNEL:-}
     echo "--- Loaded Configuration ---"
     head -n 1 "$CONFIG_FILE" | sed 's/\#//'
     echo "  EUD Connection: $EUD_CONNECTION"
@@ -448,6 +465,8 @@ build_image() {
         -e "s|__ADMIN_PW__|${ADMIN_PW}|g" \
         -e "s|__AUTO_UPDATE__|${AUTO_UPDATE}|g" \
         -e "s|__NODE_HOSTNAME__|${NODE_HOSTNAME}|g" \
+        -e "s|__HALOW_BW__|${HALOW_BW}|g" \
+        -e "s|__HALOW_CHANNEL__|${HALOW_CHANNEL}|g" \
         "$TEMPLATE_FILE" | tr -d '\r')
 
     # Write a wrapper that runs firstrun.sh then removes itself from
