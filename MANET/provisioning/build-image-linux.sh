@@ -14,6 +14,30 @@
 #
 set -e
 
+# --config <name>: skip the interactive load/create menu below and load
+# .mesh-configs/<name>.conf directly (must already exist -- this flag never
+# creates one). --hardware <rpi5|rpi4|cm4>: skip the interactive
+# select_hardware menu. Both are needed together to drive a fully
+# non-interactive build (an external release/automation script) -- omit
+# both and nothing about the normal interactive flow changes.
+NONINTERACTIVE_CONFIG=""
+NONINTERACTIVE_HARDWARE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config)
+            NONINTERACTIVE_CONFIG="$2"
+            shift 2
+            ;;
+        --hardware)
+            NONINTERACTIVE_HARDWARE="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
 # Pick up the Go/Android SDK toolchain build-tarballs-linux.sh installs,
 # even if this shell was started before that profile snippet existed —
 # /etc/profile.d is only sourced when a shell *starts*, so a terminal left
@@ -539,7 +563,14 @@ WRAPPER_HEAD
 #  Main
 # ============================================================
 
-select_hardware
+if [ -n "$NONINTERACTIVE_HARDWARE" ]; then
+    case "$NONINTERACTIVE_HARDWARE" in
+        rpi5|rpi4|cm4) HARDWARE_MODEL="$NONINTERACTIVE_HARDWARE" ;;
+        *) echo "ERROR: --hardware $NONINTERACTIVE_HARDWARE: must be one of rpi5, rpi4, cm4" >&2; exit 1 ;;
+    esac
+else
+    select_hardware
+fi
 
 # --- Check dependencies ---
 if [ ! -f "$TEMPLATE_FILE" ]; then
@@ -570,6 +601,12 @@ fi
 mkdir -p "$CONFIG_DIR"
 
 # --- Load or create config ---
+if [ -n "$NONINTERACTIVE_CONFIG" ]; then
+    NONINTERACTIVE_CONFIG_FILE="$CONFIG_DIR/$NONINTERACTIVE_CONFIG.conf"
+    [ -f "$NONINTERACTIVE_CONFIG_FILE" ] || { echo "ERROR: --config $NONINTERACTIVE_CONFIG: no such saved config at $NONINTERACTIVE_CONFIG_FILE" >&2; exit 1; }
+    RADIO_NAME="$NONINTERACTIVE_CONFIG"
+    load_config "$NONINTERACTIVE_CONFIG_FILE"
+else
 config_files=("$CONFIG_DIR"/*.conf)
 num_configs=${#config_files[@]}
 [ ! -f "${config_files[0]}" ] && num_configs=0
@@ -609,6 +646,7 @@ else
     ask_questions
     save_config
     RADIO_NAME="${config_name:-node}"
+fi
 fi
 
 # --- Download base image and build ---
