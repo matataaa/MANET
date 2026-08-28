@@ -185,7 +185,7 @@ their fast 5GHz link after a baseline redeploy + reboot cycle.
 
 ## Open issue: 5GHz primary channel doesn't reliably match between nodes
 
-**2026-08-27 update — a real fix was found, see
+**2026-08-27 update — fix found, built, and hardware-confirmed, see
 [`wpa-supplicant-mesh-noscan.md`](wpa-supplicant-mesh-noscan.md).** The
 "Fix design" and gate-run sections below (2026-08-26) concluded no
 config-level fix exists in mainline wpa_supplicant and this section's
@@ -193,15 +193,20 @@ config-level fix exists in mainline wpa_supplicant and this section's
 superseded: OpenWrt maintains a small, already-written patch pair
 (`300-noscan.patch` + `301-mesh-noscan.patch`) that adds a real `noscan`
 `wpa_ssid` field and wires it into the exact mesh coex-scan function
-responsible for this bug (`ibss_mesh_setup_freq()`/
-`ibss_mesh_select_40mhz()` in `wpa_supplicant/wpa_supplicant.c` — not
-`hostapd`'s `ieee80211n_check_40mhz()` as originally traced below, a
-related but separate function this fork's own mesh path never reaches).
-Read the linked doc before repeating any of the "no fix exists" research
-below — it's still accurate as a historical record of why 20MHz-only was
-chosen at the time, but is no longer the last word on whether a fix is
-possible. Nothing from that doc has shipped yet; `mesh_5ghz_bw` is still
-`20`/`80`-only as of this update.
+responsible for this bug (`ibss_mesh_setup_freq()` in
+`wpa_supplicant/wpa_supplicant.c` — not `hostapd`'s
+`ieee80211n_check_40mhz()` as originally traced below, a related but
+separate function this fork's own mesh path never reaches). A patched
+arm64 binary was built and tested live on EUD3/EUD4 the same day: 20/20
+independent restarts (VHT80 and HT40-only, 5 each × 2 nodes) landed on
+the identical channel every time, zero deviation, for both widths — the
+symptom below is fixed. Read the linked doc before repeating any of the
+"no fix exists" research below — it's still accurate as a historical
+record of why 20MHz-only was chosen at the time, but is no longer the
+last word on whether a fix is possible. Nothing has shipped to the fleet
+yet — that test was fully reverted, and `mesh_5ghz_bw` stays `20`/`80`-only
+until a deployment decision (packaging, which width to default to) is
+made.
 
 **Symptom:** EUD3 and EUD4 both correctly elect the same channel (both
 logged `elected channel 5220`/channel 44, matching votes), but EUD3's
@@ -698,6 +703,456 @@ results instead of synthesizing a fake winning score, so
 candidate. Filtering `band5Channels` by phy capability up front is the
 fuller fix and can land separately.
 
+**2026-08-27 — both of the above implemented, then a near-miss caught in
+review before either could reach a real node.** `node-manager/scan.go`:
+`scanIface` no longer synthesizes the fake `-100` noise floor (a
+one-line `continue` when a candidate has no real survey entry — see
+`channel_election.go`'s existing `ok=false` skip path, no new mechanism
+needed); a new `activeBand5Channels(iface5)` derives the 5GHz candidate
+list live from `iw phy <phy> info` instead of the hardcoded
+US-domain-only `band5Channels`, excluding anything flagged `(disabled)`,
+`(no IR)`, or `(radar detection)` — the last one because a DFS channel
+pending Channel Availability Check isn't flagged disabled but is
+equally unusable right now, and this same function is reused verbatim
+by the planned self-heal (below) as its "is this frequency legal right
+now" guard, so it can't silently pass a CAC-pending channel.
+
+**First review pass found a defect that would have put the entire US
+fleet into permanent 5GHz lobby+limp mode, not just fixed the EU edge
+case this was written for.** `iw phy info` prints frequencies with a
+fractional part (`"5180.0 MHz"`, confirmed against this repo's own
+`radio-setup.sh`/`manet-wlan-reconcile.sh` greps for exactly that dotted
+form) — the first parsing pass used `strconv.Atoi`, which fails on every
+single line, silently returning an empty usable-frequency set on every
+real node regardless of regulatory domain. Combined with the first
+review's second finding — `electBand` conflated "zero candidates had
+any data" (an outage) with "every candidate was disqualified by noise"
+(a real RF problem), both falling to `lobbyFreq`+`limp: true` — this
+would have restarted `wpa_supplicant` and throttled the whole mesh to
+legacy bitrates on every single node, every tick, the moment this
+landed. Caught entirely by review against real code, before any
+hardware or deployment was involved.
+
+**Fixed and independently re-confirmed** (a second review pass stubbed
+`iw` with realistic fixtures — US-domain, EU-domain, malformed, and a
+DFS/radar-flagged line — and ran the actual parsing code against them,
+not just read it):
+- `phyUsableFreqs` (`scan.go`) now parses via `strconv.ParseFloat` +
+  `math.Round`, and treats a zero-length parse result as an error
+  (distinguishes "the parser broke" from "this phy legitimately has
+  nothing usable," loud instead of silent).
+- `electBand` (`channel_election.go`) now tracks `hadAnyData` across the
+  candidate loop, separate from `len(scored)`; zero data on either band
+  returns `electionResult{freq: currentFreq, limp: false}` (hold, no
+  restart, no mesh-wide disruption) instead of lobby+limp. Confirmed
+  this also covers the 2.4GHz case (a failed/cold-boot scan with no
+  survey data yet), not just 5GHz.
+- `activeBand5Channels` resolves the phy once per tick and does map
+  lookups (`phyUsableFreqsForIface`, new), rather than once per
+  candidate — confirmed via instrumented stub to have dropped from ~16
+  subprocess spawns per tick to 2, while `freqAvailableOnPhy`'s own
+  external signature/behavior (the function the planned self-heal will
+  actually call) is unchanged.
+- `(radar detection)` added to the same exclusion check as
+  `(disabled)`/`(no IR)` — confirmed same code path, not a parallel one.
+
+**Not fixed, deliberately deferred, logged so it isn't lost:**
+frequencies are rounded to the nearest whole MHz, which would
+round-collide for HaLow/S1G's half-MHz-spaced channels (e.g. 903.5 vs
+904) — unreachable today since only the 5GHz mesh interface calls this,
+but flagged directly in the code comment so nobody points this function
+at a HaLow interface without switching to integer-kHz keys first. Also
+noted but not built: a phy where every candidate is legitimately
+disabled (a real regulatory-domain-00 state) currently produces the same
+"parse failure" error as an actual parsing bug, which is behaviorally
+harmless today (both routes land on the same hold) but would need
+separating if a future consumer needs to tell "couldn't determine" apart
+from "confirmed illegal"; and `electBand`'s new hold branch logs once
+per 180s cycle with no escalation if it persists for many cycles in a
+row — better than the old permanent lobby+limp, but a silently-stuck
+hold is still only visible in the journal. Worth folding into the
+self-heal's own circuit-breaker state below rather than building a
+second, separate consecutive-failure tracker for the same underlying
+condition.
+
+**2026-08-27 — re-scoped against the current actual code, and repositioned
+now that `noscan` exists (see
+[`wpa-supplicant-mesh-noscan.md`](wpa-supplicant-mesh-noscan.md)).** This
+mechanism was originally the primary fix candidate for the 5GHz mismatch;
+it's no longer that — `noscan` fixes the root cause (a restart now
+reliably reconverges both nodes), so this is now a **defense-in-depth
+safety net** for the remaining ways `runACSTick`'s elected value can
+silently diverge from live radio state (a failed join, a driver hiccup, a
+race during restart) that have nothing to do with the coex-scan bug.
+Still worth building, just no longer urgent in the way it was when it was
+the only lever.
+
+Confirmed directly against current source, not re-derived from memory:
+
+- `setIfaceFrequency` (`node-manager/main.go:214-229`) calls
+  `rewriteFrequencyLine` (`main.go:177-205`), which does exactly
+  `if freq == targetFreq { return false }` — a pure text compare against
+  the **config file**, zero awareness of live radio state. This is the
+  precise gap: when the elected value doesn't change cycle-to-cycle,
+  `rewriteFrequencyLine` returns `false` and `setIfaceFrequency` exits
+  immediately, never even reaching the `radioIfaceEnabled`/restart branch
+  — so a corrective restart genuinely cannot happen today no matter how
+  long a live divergence persists.
+- `waitForFrequency` (`tourguide.go:232-241`) confirmed to have exactly
+  the substring bug already described above: `strings.Contains(out,
+  targetFreq+" MHz")` against the full `iw dev info` output. Returns
+  `void`, not `bool` — callers can't act on failure even if they wanted
+  to today.
+- `runACSTick` (`main.go:434-496`) calls `setIfaceFrequency` for each band
+  once per tick unconditionally (`main.go:462`, `:472`) — the hook point
+  for a live-state check is right after that call, per band, only when
+  `setIfaceFrequency` reports "no config change was needed" (i.e. this is
+  specifically the silent-divergence case, not a fresh election).
+
+**New interaction risk, not in the original design — found by reading the
+main loop, not by testing:** `reconcile5GHzWidth(iface5)`
+(`main.go:387-412`) runs once per 15s tick, **immediately before**
+`runACSTick()` in the same `loop` closure (`main.go:53-68`). It has its
+own independent `systemctl restart wpa_supplicant@<iface>` path (when the
+`disable_ht40`/`disable_vht` keys need to change) with **no settle delay
+after the restart** — unlike `setIfaceFrequency`, which sleeps 5s after
+its own restart. If a live-divergence check inside `runACSTick` runs
+right after `reconcile5GHzWidth` just restarted the same interface for an
+unrelated reason (a width-toggle change), the radio may not have
+re-joined yet, and the check would see a false mismatch and needlessly
+fire its own corrective restart on top of one that was already in
+flight. **Fix: track one shared per-interface "last restarted at"
+timestamp** (not two independent trackers, one per reconciler) and skip
+the live-divergence check entirely for an interface that either
+reconciler restarted within the last tick — the next 15s tick re-checks
+cleanly once the radio has actually had time to settle.
+
+**Implementation-ready plan, not built yet:**
+1. Fix `waitForFrequency` to parse the `channel N (FFFF MHz)` line via
+   regex (not substring match) and return `bool`. Reuse it (or a sibling
+   helper built the same way) for the new live-check, per the original
+   design's own instruction not to write a second poller.
+2. Add a small package-level `map[string]time.Time` (iface → last
+   restart, covering both `setIfaceFrequency` and `reconcile5GHzWidth`'s
+   restart paths) near the existing `lastACSCycle` state.
+3. In `runACSTick`, after each band's `setIfaceFrequency` call: if it
+   returned `false` (no config change) **and** the interface wasn't
+   restarted by either reconciler within the last tick, check live state
+   against the target. On mismatch: log under `[acs]`, write a
+   `/var/run/` marker (matching `mesh_limp_mode`/`tourguide_state`
+   convention, per the original design), and force one restart — capped
+   at once per `acsCycleInterval` (180s) per interface, exactly as
+   originally specified, with the EU-regulatory-domain fix above
+   (`scanIface` no longer synthesizing a fake winning score for
+   unscannable channels) landing first or alongside, since this is what
+   turns that existing quiet failure into an actual restart loop.
+
+**Not yet done: validating this design with `manet-architect`** before
+writing code, matching this project's own convention for ACS/radio-
+config changes (see "Fix design — validated by manet-architect
+2026-08-26" above) — this is a re-scope of prior work, not fresh design,
+but it does touch the same hot loop and deserves the same gate before
+implementation starts.
+
+### 2026-08-27 — validated by `manet-architect`, verdict: approved with changes
+
+Five blocking corrections to the re-scope above, all found by reading the
+actual current code, not by re-deriving from this doc. **Implementation
+has not started** — this is a design correction, same convention as the
+2026-08-26 `manet-architect` pass earlier in this doc.
+
+**1. (Blocking) The shared per-interface timestamp map is the wrong
+mechanism — use systemd, not in-process state.** The map only sees
+`node-manager`'s own two restart paths (`setIfaceFrequency`,
+`reconcile5GHzWidth`). At least six other things on a live node restart
+`wpa_supplicant@<iface>`, all invisible to an in-process map:
+`sae-watchdog.sh:60` (restarts *every* mesh iface on
+`MESH-SAE-AUTH-BLOCKED` — the exact symptom class this self-heal
+targets, two healers now racing with zero shared state), `manet-ctrl/
+api.go` (`apiControlWifiChannel`, radio enable/disable, SSID/key change),
+`batman-if-setup.sh`, `radio-setup.sh:2146`, and critically
+**`mesh-radio-state/main.go`'s `applyIface`, invoked via
+`radioStateSync()` at `main.go:54` — in the same 15s tick, immediately
+before `runACSTick`, from a separate process.** This is the exact
+`reconcile5GHzWidth` race the design already worried about, one line
+earlier in the loop, uncovered by the proposed fix. **Fix: query systemd
+instead** — `systemctl show -p ActiveEnterTimestampMonotonic --value
+wpa_supplicant@<iface>.service`, predicate "unit has been continuously
+`active` for ≥ N seconds", not "did I restart it." Existing in-repo
+precedent for exactly this: `manet-ctrl/collect.go:842`
+(`isUnitRestarting`), `collect.go:1329`, `applets.go:130`. Also gate on
+`ActiveState == "active"` — skip the check entirely if `activating`/
+`failed`, don't interpret that as divergence.
+
+**2. Restart sources the design missed, and one item to delete from the
+plan.** Tourguide's `hopFrequency` (`tourguide.go:221-230`) uses `wpa_cli
+reconfigure`, not a unit restart — invisible to systemd timestamps too.
+Saved only by call order: `maybeRunTourguide` runs at `main.go:492`,
+*after* both `setIfaceFrequency` calls (`:462`/`:472`). **This ordering
+is now a hard constraint, not an accident** — the live-check must stay
+immediately after each `setIfaceFrequency` call, never moved to the end
+of `runACSTick` or into the 15s `loop` closure, or it will generate
+guaranteed false mismatches during tourguide's ~12s dwell.
+`applyPartitionMerge` (`tourguide.go:351-352`) calls `setIfaceFrequency`
+twice inside that same dwell window — covered fine by the systemd-
+timestamp fix in #1, just flagging it's in-scope. Separately: **delete
+the "tourguide return-hop escalation" item from this doc's plan
+(originally at what's now roughly line 682-685)** — a stranded radio
+after a failed return hop is exactly a live-vs-elected divergence the
+self-heal already catches next cycle; building both is redundant.
+
+**3. (Blocking) The rate limit as specified is a no-op, and the original
+circuit breaker was silently dropped during the re-scope — restore it.
+`scan.go`'s fix must land strictly *before*, not "first or alongside."**
+`runACSTick` already early-returns unless `acsCycleInterval` has elapsed
+(`main.go:403-405` in this worktree) — "cap at one restart per
+`acsCycleInterval`" is exactly the rate the code already runs at, so it
+bounds nothing new. Worse: even if it did something, "one restart every
+180s" is not a bound, it's a **permanent recurring outage** — every
+restart tears down the mesh plink and flaps batman-adv TQ for every
+peer, not just the local node; on an EU node electing an illegal channel
+this turns today's one-time quiet failure into mesh-wide route-flapping
+forever. The original 2026-08-26 design's second constraint — "stop +
+log once after N consecutive failures on the same target rather than
+looping forever" — is the actual bound and was dropped from the
+2026-08-27 re-scope above without a stated reason. **Restore it as a
+required circuit breaker.** It also matters for a second reason: a node
+restarting every 180s republishes an oscillating `DATA_CHANNEL_5_0` vote
+(this is *live* state, per the "Where the vote data actually comes
+from" note earlier in this doc), which can drag peers around — stable-
+but-wrong beats oscillating. Additionally, dropping the `-100` noise
+synthesis in `scan.go` is necessary but **not sufficient as the only
+gate** — `iw` commonly still lists supported-but-regdomain-forbidden
+frequencies even when a survey entry exists. **The self-heal needs its
+own independent guard**: before firing any corrective restart, confirm
+the target frequency is actually permitted on the phy right now
+(reusing/fixing `radio-setup.sh`'s `iface_supports_freq` convention —
+note that function as written greps for `"<freq>.0 MHz"` in `iw phy
+info` without excluding `(disabled)`/no-IR entries, so the Go port must
+filter those out, not copy the bug). Reviewer's broader recommendation,
+treated as a requirement of this change rather than deferred: derive
+`band5Channels` from live phy capability instead of a hardcoded
+US-domain list — `node-manager` currently reads no regulatory domain
+anywhere despite `radio-setup.sh` already doing so, and once a self-heal
+can actively restart on a bad election, the hardcoding is what makes an
+EU misconfiguration actively harmful rather than passively wrong.
+HaLow confirmed unaffected either way — `meshIfaces()` only reads
+`/var/lib/mesh_if`, and `setIfaceFrequency` only ever drives
+`wpa_supplicant@` units.
+
+**4. Reading live `iw` state from the 15s tick path — four fixes.**
+(a) **Timeout**: `waitForFrequency` uses a bare, unbounded
+`exec.Command(...).Output()` — use `exec.CommandContext` with a 2-3s
+timeout, matching `scan.go:53`'s existing convention (established
+specifically because `iw` can hang). (b) **Don't reuse the 10s poller at
+the decision point** — `runACSTick` already spends up to 10s across
+`setIfaceFrequency`'s two 5s post-restart sleeps plus up to 10s in
+`performScan`, against a 15s tick; budget is already tight. Factor a new
+single-shot `readIfaceFreq(iface) (string, bool)`, with
+`waitForFrequency` becoming a thin loop over it instead of a second,
+independent poller. (c) **"Wrong channel" ≠ "no channel"**: a mesh iface
+that never joined (the `mesh join error=-1` case this doc already
+documents) prints no `channel` line in `iw dev <iface> info` at all —
+treating that as a mismatch would restart forever a node that
+structurally cannot join, and a restart cannot fix a config rejection.
+Only "channel line present and wrong" should ever fire a corrective
+restart; "no channel line" is log + marker only. (d) **Gate on
+`radioIfaceEnabled(iface)`** — `setIfaceFrequency` already skips its own
+restart when the radio is desired-down but still returns `true` in that
+case; in the self-heal's actual trigger condition (config already
+matches, so `setIfaceFrequency` returned `false`), a downed radio would
+report no channel line, get misread as a mismatch, and get restarted
+against the operator's own intent. Also: any `iw` error or empty output
+(USB adapter unplugged, driver reload, `mesh-radio-state` mid-flight) —
+skip silently, never restart on an error.
+
+**5. (Blocking) Marker file must clear on recovery, not just get
+written on fault.** `setLimpMode` (`main.go:505-512`) is the in-repo
+pattern to copy: write on fault, `os.Remove` on recovery. A marker that
+never clears is the same failure class as this project's own recurring
+"alfred silently down for 8 days" incident. Content should be
+`writeStateFile`-style `KEY=value` lines (iface, target, actual,
+timestamp) matching `tourguide_state`'s shape, not existence-only. And a
+`/var/run/` file nobody looks at won't get noticed in practice — surface
+it in `mesh status`/the manet-ctrl radio view, which is the same missing
+alert this doc already flags elsewhere ("wpa_supplicant is running but
+never joined its mesh group") — one implementation covers both gaps.
+
+**6. Static mode (`acs=n`) silently loses the self-heal entirely — this
+needs a deliberate decision, not an implicit one.** The original design
+put the check inside `setIfaceFrequency` (covering both ACS and static
+modes); the re-scope moved it into `runACSTick` only, so
+`ensureStaticChannels` nodes get no self-heal at all. Either state that
+scope reduction explicitly and drop the corresponding item from this
+doc's testing checklist below, or move the check into a helper both
+`runACSTick` and `ensureStaticChannels` call — don't leave this
+unresolved by accident.
+
+**7. `waitForFrequency`'s substring bug is real but not currently live —
+calibrate the fix's urgency honestly.** With today's candidate sets
+(`scan.go`'s `band24Channels`/`band5Channels`), no `width:`/`center1:`
+value happens to collide with any candidate frequency, so the bug can
+currently only produce a false *pass*, never a false failure. It becomes
+genuinely load-bearing the moment any check built on it drives a restart
+decision — worth fixing as part of this work regardless, just don't
+describe it as an active bug today.
+
+**8. This doc's file:line references have drifted (~32 lines) from the
+current worktree — implementer should locate every symbol by name, not
+trust line numbers written here.** Confirmed via direct comparison:
+`runACSTick` is actually `main.go:402-496` (this doc says 434-496),
+`reconcile5GHzWidth` is `:355-380` (doc says 387-412),
+`setIfaceFrequency` is `:213-228` (doc says 214-229), `desiredMeshWidth`
+is `:269` (`wpa-supplicant-mesh-noscan.md` §6 says 301).
+`waitForFrequency:232-241` and the `:462`/`:472`/`:53-68` call sites
+above are all still correct as written.
+
+**Testing additions from this review, on top of the checklist already in
+this doc:** a negative test forcing sustained divergence to confirm the
+circuit breaker actually trips and *stops* restarting (watch ≥30 min,
+not 10 — this is the least likely path to get exercised by accident); a
+marker-clears-on-recovery test; the EU-regulatory test split into two
+independent layers (does ACS avoid electing the illegal channel at all,
+*and separately* does the phy-capability guard block a restart even if
+it did); a radio-disabled-node test (zero corrective restarts over 10+
+min); and — flagged as the single highest-value new test, not previously
+in this doc — a **concurrent-healer test**: trigger `sae-watchdog.sh`'s
+`MESH-SAE-AUTH-BLOCKED` path while an ACS cycle is mid-flight, confirm
+`node-manager` backs off (via the systemd-timestamp check from #1)
+rather than racing it, and confirm the interface actually ends up back
+in `bat0` afterward either way.
+
+**Blocking items before implementation starts:** #1 (systemd timestamps,
+not the in-process map), #3 (`scan.go` fix strictly first, independent
+phy-capability guard, circuit breaker restored), #4's sub-points (b)
+`radioIfaceEnabled` gate, (c) "no channel" ≠ mismatch, (a) `CommandContext`
+timeout, and #5 (marker clears on recovery). #2's ordering constraint
+must also be preserved, not just noted.
+
+### 2026-08-27 — implemented on `feat/acs-verify-after-apply-selfheal`, all blocking items addressed
+
+**Not yet deployed or hardware-tested.** Build/vet/gofmt clean, two
+independent review passes (one full, one focused re-verification after
+this session's own reviewer agent hit an infrastructure rate limit and
+the checks were completed directly instead), no blocking findings
+remaining. Nothing here has touched a real node.
+
+**New file `node-manager/acs_selfheal.go`** — all of the new machinery:
+- `readIfaceFreq(iface) (string, bool)` — single-shot live-frequency
+  read via `iw dev <iface> info`, regex-matched against the actual
+  `channel N (FFFF MHz)` line (not a substring match), 3s
+  `CommandContext` timeout. `ok=false` covers both "no channel line"
+  (never joined) and any command failure — both handled identically by
+  every caller (log + marker, never a restart), satisfying point 4's
+  "never restart on an error" requirement even though the two cases
+  aren't distinguished from each other in the return value itself.
+- `unitActiveFor(unit) (time.Duration, bool)` — replaces the
+  originally-proposed in-process restart-tracking map entirely, per
+  point 1. Queries `systemctl show -p ActiveState -p
+  ActiveEnterTimestampMonotonic --value` and compares against
+  `/proc/uptime` (both boot-relative `CLOCK_MONOTONIC`-derived, so this
+  is immune to wall-clock/NTP skew — deliberately chosen given this
+  project's own past mesh-time-sync incidents). Correct regardless of
+  *who* restarted the unit — `reconcile5GHzWidth`, `sae-watchdog.sh`,
+  `mesh-radio-state`'s `applyIface`, manet-ctrl's API, anything.
+- `acsHealMinUnitUptime = 20s` — the settle window before a live-state
+  read is trusted. Verified this is meaningful, not dead weight: since
+  `runACSTick` only does real work once per `acsCycleInterval` (180s,
+  gated internally — confirmed unchanged), a restart from anything else
+  landing in the *same or immediately preceding* 15s tick is exactly
+  what 20s (a bit more than one tick) is sized to catch; a restart from
+  much earlier trivially clears 20s on its own.
+- `acsHealTripThreshold = 3`, `acsHealState{target, consecFail}`,
+  `acsHealStates` (per-iface, unsynchronized — verified safe, everything
+  in this file runs from `node-manager`'s single sequential loop, never
+  concurrently) — the restored circuit breaker. Traced cycle-by-cycle:
+  cycles 1-3 each fire one restart (`consecFail` 0→1→2→3, checked
+  *before* incrementing); cycle 4 sees `consecFail(3) >=
+  acsHealTripThreshold(3)` and stops — exactly 3 restart attempts, no
+  off-by-one. A new elected target (`st.target != targetFreq`) resets
+  the counter, per point 1's "a fresh situation, not a continuation."
+- `freqAvailableOnPhy` (from stage 1, `scan.go`) reused verbatim as the
+  independent legality guard before ever restarting toward a target —
+  confirmed all three of its failure modes (parse error, query error,
+  confirmed-illegal) return early without ever reaching
+  `acsHealStates`/`restartWpaSupplicant`, no fallthrough bug.
+- Marker file `/var/run/mesh_acs_divergence_<iface>`
+  (`writeAcsDivergence`/`clearAcsDivergence`) — `KEY=value`
+  (`IFACE`/`TARGET_FREQ`/`ACTUAL_FREQ`/`TIMESTAMP`/`CONSEC_FAIL`) via
+  the existing `writeStateFile` helper, matching `tourguide_state`'s
+  shape; cleared via `os.Remove` on recovery, matching `setLimpMode`'s
+  write-on-fault/remove-on-recovery convention — satisfies point 5.
+- A second, deliberately separate small counter/marker
+  (`acsHoldStreaks`, `acsTrackHold`,
+  `/var/run/mesh_acs_divergence_<iface>_hold`) escalates stage 1's
+  `electBand` "hold" result (zero scan data at election time) after 3
+  consecutive cycles, rather than folding it into the same state as the
+  live-frequency divergence above — a deliberate choice (they trigger at
+  different points in the tick and neither's resolution affects the
+  other), not an oversight; the two share only their marker-file
+  *shape*, not their tracking state.
+
+**`main.go`**: `restartWpaSupplicant` factored out of `setIfaceFrequency`
+so the self-heal's corrective restart is the literal same code path, not
+a reimplementation. `setIfaceFrequency` now returns whether the config
+actually changed. `runACSTick`'s two per-band blocks call
+`acsVerifyAfterApply`/`acsTrackHold` immediately after their
+`setIfaceFrequency` call and before `maybeRunTourguide` — confirmed by
+reading the final function top to bottom, satisfying point 2's ordering
+constraint (this must never move to the end of the tick or into the 15s
+loop closure, or it will false-trigger during tourguide's ~12s dwell).
+`ensureStaticIfaceChannel` also calls `acsVerifyAfterApply` — the point-6
+decision, made explicitly: static (`acs=n`) nodes get the same self-heal
+coverage rather than silently losing it.
+
+**`tourguide.go`**: `waitForFrequency` rewritten as a thin retry loop
+over `readIfaceFreq`, now returns `bool` — fixes the substring-match bug
+(point 7) as a side effect of the refactor rather than a separate patch.
+The tourguide return-hop escalation item from the original design was
+deliberately **not built** — a stranded radio after a failed hop is
+exactly the divergence this self-heal already catches next cycle, per
+the review's point 2; `hopFrequency` just logs a failed hop now.
+
+**`channel_election.go`**: `electionResult` gained a `hold bool` field,
+set precisely when stage 1's `!hadAnyData` branch fires — gives
+`acsTrackHold` a clean signal instead of inferring "was this a hold"
+from a score-based heuristic.
+
+**`manet-ctrl/collect.go`**: `acsDivergenceFault`/`acsHoldFault` read
+both marker files (no shared package between the two binaries, so the
+path/format is kept in sync by convention and comments, not by import)
+and surface them as `Faults` entries in the existing per-interface
+health view — reachable via `mesh radio-info`/`mesh status` with zero
+new UI plumbing. Confirmed independent of the pre-existing `"Inactive in
+batman-adv"`/`"No wpa_supplicant"` checks: only ever upgrades
+`ok`→`warn`, never downgrades an existing `fault` — severity ordering
+preserved.
+
+**One asymmetry worth knowing about, not a bug**: `ensureStaticChannels`
+(static mode) is called every 15s tick, unlike `runACSTick`'s internal
+180s gate — so in static mode, a corrective restart's very next tick
+(15s later) gets skipped by the 20s settle window, then evaluated again
+one tick after that (~30s after the restart). Static mode's effective
+restart cadence during a sustained divergence is therefore closer to
+~30s than the nominal 15s tick, versus ACS mode's ~180s. Not incorrect —
+both modes still terminate via the same 3-attempt circuit breaker — just
+a real difference in how long that takes wall-clock-wise between the
+two modes, worth knowing before being surprised by it during testing.
+
+**Not yet done — required before this is considered field-ready, not
+just code-complete:**
+- Hardware test: force a sustained divergence on a real node, confirm
+  the breaker actually trips and stops (watch ≥30 min, not 10, per the
+  testing-additions list above), confirm the marker appears/clears
+  correctly, confirm it's visible via `mesh radio-info`.
+- The concurrent-healer test (`sae-watchdog.sh` racing an ACS cycle) —
+  the single highest-value test named above, not yet run.
+- Confirm `iw dev <iface> info`'s `channel N (FFFF MHz)` line format
+  against this fleet's actual driver/`iw` version live — the regex was
+  traced against the documented format, not run against real output.
+- EU-regulatory-domain node test of the `freqAvailableOnPhy` guard
+  actually blocking a restart toward an illegal target.
+
 **Related future work, flagged by the user 2026-08-26, not yet
 scoped/implemented:** `regulatory_domain` is currently one combined
 mesh.conf key, but WiFi and HaLow hardware have different real-world
@@ -770,6 +1225,322 @@ this AP/mesh radio conflation, could be something else about how
 `registry` entries are populated. Worth resolving before trusting vote
 counts precisely in future ACS work.
 
+## Open issue: cold-boot 5GHz election races ahead of peer gossip
+
+**Found 2026-08-27/28, live, during the reboot verification of the
+`noscan`+self-heal deployment above** (see
+[`wpa-supplicant-mesh-noscan.md`](wpa-supplicant-mesh-noscan.md) §9 for
+that deployment's own status — this bug is unrelated to it and would
+exist with or without `noscan`; it was simply never exercised by a real
+cold reboot until tonight). **Implemented 2026-08-28, hardware-verified
+2026-08-28** — deployed to EUD3+EUD4 and confirmed via a real sequential
+reboot of both nodes: no outage, correct channel elected on both nodes'
+own cold starts, mesh re-established in the same cycle instead of ~180s
+later (see "Implementation — 2026-08-28" at the end of this section, and
+the "What needs testing" checklist above for the exact verification
+results).
+
+**Symptom, reproduced on EUD3:** cold-rebooted a node that was already
+correctly meshed with EUD4 on 5GHz (channel 44/5220). Result: a genuine
+**3.5-4 minute 5GHz mesh outage** before it self-corrected. 2.4GHz and
+HaLow stayed healthy throughout — this is a 5GHz-electBand-specific gap,
+not a general mesh-recovery failure, and EUD4 was never affected (kept
+correctly electing 5220 with `votes=3` the entire time — the existing
+vote-first convergence design held up under a peer temporarily voting
+wrong).
+
+**Root cause, traced via `journalctl -b`:** `mesh-boot-lobby.service`
+resets the live `wpa_supplicant-wlan1.conf`'s `frequency=` to the lobby
+value (5180) before `wpa_supplicant@wlan1` even starts — this is correct,
+by-design behavior. `node-manager` then runs its first `runACSTick`
+~20s later, before alfred/mesh-registry has had any chance to gossip a
+peer's channel vote (`elected channel 5745 (score -92.00, votes 0)` — a
+true cold start, zero votes). With zero votes, `electBand`
+(`channel_election.go`) falls back to raw noise score with a small
+`incumbentBiasDB` (4.0) nudge toward whatever `currentCh` is — but
+`currentCh` comes from `cur := getConfFreq(wpaConfPath(iface5))`
+(`main.go:487`), which by this point already reads back the
+just-written *lobby* frequency (5180) — a channel number
+(36) that isn't even in `band5Channels`'s candidate set at all. So the
+incumbent bias silently applies to nothing, and the winner is chosen by
+raw local noise score alone: EUD3 picked channel 149/5745 (-92.00dBm)
+over the mesh's actual already-converged channel 44/5220 (-90.50dBm) —
+a 1.5dB gap that `incumbentBiasDB` (4.0) would easily have overridden
+*if it had been biasing toward the right channel*. ~180s later (the next
+ACS cycle), EUD4's gossiped vote arrived, `votes` went from 0→3, and
+EUD3 correctly re-converged to 5220 — self-healing, but only after a
+real multi-minute outage.
+
+**Why the self-heal above doesn't catch this**: `acsVerifyAfterApply`
+is scoped to *intra-node* live-radio-vs-own-elected-value divergence,
+and by design skips its check entirely on any tick where
+`setIfaceFrequency` just changed the config itself (`configChanged`) —
+which is exactly this tick, since the mis-election *is* the config
+change. It has no visibility into *inter-node* disagreement (this node
+elected something different from what its peer is actually using) —
+a structurally different problem from what it was built to catch.
+
+**Proposed fix, being validated before implementation**: seed the
+cold-start incumbent-bias tiebreak from a small node-manager-owned
+persisted state file (e.g. `/var/lib/mesh_last_5ghz_freq`, mirrored for
+2.4GHz) — written every time `electBand` produces a genuine winning
+election (`result.winnerCh != 0`, not a lobby/limp fallback) — read back
+as `cur` instead of `getConfFreq(wpaConfPath(iface))`. Because this
+lives under `/var/lib/` rather than the wpa_supplicant conf that
+`mesh-boot-lobby.service` resets every boot by design, a freshly-booted
+node's cold-start tiebreak would correctly bias toward its own
+last-known-good channel instead of nothing. Bounded, not a staleness
+risk: the moment any real peer vote exists (same cycle or the very next
+one), the existing vote-first design completely supersedes the
+incumbent bias regardless of what it's seeded with — this fix can only
+ever affect the narrow window before any peer vote has arrived, never
+beyond it.
+
+### Validated by `manet-architect`, 2026-08-27/28 — verdict: approved with changes
+
+Two corrections are **blocking** — the fix as first proposed would have
+introduced a new regression and a new data-corruption path. Both fixed
+in the design below before any code was written.
+
+**Blocking correction 1 — the persisted value must never feed the
+`hold` path's returned frequency, only the bias comparator.**
+`currentFreq` (the parameter originally proposed to swap wholesale) is
+not just a bias input — it's the literal value `electBand`'s `hold`
+branch returns, which `runACSTick` then applies via
+`setIfaceFrequency`, restarting `wpa_supplicant`. Swapping it for the
+persisted value would turn "no scan data, change nothing" into
+"rewrite the conf to a remembered frequency and restart" — exactly the
+mesh-wide disruption the `hold` branch exists to avoid, and worse on a
+cold boot with a failed first scan (it would yank the radio off the
+lobby before any peer could find it). **Fix: `electBand` takes a
+separate `biasFreq` parameter**, used only inside the `totalVotes == 0`
+comparator; the `hold` return keeps using the real `getConfFreq`-derived
+`currentFreq` as before. `biasFreq` selection rule: use the live-conf
+value when it's actually in the candidate list; fall back to the
+persisted value only when it isn't (i.e. only in the lobby-reset
+cold-start case this fix targets).
+
+**Blocking correction 2 — `result.winnerCh != 0` is not the "genuine
+election" signal.** The `hold` return also sets `winnerCh: currentCh`
+(non-zero whenever the conf frequency merely parses), so a first-ever
+boot with no persisted file and a failed first scan would persist the
+*lobby* frequency (5180/2412 — not even a real candidate) as "last known
+good," cementing this exact bug permanently. **Fix: gate the write on
+`quorum && !result.hold && result.winnerCh != 0`** — the `quorum` term
+matters too, since `runACSTick` overrides to the lobby frequency
+whenever `!quorum` regardless of what `electBand` returned; the file
+must mean "the frequency this node last actually ran as a data
+channel," not "the frequency electBand most recently computed."
+
+**Point 1 (layer choice) — confirmed, both alternatives correctly
+rejected, and a stronger argument found for why.** Removing
+`mesh-boot-lobby.service`'s frequency reset isn't safe on its own terms
+— that template also carries `country=`, SSID, SAE password, and the
+5GHz width lines, so it's a whole-file mechanism for several unrelated
+settings, not something to special-case one line out of. Delaying the
+first `runACSTick` for a gossip round-trip doesn't just add latency, it
+fails outright in the realistic worst case: **site-wide power loss**,
+where every node cold-starts simultaneously and there is no peer vote
+for anyone to wait for, ever. Persisted state is the only mechanism
+that works in that exact scenario — every node biases back to the same
+pre-outage channel independently and the mesh re-forms in the first
+cycle, with no coordinator and no waiting **when every node actually
+persisted the same value** — see the follow-up correction below, found
+during code review, for the case where that assumption doesn't hold.
+
+**Follow-up correction, found during code review (not design review) —
+the simultaneous-cold-start claim above is stronger than what's
+actually guaranteed.** Persisted values can genuinely diverge across
+nodes: the write is gated on each node's *own* tick, and one node's
+tick can run up to a full `acsCycleInterval` (180s) later than another's
+— during a real mid-flight channel migration (not rare here;
+`noiseDisqualifyDBM` alone can force one), a power loss landing in that
+window leaves two nodes with *different* last-persisted values from the
+same pre-outage mesh. At cold start this can make a split *marginally
+more likely* than today in that narrow case, not less — today's
+undirected local-noise-score pick is at least *correlated* between
+co-located nodes (shared RF environment), where two different 4.0dB
+biases toward two different remembered channels deliberately overrides
+that correlation. Still net-positive and still bounded to one cycle in
+a mesh of 3+ nodes, because gossip doesn't depend on the 5GHz link at
+all — HaLow stays on `bat0` throughout on a static, config-driven
+channel, so alfred/mesh-registry keeps flowing even if both WiFi bands
+temporarily split, and the majority's vote count resolves the minority
+within one cycle via the existing `votes desc` comparator.
+
+**One case doesn't self-resolve, and it's pre-existing, not introduced
+by this fix**: in an exactly-2-node mesh split A-on-X/B-on-Y,
+`peerChannelVotes` excludes self, so A tallies one vote for Y and B
+tallies one vote for X — both take the `votes desc` branch and both
+move to *the other's* channel, swapping rather than converging, and
+swap back again next cycle. This only resolves if the two nodes'
+ticks happen to be far enough apart in phase that one moves before the
+other reads the registry — and a site-wide power loss is exactly the
+scenario that tends to align both nodes' `lastACSCycle` phase (stamped
+on each one's first tick after `bat0` comes up, at a similar point
+post-boot for both). The EUD3 incident this whole fix is for only
+self-healed within one cycle because the fleet has four nodes
+(`votes=3` on the correcting cycle) — a real two-node deployment
+wouldn't get that for free. A future fix (out of scope here) would be
+counting a node's own current channel as one self-vote, so both sides'
+tallies end up identical and the existing lowest-channel-number tiebreak
+converges — a different mechanism from the additive incumbent *bonus*
+already rejected earlier in this doc, not a revival of it.
+
+**Point 2 (staleness) — the original "provably bounded" framing was
+overstated; corrected here.** A node stranded on a wrong persisted
+channel for a long absence receives no peer votes *specifically
+because* it's on the wrong channel (alfred/registry gossip requires an
+actual mesh link) — `quorumOK` doesn't rescue this either, since a
+long-absent node's empty registry means `active == 0`, which falls
+through to `return true` (not a lobby retreat). **This is not a new
+stranding class, though** — today's unfixed behavior also parks
+indefinitely on one channel in this scenario (raw noise score is stable
+cycle to cycle), just a locally-scored one instead of a
+previously-real one. The fix changes *which* wrong channel a truly
+stranded node parks on (better prior: "where it last worked" beats
+"whatever scored best just now"), not whether it can get stranded at
+all — recovery in both cases is the same existing tourguide lobby-dwell
++ `analyzeForeignPartitions`/`applyPartitionMerge` path. Where the bound
+*does* hold exactly: the instant any real peer vote exists,
+`totalVotes > 0` and the comparator never touches the bias at all —
+confirmed by re-reading the sort comparator directly.
+
+**Point 3 (tourguide) — confirmed insulated by construction, not just
+assumption; no extra write needed.** Traced directly: `hopFrequency`
+and `applyPartitionMerge` both call `rewriteFrequencyLine`/
+`setIfaceFrequency` directly, never through `electBand` — neither can
+produce an `electionResult`, so neither can touch the persisted file.
+Explicitly **do not** add a persistence write to `applyPartitionMerge`
+despite it being a genuine channel decision: its frequency comes from
+`wifiChannelFreq` resolved against the *unfiltered* `band5Channels`
+superset (including UNII-3), so on an EU node it could persist an
+ETSI-illegal value; the omission self-corrects within one cycle anyway,
+since the next election runs with the merged partition's votes and
+persists the real result through the normal path. Write placement:
+after both bands' blocks in `runACSTick`, before `maybeRunTourguide` —
+keeps the insulation structural, not incidental.
+
+**Point 4 (static mode) — no change needed, one explicit guard added.**
+`ensureStaticChannels` is deterministic/config-driven, immune by
+construction. Explicitly never write the persisted file from the
+static path — doing so would store a lobby frequency that becomes a
+useless bias value if the node is later switched to `acs=y`.
+
+**Point 5 (2.4GHz) — included, not just 5GHz.** Same code path, same
+lobby-reset race, and `band24Channels` (`{2437, 2462}`, lobby `2412`
+outside the set) has the identical structural gap — "historically more
+RF-stable" is a claim about noise, not immunity to this specific race.
+Both bands get the same fix in the same change.
+
+**Point 6 (format) — changed from two separate files to one, KEY=value,
+matching existing conventions.** One file,
+`/var/lib/mesh_acs_last_channels`, keys `LAST_FREQ_2_4`/`LAST_FREQ_5_0`
+(mirroring the registry's own `DATA_CHANNEL_2_4`/`DATA_CHANNEL_5_0`
+naming) plus `TIMESTAMP` (meaning "when the value last *changed*", see
+point 7) — via the existing `writeStateFile` helper, one write, one
+atomic rename for both bands. **Keyed by band, never by interface
+name** — `meshIfaces()` derives band from position in `/var/lib/mesh_if`,
+not name, and this project has live history of wlan naming/ordering
+churn across boots; a band-keyed file survives that, an iface-keyed one
+wouldn't. `writeStateFile` does tmp+write+rename with no fsync, so a
+brownout mid-write can leave a zero-length file — the reader must treat
+missing, empty, and unparseable identically (clean fallback to
+`getConfFreq`), documented as a named failure mode on this hardware,
+not an edge case to ignore.
+
+**Point 7 (write cadence) — changed from unconditional-every-cycle to
+write-on-change.** An unconditional ~180s write to `/var/lib` would be
+a genuinely new pattern this project has already implicitly rejected
+once — every existing high-frequency node-manager state write goes to
+`/var/run` (tmpfs); every `/var/lib`/`/etc` writer elsewhere in this
+codebase is change-driven (`mesh-manager`'s `savePersistent()`,
+`mesh-registry`'s `maybeSaveKnownNodes` — the latter's own history
+explicitly cites avoiding hitting the SD card every 15s regardless of
+whether anything changed). Match that: compare against the in-memory
+last-written value, skip the write when unchanged. Steady state settles
+to zero writes.
+
+**Regulatory-domain safety, made an explicit invariant, not just an
+observation**: the persisted value is only ever compared against
+`activeBand5Channels`'s live phy-filtered candidate set — a stale or
+cross-domain value simply matches nothing and degrades to today's
+behavior. **The persisted value must never be passed to
+`setIfaceFrequency`/`rewriteFrequencyLine`, and must never be restored
+directly into a wpa_supplicant conf** — stated as a hard constraint on
+the read helper itself (comment, not just this doc), specifically so a
+future "restore last channel at boot" feature doesn't casually bypass
+the ETSI filter and write a UNII-3 frequency onto an EU node.
+
+**Testing required once implemented** (beyond re-running tonight's
+exact repro): first-ever-boot with no persisted file and a failed first
+scan must not write the lobby frequency (blocking correction 2); a
+forced no-scan-data cycle with a stale persisted value must produce
+zero restarts and zero conf rewrites (blocking correction 1); a
+simulated simultaneous multi-node cold start (the actual brownout case
+this design is strongest for) should show every node re-converging on
+the pre-outage channel in the first cycle; a deliberately wrong
+persisted value must yield immediately the first cycle any peer vote
+exists; tourguide dwell must never change the file; both bands: static
+mode must never create/touch the file; a truncated/garbage file must
+fall back cleanly with a log line, no panic; an EU-domain node with a
+persisted UNII-3 value must have it silently ignored, never reaching
+the conf.
+
+### Implementation — 2026-08-28
+
+Shipped in `node-manager` per the validated design above, both blocking
+corrections applied. Not hardware-verified yet — see the checklist this
+adds to "What needs testing" below.
+
+- `channel_election.go:190` — `electBand` gains a `biasFreq` parameter,
+  inserted between `currentFreq` and `lobbyFreq`. `currentFreq`/`currentCh`
+  keep their existing job untouched: they're still what the `hold` branch
+  returns and what `runACSTick` applies via `setIfaceFrequency`. A new
+  `biasCh` (`channel_election.go:192`) is parsed from `biasFreq` and used
+  only inside the `totalVotes == 0` comparator (`channel_election.go:253,
+  256`, replacing the old `currentCh` comparisons there) — the moment any
+  peer vote exists, this parameter plays no role, same as before.
+- `acs_channel_persist.go` (new file) — the persisted state:
+  - `lastElectedChannelsFile = "/var/lib/mesh_acs_last_channels"`
+    (`:21`) — one file, `LAST_FREQ_2_4`/`LAST_FREQ_5_0`/`TIMESTAMP` keys,
+    band-keyed per point 6, written via the existing `writeStateFile`.
+  - `readLastElectedFreq(band string) string` (`:42`) — missing, empty,
+    and unparseable file all fall back to `""` identically, each logged.
+    Carries the hard invariant from this section as a comment on the
+    function itself: this value must never reach `setIfaceFrequency`,
+    `rewriteFrequencyLine`, or a wpa_supplicant conf.
+  - `selectBiasFreq(confFreq string, candidates []int, band string) string`
+    (`:83`) — live-conf value if it's in `candidates`, else the persisted
+    value if one exists, else the live-conf value anyway.
+  - `maybeWriteLastElectedFreq(freq24, freq5 string)` (`:110`) — write-on
+    -change against what's currently on disk (read back per band, not an
+    in-memory cache, so it stays correct across a node-manager restart);
+    `""` for a band means "leave that band's persisted value alone this
+    cycle."
+- `main.go:487-553` (`runACSTick`) — per band: computes `biasFreq` via
+  `selectBiasFreq` before calling `electBand` (`:497-498` for 2.4GHz,
+  `:528-529` for 5GHz); after each band's `setIfaceFrequency`/
+  `acsVerifyAfterApply`/`acsTrackHold` calls, gates that band's
+  `writeFreq24`/`writeFreq5` on `quorum && !result.hold &&
+  result.winnerCh != 0` (`:523`, `:542` — blocking correction 2, verbatim);
+  `maybeWriteLastElectedFreq(writeFreq24, writeFreq5)` (`:553`) runs after
+  both bands' blocks, before `setLimpMode`/`writePartitionSize`/the
+  `if quorum { maybeRunTourguide(...) }` block — per point 3, keeping
+  tourguide's insulation structural.
+- `ensureStaticChannels`/`ensureStaticIfaceChannel`/`hopFrequency`/
+  `applyPartitionMerge` — unchanged; confirmed by inspection none of them
+  call `electBand`, so none can produce an `electionResult` to gate a
+  write on, and none reference the new persisted-state functions at all.
+
+**Verification status:** `go build`/`go vet` (via `-C <absolute-path>`,
+not `cd &&`, per this session's own earlier miscompile incident) and
+`gofmt -l` clean on `node-manager`. `golangci-lint run ./...` shows the
+same pre-existing errcheck findings as before this change
+(`limpmode.go`, `main.go`'s `setLimpMode`, `tourguide.go` — all in
+untouched lines) and zero findings in the two changed/new files. Not yet
+hardware-verified — added to "What needs testing" below.
+
 ## What needs testing
 
 **Before any code is written:**
@@ -819,6 +1590,25 @@ counts precisely in future ACS work.
       especially since `eud=wired` was re-tested on EUD3 this session and
       the hostapd-disable fix held across reboot (partial re-verification,
       not the full 5-value round trip).
+- [x] **Cold-boot bias fix (`mesh_acs_last_channels`)** — **hardware-
+      verified 2026-08-28.** Deployed the fix and rebooted both EUD3 and
+      EUD4 sequentially (EUD3 first — the node that broke originally —
+      confirmed fully re-meshed before rebooting EUD4). Both nodes'
+      first post-boot election was still a true cold start (`votes 0`,
+      gossip hadn't caught up yet) but now correctly elected 5220 via the
+      persisted bias instead of the original bug's wrong 5745 — mesh
+      plink re-established in the *same* cycle on both reboots, not ~180s
+      later. `/var/lib/mesh_acs_last_channels` survived EUD3's reboot
+      byte-identical (`TIMESTAMP` unchanged). iperf3 post-reboot: 387/385
+      Mbit/s (EUD3 reboot), 412/411 Mbit/s (EUD4 reboot) — consistent
+      with the 380-444 Mbit/s range from the original deploy, no
+      degradation. No `mesh_acs_divergence_*` fault ever appeared on
+      either node. **Not exercised by this test** (fleet is 4 nodes, US
+      regdomain, already running with existing persisted state): a true
+      first-ever-boot-with-no-file node, static mode (`acs=n`), an
+      EU-domain node with a stale/cross-domain persisted value, and the
+      exactly-2-node-mesh vote-swap edge case noted in this doc's own
+      "Follow-up correction" above (doesn't apply to this fleet's size).
 
 ## Implementation — 2026-08-26, fleet-wide toggle (`mesh_5ghz_bw`)
 

@@ -8,9 +8,12 @@ already-written, community-maintained fix for the underlying bug was found
 after that conclusion was written — read this before re-deriving any of it,
 and before assuming "no fix exists" is still true.
 
-**Nothing in this doc has been built or deployed yet.** This is findings +
-a plan, not a shipped change. `mesh_5ghz_bw` stays `20`/`80`-only until this
-plan is executed and tested.
+**2026-08-27 update — hardware-validated on EUD3/EUD4, fix confirmed (§9).**
+20/20 independent restarts (both VHT80 and HT40-only, 5 restarts × 2 nodes
+each) landed on the identical channel/width/center1 on both sides, zero
+deviation. Not yet deployed anywhere permanent — `mesh_5ghz_bw` is back to
+`20` on the fleet, the live test was fully reverted. §8 is the build log,
+§9 is the hardware test. Deployment shape (§6) is still an open decision.
 
 ## 1. Why this exists: AW7916/AW7915, and does 40MHz dodge the bug?
 
@@ -131,14 +134,10 @@ explicit instead of scan-derived) for the 80MHz case. For a 40MHz-only
 case: `noscan=1` with `disable_vht=1` (keep HT40, drop VHT) — this
 configuration doesn't exist as a `mesh_5ghz_bw` value today (see §6).
 
-**Not yet verified, flag before relying on it:** whether `obss_scan=0`
-alone is sufficient for **both** nodes to independently compute the
-*same* primary channel (not just *a* stable one each) — i.e., whether the
-fallback path `ibss_mesh_select_40mhz` takes when it skips scanning is
-itself deterministic and identical given the same `frequency=` config on
-both sides. This needs the live two-node test in §5, not just "it stopped
-scanning" — a stable-per-node-but-still-different pick would be a smaller
-bug than today's but not actually a fix.
+**Confirmed on real hardware 2026-08-27, see §9** — yes, `obss_scan=0`
+gives both nodes the identical primary channel, not just a stable one
+each: 20/20 independent restarts (VHT80 and HT40, 5 each × 2 nodes)
+matched exactly on both sides every time.
 
 ## 4. Correction to an assumption from earlier in this research
 
@@ -312,6 +311,327 @@ wasn't fabricated, just imprecise about which hunks matter. Treat any
 AI-summarized patch content as a lead to verify against the raw file, not
 a citable fact — this doc's §3 only avoided repeating that imprecision
 because the raw patch was fetched and read directly before writing it.
+
+## 8. Build log — 2026-08-27, first successful build
+
+**Environment: this repo's own build host (`meshtasticbuilder`, x86_64
+Ubuntu 24.04 Noble), not a Trixie machine.** Chroot/QEMU (debootstrap +
+qemu-user-static + binfmt_misc) was tried first and **does not work in
+this sandbox** — writing to `/proc/sys/fs/binfmt_misc/register` is denied
+even as root, so no arm64 binary can actually be executed here, only
+compiled. Pivoted to plain cross-compilation with `aarch64-linux-gnu-gcc`
+(already installed on this host, same tool this project's kernel/Morse
+builds already use — see `kernel-6.18-morse-port.md`) against a **hand-
+assembled sysroot of real Debian Trixie arm64 `.deb`s**, extracted with
+`dpkg -x` into a scratch directory rather than registered with the host's
+package manager — chosen deliberately over Ubuntu Noble's own arm64
+multiarch packages to avoid a libssl/libnl soname/ABI mismatch against
+what's actually on the Pi nodes. None of this touched the host's own
+`/usr/aarch64-linux-gnu/` cross-sysroot (from Ubuntu's
+`libc6-dev-arm64-cross` etc., left untouched and still used for
+glibc/libgcc/kernel headers) — only userspace libs (openssl, libnl3,
+dbus, pcsclite) came from the hand-assembled one.
+
+**Everything below happened outside the MANET repo**, in
+`/root/manet-wpa-noscan-build/` on the build host — not part of this git
+tree, not cleaned up automatically. Re-creating it from scratch following
+the steps below takes about 15-20 minutes of mostly-unattended downloads
++ one `make` invocation.
+
+### 8.1 Get Debian's exact source (not a generic tag)
+
+Confirmed Trixie's live `Sources` index (not just the cached web search
+from §5): `wpa` source package version `2:2.10-24`. Downloaded directly
+via `curl` from `deb.debian.org`'s pool (no `apt`/`dpkg` source
+registration needed — these are plain files):
+
+```
+wpa_2.10-24.dsc
+wpa_2.10-24.debian.tar.xz
+wpa_2.10.orig.tar.xz
+```
+
+Extracted `wpa_2.10.orig.tar.xz`, then the `debian.tar.xz` **into the same
+tree** (it lays down a `debian/` subdirectory). Applied Debian's own
+20-patch quilt series first, to reproduce the exact source Trixie ships
+before adding anything of our own:
+
+```
+tar xJf wpa_2.10.orig.tar.xz
+tar -C wpa-2.10 -xJf wpa_2.10-24.debian.tar.xz
+cd wpa-2.10 && QUILT_PATCHES=debian/patches quilt push -a
+```
+
+All 20 applied cleanly (`quilt` needed installing; `apt-get install
+quilt`). **`QUILT_PATCHES=debian/patches` is required** — quilt's default
+(`patches/`) finds nothing and silently reports "No series file found."
+
+Debian's actual build config for the Linux target,
+`debian/config/wpasupplicant/linux`, confirmed the relevant flags before
+patching further: `CONFIG_MESH=y`, `CONFIG_IEEE80211AC=y`,
+`CONFIG_IEEE80211N=y`, `CONFIG_DRIVER_NL80211=y`, `CONFIG_LIBNL32=y`,
+`CONFIG_TLS=openssl`, and (missed on the first pass, see 8.2)
+`CONFIG_CTRL_IFACE_DBUS_NEW=y`/`CONFIG_CTRL_IFACE_DBUS_INTRO=y` — no
+`CONFIG_DBUS` key by that exact name, which is why a first grep for it
+came back empty; the actual dbus-enabling keys are the `CTRL_IFACE_DBUS*`
+ones. Copied this file to `wpa_supplicant/.config` to build with Debian's
+exact feature set, not a guessed one.
+
+### 8.2 Applying the two noscan patches — one hunk landed in the wrong place, verified and fixed by hand
+
+`300-noscan.patch` applied clean (`patch -p1`, only line-number offsets,
+no fuzz). `301-mesh-noscan.patch` **partially failed** — 2 of its
+`wpa_supplicant.c` hunks rejected outright, because upstream had since
+**inlined** the separate `ibss_mesh_select_40mhz()` function this patch
+targets directly into `ibss_mesh_setup_freq()`, with `obss_scan` now
+declared inline in a combined variable list and the channel table renamed
+`ht40plus[]` (5GHz-only, no separate 2.4GHz variant). Ported both by hand
+after reading the real 2.10 source directly:
+
+- `int i, chan_idx, ht40 = -1, res, obss_scan = 1;` →
+  `..., obss_scan = !(ssid->noscan);`
+- `int ht40plus[] = { 36, 44, ... }` → prefixed with `1, 2, 3, 4, 5, 6, 7,`
+  (2.4GHz channels, for parity with the original patch's intent — not
+  required for the 5GHz fix itself).
+
+**A third hunk "succeeded" via `patch`'s fuzzy matching but landed
+completely wrong** — worth internalizing as a general lesson, not just a
+one-off: `patch` reported success (with a large offset) for the hunk that
+was supposed to add a 2.4GHz-specific call to `ibss_mesh_select_40mhz()`
+right after the "Setup higher BW only for 5 GHz" check. Fuzzy context
+matching instead spliced it into a **totally unrelated function** ~600
+lines away (WPA key-suite-setup code, inside code equivalent to
+`wpa_supplicant_associate`), calling a function (`ibss_mesh_select_40mhz`) that
+doesn't even exist in this inlined 2.10 source, with variables
+(`mode`, `freq`, `obss_scan`, `is_6ghz`, `dfs_enabled`) out of scope at
+that point — this would not compile, and worse, doesn't just fail loudly:
+had it referenced only in-scope names it could have silently corrupted
+unrelated logic. **Caught by reading every hunk's actual landing spot
+after applying, not by trusting `patch`'s exit status** — the same
+standard this doc already held itself to in §5's build plan, now proven
+necessary in practice, not just in theory. Deleted the two bogus lines;
+confirmed the surrounding "Setup higher BW only for 5 GHz" gate
+(`if (mode->mode != HOSTAPD_MODE_IEEE80211A && !(ssid->noscan)) return;`,
+itself successfully patched in the right place) already achieves the same
+effect for 2.4GHz in this inlined structure, so nothing needed to replace
+the deleted lines.
+
+Also fully traced the one thing §3 flagged as unverified: `mesh.c`'s
+`if (conf->noscan) ssid->noscan = 1;` reads a `struct hostapd_config *conf`
+that mesh.c builds via `conf = hostapd_config_defaults();` — a generic,
+`ssid`-independent default struct. `conf->noscan` is therefore always `0`
+for a mesh interface; **this hunk is dead code**, confirmed, not
+"unverified." Harmless (compiles, never fires) and left in place — the
+real fix works entirely through `ssid->noscan` being set directly by the
+config-file parser (§3's `config.c`/`config_ssid.h` hunks), which happens
+before `wpa_supplicant_mesh_init()` ever runs.
+
+Verified every other hunk landed in its correct location by reading the
+actual diff context after applying (`config.c`, `config_ssid.h`,
+`mesh.c` all confirmed correct). `config_file.c`'s hunk (the one that
+needed `--fuzz=3`) landed in the right *function*
+(`wpa_config_write_network`) but at the very end, past
+`#ifdef CONFIG_HE_OVERRIDES`, rather than inside the `#ifdef CONFIG_MESH`
+block the original patch targeted. Left as-is: this function only
+serializes config back out for `wpa_cli save_config`, which this
+project's deployment (writing `wpa_supplicant.conf` directly from
+`radio-setup.sh`) never uses — cosmetically misplaced, functionally
+irrelevant here.
+
+### 8.3 Sysroot — what was actually needed, found by iterating real link/compile errors
+
+Built a sysroot at `/root/manet-wpa-noscan-build/sysroot/` by downloading
+these exact Trixie arm64 `.deb`s (from `dists/trixie/main/binary-arm64/
+Packages.xz`, matched by exact version) and `dpkg -x`-extracting each —
+**not** `apt`/`dpkg -i`, so the host's own package database is never
+touched:
+
+`libssl-dev` + `libssl3t64`, `libnl-3-dev` + `libnl-3-200`,
+`libnl-genl-3-dev` + `libnl-genl-3-200`, `libnl-route-3-dev` +
+`libnl-route-3-200` (needed because `CONFIG_DRIVER_NL80211` unconditionally
+sets `CONFIG_LIBNL3_ROUTE=y` in `src/drivers/drivers.mak` — easy to miss,
+only surfaces as a link error, not a `.config` grep), `libdbus-1-dev` +
+`libdbus-1-3` (needed because Debian's config enables
+`CONFIG_CTRL_IFACE_DBUS_NEW`, missed on the first `.config` read — see
+8.1), `libpcsclite-dev` + `libpcsclite1` (`CONFIG_PCSC=y`).
+
+Each missing piece was found by just running the build and reading the
+actual error, not by trying to enumerate dependencies up front — faster
+and more reliable than guessing:
+
+1. `Package dbus-1 was not found` / `config.c: fatal error: includes.h` —
+   two unrelated problems at once. The real bug: passing `CFLAGS=...` as a
+   `make` **command-line argument** creates a make "override" variable
+   that **completely replaces** the Makefile's own `CFLAGS += ...` lines
+   instead of adding to them — it clobbered the Makefile's own
+   `-I../src`/`-I../src/utils` includes entirely. Fixed by using
+   `EXTRA_CFLAGS` instead (the Makefile's own designated injection point,
+   `CFLAGS += $(EXTRA_CFLAGS)` at the top) and by exporting `LDFLAGS`
+   rather than passing it as a `make` argument, since environment
+   variables (unlike command-line args) can still be appended to by the
+   Makefile's `+=`.
+2. `pcsc_funcs.c: fatal error: winscard.h` — the Makefile hardcodes
+   `-I/usr/include/PCSC` (a bare host path, not sysroot-relative) when
+   `CONFIG_PCSC=y`; our sysroot's copy is invisible to that hardcoded
+   flag. Added `-I<sysroot>/usr/include/PCSC` to `EXTRA_CFLAGS` explicitly.
+3. `dbus/dbus_dict_helpers.c: fatal error: dbus/dbus.h` — the Makefile
+   gets dbus's cflags via `pkg-config --cflags dbus-1`, which was silently
+   returning **empty** (not erroring loudly in the make log) because
+   `dbus-1.pc` declares `Requires.private: libsystemd >= 209`, and
+   `pkg-config --cflags` (unlike `--libs`) refuses to emit anything at all
+   if a `Requires.private` package can't be found — confirmed by running
+   the exact `pkg-config` invocation by hand outside `make` and seeing
+   `exit=1` with the `Package libsystemd was not found` message.
+   `PKG_CONFIG_PATH`/`PKG_CONFIG_SYSROOT_DIR`/`PKG_CONFIG_LIBDIR` pointed
+   at the sysroot's own `pkgconfig/` dir (needed regardless, for
+   dbus-1.pc/libnl's `.pc` files' `libdir`/`includedir` to resolve inside
+   the sysroot instead of `/usr`) doesn't fix this by itself, since no
+   `libsystemd.pc` exists anywhere in a sysroot that deliberately has no
+   systemd package in it at all. Fixed with a **hand-written stub
+   `libsystemd.pc`** (empty `Cflags:`/`Libs:`, `Version: 300`) dropped into
+   the sysroot's `pkgconfig/` dir — legitimate, not a hack that needs
+   later cleanup: we only need to dynamically link against the real
+   `libdbus-1.so` (which already carries its own real `libsystemd`
+   dependency baked in from how Debian built it), we never call any
+   libsystemd symbol ourselves, so nothing about actually satisfying that
+   dependency for real is needed at *our* build time.
+4. Final link step: `ld` reported missing `libz.so.1`/`libzstd.so.1`
+   (transitive deps of `libcrypto.so.3`, which supports compression) and
+   `libsystemd.so.0` (transitive dep of the real `libdbus-1.so.3`) —
+   **correctly** missing, since this sysroot deliberately doesn't carry
+   zlib/zstd/systemd packages. Rather than fetching three more `.deb`s for
+   packages the sysroot doesn't otherwise need, added
+   `-Wl,--allow-shlib-undefined` to `LDFLAGS`: these are real transitive
+   shared-library-to-shared-library dependencies that the actual Trixie
+   target already satisfies (zlib1g/libzstd1/libsystemd0 are base-system
+   packages on any Debian install, definitely present on the Pi image)
+   — the linker doesn't need to verify them at build time, only the
+   target's runtime dynamic linker does, and it will.
+
+### 8.4 Result
+
+Build succeeded (`make -C wpa_supplicant wpa_supplicant`, exit 0).
+Verified, not just assumed:
+
+- `file`: `ELF 64-bit LSB pie executable, ARM aarch64 ... dynamically
+  linked, interpreter /lib/ld-linux-aarch64.so.1` — correct target arch.
+- `strings ... | grep -x noscan` — **present** (absent on the original
+  binary per the §5 gate check). Two occurrences (the config-key name
+  string itself, plus the write-back code path).
+- `readelf -d` `NEEDED` entries: `libnl-3.so.200`, `libnl-genl-3.so.200`,
+  `libnl-route-3.so.200`, `libssl.so.3`, `libcrypto.so.3`,
+  `libdbus-1.so.3`, `libpcsclite.so.1`, plus standard libc/libm — every
+  one of these exact sonames matches what a stock Trixie system already
+  has installed (confirmed by construction, since the sysroot was built
+  from Trixie's own packages) — **no extra runtime packages should be
+  needed on the actual nodes**, only the binary itself needs to land.
+
+Binary saved at `/root/manet-wpa-noscan-build/wpa_supplicant-noscan-arm64`
+(15.9MB, unstripped/with debug info — deliberately not stripped yet, in
+case the first hardware test needs debugging; strip before any real
+deployment). **Not yet run on real hardware or even on real arm64
+silicon of any kind** — this build environment cannot execute arm64
+binaries at all (see the QEMU/binfmt note at the top of this section), so
+"it built and links clean, with the right strings and the right library
+dependencies" is the strongest verification possible without a real
+node. Section 5's bench-test plan (multiple independent restarts on two
+real nodes, checking `iw dev wlan1 info` matches) is the next real
+verification step and hasn't happened yet.
+
+## 9. Hardware test — 2026-08-27, EUD3/EUD4, fix confirmed
+
+Deployed the §8 binary to the two nodes with a live 5GHz mesh link between
+them (EUD4 `192.168.1.183`, EUD3 `10.30.2.186` via a jump through EUD4 —
+mesh-only, not directly LAN-reachable). `node-manager` was stopped on both
+first, per §5's own warning that `reconcile5GHzWidth()` (15s tick) would
+otherwise fight a manual config test by re-adding/removing
+`disable_ht40`/`disable_vht` out from under it. Backed up the stock
+`/usr/sbin/wpa_supplicant` on both nodes before touching anything.
+
+**Deployment itself worked cleanly**: the binary ran with no missing-
+library errors on real Trixie hardware, confirming §8.4's static
+dependency analysis held in practice, not just on paper.
+
+**Test A — VHT80** (`noscan=1` + `max_oper_chwidth=1`, `mesh_5ghz_bw=80`):
+5 restarts × 2 nodes = **10/10 identical** — `channel 44 (5220 MHz),
+width: 80 MHz, center1: 5210 MHz` every single time, both sides. Mesh
+plink established, batman route active on wlan1 both directions. Real
+iperf3 (EUD3→EUD4, 10s): **374 Mbit/s sender / 373 Mbit/s receiver, 122
+retransmits.** Below the old nondeterministic-VHT80 baseline in `ACS.md`
+(505 Mbit/s, different session/RF conditions, one sample each side, not a
+controlled comparison) but far above the 144 Mbit/s 20MHz-only and 100
+Mbit/s mixed-width baselines documented there — and, unlike the 505
+Mbit/s number, this one came with a deterministic, repeatable channel
+pick behind it rather than a lucky restart.
+
+**Test B — HT40-only** (`noscan=1` + `disable_vht=1`, `mesh_5ghz_bw=80`
+so node-manager's reconciler wouldn't strip the lone `disable_vht`): 5
+restarts × 2 nodes = **10/10 identical** — `channel 44 (5220 MHz),
+width: 40 MHz, center1: 5230 MHz` every time. Mesh plink established,
+batman route active. This is the concrete, hardware-confirmed answer to
+§1's original question: 40MHz doesn't need the width-limiting workaround
+either once `noscan` is in place — same fix, same determinism, at
+whichever width is chosen. No throughput sample taken for this case.
+
+**Zero deviation across all 20 restarts, either test.** This is the
+strongest evidence so far that `obss_scan=0` doesn't just stop the scan
+but produces a genuinely deterministic, config-derived pick — the thing
+§3 flagged as unconfirmed is now confirmed.
+
+**Full revert verified, not just attempted**: original binary restored
+(md5-matched against the pre-test backup), both conf files' `network={}`
+blocks restored to the stock `disable_ht40=1`+`disable_vht=1` content,
+`mesh_5ghz_bw` reset to `20` in `/etc/mesh.conf` on both nodes,
+`wpa_supplicant@wlan1` restarted and confirmed back to `channel 44, width:
+20 MHz` on both. `node-manager` restarted on both (matching its prior
+running state), came back up clean, ACS re-elected `5220` within one
+cycle on both, `NRestarts=0` on the wpa_supplicant unit (confirms the
+reconciler found the restored config already correct and took no action),
+batman route back to the ~49-58 Mbit/s baseline consistent with 20MHz.
+Both nodes left exactly as found.
+
+**What this changes about the state of this doc**: the fix is no longer
+"a promising patch that builds clean" — it's hardware-confirmed to solve
+the actual symptom (two nodes landing on different primaries) for both
+40MHz and 80MHz, repeatably. What's left is entirely the §6 deployment
+question (which was never a technical unknown, just an undecided rollout
+shape) plus the follow-on work §6 already scoped: a `mesh_5ghz_bw=40`
+value, and landing the binary in the actual packaging/provisioning
+pipeline rather than a live SSH swap (this test's binary and config
+changes were fully reverted — nothing about this test is deployed
+anywhere persistent).
+
+### 9.1 Follow-up — VHT80 confirmed clean with ACS actually running
+
+§9 above was run with `node-manager` **stopped** on both nodes, so it
+answered "is the primary-channel pick deterministic" but not "does this
+coexist with ACS's own reconcile loop." Re-ran the VHT80 case
+(`noscan=1`+`max_oper_chwidth=1`, `mesh_5ghz_bw=80`) on the same two
+nodes with `node-manager`/ACS left running throughout, watching ~11
+minutes (~4 full 180s ACS cycles) rather than a single restart:
+
+- Both nodes landed on `channel 44 (5220 MHz), width: 80 MHz, center1:
+  5210 MHz` on the first restart and **never deviated** across 7 samples
+  taken every ~90s.
+- `NRestarts=0` on `wpa_supplicant@wlan1` on both nodes for the entire
+  window — no restart storm.
+- Every one of the 4 observed `[acs]` election cycles logged `elected
+  channel 5220`, matching live radio state throughout.
+- **`reconcile5GHzWidth` never logged a single line** — confirmed in
+  practice, not just by reading the code, that it correctly saw
+  `mesh_5ghz_bw=80` already meant no `disable_ht40`/`disable_vht` to add,
+  and never touches `noscan`/`max_oper_chwidth` at all.
+- Mesh plink `ESTAB` and the wlan1 batman route stayed active and stable
+  the entire window.
+
+Fully reverted afterward, same as §9 (binaries/configs md5-verified back
+to stock, `mesh_5ghz_bw=20`, `node-manager`/`acs=y` left exactly as
+found). **The HT40-only case still cannot be tested with ACS running** —
+unchanged from §6's existing gap: `reconcile5GHzWidth` manages
+`disable_ht40`/`disable_vht` as a pair keyed off `mesh_5ghz_bw`, and
+without a `mesh_5ghz_bw=40` value, leaving ACS on would strip a manually
+set `disable_vht=1` within one 15s tick. This is exactly the follow-on
+work already named in §6.
 
 ## Related docs
 

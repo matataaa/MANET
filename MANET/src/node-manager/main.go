@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -204,12 +205,33 @@ func rewriteFrequencyLine(confPath, targetFreq, label string) bool {
 	return true
 }
 
+// restartWpaSupplicant restarts wpa_supplicant@<iface> and gives it a fixed
+// settle window — the one restart mechanism both setIfaceFrequency's
+// election-driven/static-enforcement changes and the ACS self-heal's
+// corrective restart (acsVerifyAfterApply, acs_selfheal.go) use, so there's
+// exactly one place in this codebase issuing this systemctl call.
+func restartWpaSupplicant(iface string) {
+	svc := "wpa_supplicant@" + iface + ".service"
+	log.Printf("restarting %s", svc)
+	if err := exec.Command("systemctl", "restart", svc).Run(); err != nil {
+		log.Printf("restart %s: %v", svc, err)
+	}
+	time.Sleep(5 * time.Second)
+}
+
 // setIfaceFrequency rewrites the frequency and restarts wpa_supplicant for
 // iface — the thorough path, used by static-channel enforcement and ACS's
 // election-driven channel changes (both infrequent enough to afford a full
 // service restart + settle time). Tourguide's time-boxed lobby hop uses the
 // lighter rewriteFrequencyLine + wpa_cli reconfigure path instead — see
 // tourguide.go's hopFrequency.
+//
+// Returns whether the config actually changed. A false return means the
+// config already matched targetFreq, so nothing restarted from this call —
+// callers in both ACS and static mode follow this up with
+// acsVerifyAfterApply (acs_selfheal.go) specifically to cover the case
+// where the config matches but live radio state has silently diverged from
+// it (a failed join, a driver hiccup, a race during some other restart).
 func setIfaceFrequency(iface, confPath, targetFreq, label string) bool {
 	if iface == "" {
 		return false
@@ -219,16 +241,20 @@ func setIfaceFrequency(iface, confPath, targetFreq, label string) bool {
 	}
 
 	if radioIfaceEnabled(iface) {
-		svc := "wpa_supplicant@" + iface + ".service"
-		log.Printf("restarting %s", svc)
-		exec.Command("systemctl", "restart", svc).Run()
-		time.Sleep(5 * time.Second)
+		restartWpaSupplicant(iface)
 	}
 	return true
 }
 
+// ensureStaticIfaceChannel enforces staticFreq (static/acs=n mode) and, per
+// ACS.md point 6 of the verify-after-apply design, runs the same live-state
+// self-heal ACS mode gets via runACSTick — a static node's config can
+// silently diverge from live radio state exactly the same ways an ACS
+// node's can, and it would otherwise lose this coverage entirely just
+// because it never calls runACSTick.
 func ensureStaticIfaceChannel(iface, confPath, staticFreq, band string) {
-	setIfaceFrequency(iface, confPath, staticFreq, band)
+	configChanged := setIfaceFrequency(iface, confPath, staticFreq, band)
+	acsVerifyAfterApply(iface, staticFreq, band, configChanged)
 }
 
 // Static mode permanently parks the mesh on the same frequencies ACS uses
@@ -428,7 +454,13 @@ func runACSTick() {
 
 	lastACSCycle = time.Now()
 
-	report := performScan(iface24, iface5)
+	// Computed once per tick and reused for both scanning and electBand's
+	// candidate list below (rather than recomputed separately for each),
+	// so both operate against the exact same phy-filtered candidate set —
+	// see activeBand5Channels (scan.go) for why this is derived live.
+	candidates5 := activeBand5Channels(iface5)
+
+	report := performScan(iface24, iface5, candidates5)
 	writeChannelReport(report)
 
 	registry := readRegistry(registryFile)
@@ -452,26 +484,73 @@ func runACSTick() {
 
 	limp := false
 
+	// writeFreq24/writeFreq5 carry this cycle's "persist as last-elected"
+	// value for maybeWriteLastElectedFreq below, "" meaning "don't touch
+	// that band's persisted value this cycle". Populated per band only when
+	// quorum && !result.hold && result.winnerCh != 0 — see the write gate
+	// comments in each block below (ACS.md's cold-boot fix, blocking
+	// correction 2).
+	writeFreq24, writeFreq5 := "", ""
+
 	if iface24 != "" {
 		cur := getConfFreq(wpaConfPath(iface24))
-		result := electBand(reports, registry, band24Channels, cur, lobbyFreq24, "2.4GHz")
+		biasFreq := selectBiasFreq(cur, band24Channels, "2.4GHz")
+		result := electBand(reports, registry, band24Channels, cur, biasFreq, lobbyFreq24, "2.4GHz")
 		freq := result.freq
 		if !quorum {
 			freq = lobbyFreq24
 		}
-		setIfaceFrequency(iface24, wpaConfPath(iface24), freq, "2.4 GHz (ACS)")
+		// The self-heal check must run immediately here, between this call
+		// and maybeRunTourguide below — never moved to the end of the tick
+		// or into the 15s loop closure. maybeRunTourguide can hop this same
+		// radio off-channel for up to tourguideDwell (~12s); running the
+		// check any later would see that expected, temporary lobby hop and
+		// false-trigger a corrective restart on top of it. See ACS.md's
+		// validated design, point 2.
+		configChanged := setIfaceFrequency(iface24, wpaConfPath(iface24), freq, "2.4 GHz (ACS)")
+		acsVerifyAfterApply(iface24, freq, "2.4GHz", configChanged)
+		acsTrackHold(iface24, result, "2.4GHz")
 		limp = limp || result.limp
+		// Write gate: quorum must hold (a !quorum tick overrides freq to
+		// the lobby above regardless of what electBand picked, so
+		// result.winnerCh was never actually run as a data channel), the
+		// election must not have held (a hold's winnerCh is just the
+		// already-live frequency re-echoed, not a fresh election), and
+		// winnerCh must be nonzero (electBand's own lobby/limp fallback
+		// leaves it 0 — never persist a lobby frequency as "last known
+		// good").
+		if quorum && !result.hold && result.winnerCh != 0 {
+			writeFreq24 = strconv.Itoa(result.winnerCh)
+		}
 	}
 	if iface5 != "" {
 		cur := getConfFreq(wpaConfPath(iface5))
-		result := electBand(reports, registry, band5Channels, cur, lobbyFreq5, "5GHz")
+		biasFreq := selectBiasFreq(cur, candidates5, "5GHz")
+		result := electBand(reports, registry, candidates5, cur, biasFreq, lobbyFreq5, "5GHz")
 		freq := result.freq
 		if !quorum {
 			freq = lobbyFreq5
 		}
-		setIfaceFrequency(iface5, wpaConfPath(iface5), freq, "5 GHz (ACS)")
+		// Same ordering constraint as the 2.4GHz block above — must stay
+		// immediately after this setIfaceFrequency call.
+		configChanged := setIfaceFrequency(iface5, wpaConfPath(iface5), freq, "5 GHz (ACS)")
+		acsVerifyAfterApply(iface5, freq, "5GHz", configChanged)
+		acsTrackHold(iface5, result, "5GHz")
 		limp = limp || result.limp
+		// Same write gate as the 2.4GHz block above.
+		if quorum && !result.hold && result.winnerCh != 0 {
+			writeFreq5 = strconv.Itoa(result.winnerCh)
+		}
 	}
+
+	// Placement is deliberate: after both bands' election/apply blocks,
+	// before maybeRunTourguide below — tourguide's hopFrequency/
+	// applyPartitionMerge paths call rewriteFrequencyLine/setIfaceFrequency
+	// directly and never produce an electionResult, so they structurally
+	// can't reach this write; keeping the call here (not inside the
+	// `if quorum` tourguide block) keeps that insulation obvious rather
+	// than incidental.
+	maybeWriteLastElectedFreq(writeFreq24, writeFreq5)
 
 	setLimpMode(limp)
 

@@ -221,7 +221,15 @@ func selectTourguideRadio(iface24, iface5, lastRadio string) string {
 func hopFrequency(iface, confPath, targetFreq string, is24, toLobby bool) {
 	rewriteFrequencyLine(confPath, targetFreq, "tourguide")
 	exec.Command("wpa_cli", "-i", iface, "reconfigure").Run()
-	waitForFrequency(iface, targetFreq)
+	if !waitForFrequency(iface, targetFreq) {
+		// Not escalated further here — a radio stranded off its intended
+		// frequency after a failed hop (lobby-bound or the return-to-data
+		// hop) is exactly the live-vs-elected divergence
+		// acsVerifyAfterApply already catches on the next ACS cycle;
+		// building a second escalation path here would be redundant (see
+		// ACS.md's validated design, point 2).
+		log.Printf("[acs] tourguide: %s did not reach %s MHz within the poll window", iface, targetFreq)
+	}
 	if toLobby {
 		setLegacyBitrate(iface, is24)
 	} else {
@@ -229,15 +237,26 @@ func hopFrequency(iface, confPath, targetFreq string, is24, toLobby bool) {
 	}
 }
 
-func waitForFrequency(iface, targetFreq string) {
-	needle := targetFreq + " MHz"
+// waitForFrequency polls iface (via readIfaceFreq, acs_selfheal.go) until it
+// reports targetFreq or the poll budget is exhausted. A thin retry loop over
+// that single-shot reader rather than an independent poller — this used to
+// do its own `strings.Contains(out, targetFreq+" MHz")` against the full
+// `iw dev info` output, which also matches unrelated lines like
+// "width: 80 MHz" or "center1: 5210 MHz" and could produce a false pass if a
+// future candidate frequency happened to collide with one of those values.
+// Returns whether targetFreq was actually observed, so a caller that cares
+// can tell a genuine join from a timeout — hopFrequency below doesn't act on
+// this today (a failed hop is left to the next ACS cycle's own
+// verify-after-apply self-heal to catch, see ACS.md, rather than building a
+// second escalation path here), but logs on timeout for visibility.
+func waitForFrequency(iface, targetFreq string) bool {
 	for i := 0; i < 20; i++ {
-		out, _ := exec.Command("iw", "dev", iface, "info").Output()
-		if strings.Contains(string(out), needle) {
-			return
+		if freq, ok := readIfaceFreq(iface); ok && freq == targetFreq {
+			return true
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+	return false
 }
 
 type foreignPartition struct {

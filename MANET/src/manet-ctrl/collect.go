@@ -788,6 +788,27 @@ func getInterfaces() []Iface {
 				iface.Health = "warn"
 				iface.Faults = append(iface.Faults, "No wpa_supplicant")
 			}
+			// Surface node-manager's ACS verify-after-apply self-heal
+			// markers (node-manager/acs_selfheal.go) here rather than
+			// building a separate mechanism -- this is the same
+			// "wpa_supplicant is running but never joined its mesh
+			// group" alert gap docs/ACS.md already flags elsewhere.
+			// Independent of (not else-if with) the checks above: a
+			// live-frequency divergence or a persistent no-scan-data
+			// hold can both be true even while the interface is UP and
+			// active in batman-adv.
+			if fault := acsDivergenceFault(name); fault != "" {
+				if iface.Health == "ok" {
+					iface.Health = "warn"
+				}
+				iface.Faults = append(iface.Faults, fault)
+			}
+			if fault := acsHoldFault(name); fault != "" {
+				if iface.Health == "ok" {
+					iface.Health = "warn"
+				}
+				iface.Faults = append(iface.Faults, fault)
+			}
 		case strings.HasPrefix(name, "end") || strings.HasPrefix(name, "eth") ||
 			strings.HasPrefix(name, "enp") || strings.HasPrefix(name, "ens"):
 			hasDefault := false
@@ -843,6 +864,41 @@ func isUnitRestarting(unit string) bool {
 	out, _ := runCmdStdout(2*time.Second, "systemctl", "show", "-p", "ActiveState", "--value", unit+".service")
 	s := strings.TrimSpace(out)
 	return s == "activating" || s == "reloading" || s == "deactivating"
+}
+
+// acsDivergenceFault reads node-manager's ACS verify-after-apply marker for
+// iface (acs_selfheal.go's writeAcsDivergence, /var/run/mesh_acs_divergence_
+// <iface>), if present, and formats it as a UI-facing fault string. The two
+// processes are separate Go modules/binaries (no shared package), so the
+// path and KEY=value shape are kept in sync by convention/naming, not by
+// import — see that file's comments for the authoritative format.
+func acsDivergenceFault(iface string) string {
+	kv := loadKVFile("/var/run/mesh_acs_divergence_" + iface)
+	target := kv["TARGET_FREQ"]
+	if target == "" {
+		return ""
+	}
+	actual := kv["ACTUAL_FREQ"]
+	if actual == "" {
+		actual = "none"
+	}
+	if actual == "none" {
+		return fmt.Sprintf("ACS: no live channel (radio never joined, target %s MHz)", target)
+	}
+	return fmt.Sprintf("ACS: live freq %s MHz != target %s MHz", actual, target)
+}
+
+// acsHoldFault reads node-manager's persistent-hold marker for iface
+// (acs_selfheal.go's acsTrackHold, /var/run/mesh_acs_divergence_<iface>
+// _hold) — a distinct condition from acsDivergenceFault above (no scan data
+// at election time, vs. a live-vs-elected frequency mismatch after a
+// restart), so a separate marker file, checked independently.
+func acsHoldFault(iface string) string {
+	kv := loadKVFile("/var/run/mesh_acs_divergence_" + iface + "_hold")
+	if kv["REASON"] == "" {
+		return ""
+	}
+	return fmt.Sprintf("ACS: no scan data for %s consecutive cycles, holding %s MHz", kv["CONSEC_HOLD"], kv["HELD_FREQ"])
 }
 
 func parseIWDev() map[string]iwDev {
