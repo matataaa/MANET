@@ -809,6 +809,17 @@ func getInterfaces() []Iface {
 				}
 				iface.Faults = append(iface.Faults, fault)
 			}
+			// Fleet-rollout visibility for the patched wpa_supplicant
+			// (docs/wpa-supplicant-mesh-noscan.md) -- only relevant to a
+			// 5GHz mesh radio (HT40/VHT80 noscan fix; 2.4GHz and HaLow's
+			// separate wpa_supplicant_s1g binary don't use it). Deliberately
+			// NOT escalating iface.Health for absence: it's expected/normal
+			// for a node to not have this yet mid-rollout, this is purely
+			// an info signal for `mesh radio-info`/`mesh status`, not a
+			// fault.
+			if fault := wpaSupplicantMeshFault(iface.FreqMHz); fault != "" {
+				iface.Faults = append(iface.Faults, fault)
+			}
 		case strings.HasPrefix(name, "end") || strings.HasPrefix(name, "eth") ||
 			strings.HasPrefix(name, "enp") || strings.HasPrefix(name, "ens"):
 			hasDefault := false
@@ -899,6 +910,37 @@ func acsHoldFault(iface string) string {
 		return ""
 	}
 	return fmt.Sprintf("ACS: no scan data for %s consecutive cycles, holding %s MHz", kv["CONSEC_HOLD"], kv["HELD_FREQ"])
+}
+
+// patchedWpaSupplicantPath is this project's own build of wpa_supplicant
+// with the mesh `noscan` patch (MANET/src/wpa-supplicant-mesh/,
+// docs/wpa-supplicant-mesh-noscan.md), installed alongside — never over —
+// the system wpa_supplicant. node-manager/main.go checks this exact same
+// path for its own capability gate (noscanCapable); kept in sync by
+// convention/naming, not by import (separate Go modules/binaries, no
+// shared package).
+const patchedWpaSupplicantPath = "/usr/sbin/wpa_supplicant_mesh"
+
+// wpaSupplicantMeshFault reports when the patched wpa_supplicant (noscan)
+// is missing on a node with a 5GHz mesh radio (freqMHz >= 5000), as an info
+// string for collectIfaces' Faults list -- surfaces a partial fleet rollout
+// during the transition to the packaged binary. Deliberately silent (empty
+// string) once the binary is present: this codebase's convention elsewhere
+// is "empty Faults = healthy", and a permanent "installed: yes" fixture on
+// every healthy node would just be noise once the rollout completes, not a
+// useful ongoing status. 2.4GHz mesh and HaLow (its own separate
+// wpa_supplicant_s1g binary) don't use this binary at all, so freqMHz ""
+// or below 5000 (including unparseable) is silently not-applicable too.
+func wpaSupplicantMeshFault(freqMHz string) string {
+	freq, err := strconv.Atoi(freqMHz)
+	if err != nil || freq < 5000 {
+		return ""
+	}
+	info, statErr := os.Stat(patchedWpaSupplicantPath)
+	if statErr != nil || info.IsDir() || info.Mode()&0111 == 0 {
+		return "Patched wpa_supplicant (noscan) not installed -- mesh_5ghz_bw=40 unavailable, 80 not deterministic"
+	}
+	return ""
 }
 
 func parseIWDev() map[string]iwDev {

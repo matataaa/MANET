@@ -85,6 +85,15 @@ done
 # mesh-voice needs CGO (opus/miniaudio) — use pre-built binary
 install_file 0755 "$SRC/mesh-voice/bin/mesh-voice-linux-arm64" "$STAGE/usr/local/bin/mesh-voice"
 
+# Patched wpa_supplicant (mesh noscan fix) — this project's own build
+# artifact, not a vendor-supplied binary, so it lives under $SRC (see
+# src/wpa-supplicant-mesh/README.md), not $BINARIES. Installed alongside
+# (not over) the system wpa_supplicant. The systemd drop-in that wires
+# wpa_supplicant@<iface> to this binary is generated at runtime by
+# node-manager (ensureNoscanDropIn), not shipped from this rootfs tree --
+# ships nothing else here on purpose.
+install_file 0755 "$SRC/wpa-supplicant-mesh/bin/wpa_supplicant_mesh-linux-arm64" "$STAGE/usr/sbin/wpa_supplicant_mesh"
+
 # ---------------------------------------------------------------------------
 #  Applets — copy applet binaries into their applet dirs
 # ---------------------------------------------------------------------------

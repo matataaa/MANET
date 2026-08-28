@@ -400,6 +400,35 @@ REG=$REGULATORY_DOMAIN
 MESH_5GHZ_BW=$(grep "^mesh_5ghz_bw=" /etc/mesh.conf 2>/dev/null | cut -d'=' -f2)
 MESH_5GHZ_BW=${MESH_5GHZ_BW:-20}
 
+# NOSCAN_CAPABLE gates every write of noscan=1 (or any other mesh-noscan-
+# patch key) below — the ONLY signal permitted to do so, per
+# docs/wpa-supplicant-mesh-noscan.md. The stock system wpa_supplicant fails
+# to parse an entire network={} block on an unrecognized key and exits
+# (status=255), dropping that radio out of the mesh entirely — never write
+# these keys without this check passing first.
+NOSCAN_CAPABLE=0
+[[ -x /usr/sbin/wpa_supplicant_mesh ]] && NOSCAN_CAPABLE=1
+
+# Point every wpa_supplicant@<iface> instance at this project's own patched
+# binary (see MANET/src/wpa-supplicant-mesh/) instead of the system-package
+# one -- generated here, gated on NOSCAN_CAPABLE, rather than shipped as a
+# static rootfs file: a static drop-in with no fallback pointed ExecStart at
+# a binary that isn't present on every platform this rootfs overlay ships to
+# (confirmed: the x86 gateway tarball carries this same /etc tree but never
+# installs the arm64-only binary), which would take down BOTH mesh radios'
+# wpa_supplicant instances unconditionally, a worse failure than anything
+# noscan=1 itself can cause. Binary presence is the single source of truth
+# for both this file and every noscan=1 write below -- keep it that way.
+if [[ "$NOSCAN_CAPABLE" -eq 1 ]]; then
+    cat << EOF > /etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/wpa_supplicant_mesh -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I
+EOF
+else
+    rm -f /etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf
+fi
+
 echo REGDOMAIN=$REGULATORY_DOMAIN > /etc/default/crda
 
 uses_eu_halow_region() {
@@ -1023,11 +1052,43 @@ for WLAN in $(cat /var/lib/mesh_if); do
     # mesh" for why: wpa_supplicant's own coex-scan-driven primary/
     # secondary reselection has no config-level fix for mesh mode, so
     # VHT80 links can silently mismatch primary channel between nodes.
+    #
+    # mesh_5ghz_bw=40/80 use the patched wpa_supplicant's noscan=1 instead
+    # (docs/wpa-supplicant-mesh-noscan.md) — the actual fix for that
+    # nondeterminism — but ONLY when NOSCAN_CAPABLE=1. Without the patched
+    # binary, 40 falls back to today's 20MHz-only behavior (never "40
+    # without noscan" — that would reintroduce the identical HT40 coex-scan
+    # nondeterminism under a new config value), and 80 keeps today's
+    # existing, already-documented, already-UI-warned-about VHT80
+    # nondeterminism unchanged. 2.4GHz (FREQ < 5000) never gets any of
+    # these keys.
     WIDTH_LINES=""
-    if [[ "$FREQ" -ge 5000 && "$MESH_5GHZ_BW" != "80" ]]; then
-        WIDTH_LINES="    disable_ht40=1
+    if [[ "$FREQ" -ge 5000 ]]; then
+        case "$MESH_5GHZ_BW" in
+            40)
+                if [[ "$NOSCAN_CAPABLE" -eq 1 ]]; then
+                    WIDTH_LINES="    noscan=1
     disable_vht=1
 "
+                else
+                    WIDTH_LINES="    disable_ht40=1
+    disable_vht=1
+"
+                fi
+                ;;
+            80)
+                if [[ "$NOSCAN_CAPABLE" -eq 1 ]]; then
+                    WIDTH_LINES="    noscan=1
+    max_oper_chwidth=1
+"
+                fi
+                ;;
+            *)
+                WIDTH_LINES="    disable_ht40=1
+    disable_vht=1
+"
+                ;;
+        esac
     fi
 
 cat <<-EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf
