@@ -905,8 +905,8 @@ var saveableKeys = map[string]bool{
 	"node_hostname": true, "eud": true, "lan_ap_ssid": true, "lan_ap_key": true,
 	"lan_ap_channel": true, "lan_ap_bw": true,
 	"max_euds_per_node": true, "mesh_ssid": true, "mesh_key": true,
-	"ipv4_network": true, "regulatory_domain": true, "halow_regulatory_domain": true, "halow_bw": true, "halow_channel": true, "mesh_5ghz_bw": true,
-	"acs": true, "mesh_5ghz_channel": true,
+	"ipv4_network": true, "regulatory_domain": true, "halow_regulatory_domain": true, "halow_bw": true, "halow_channel": true, "mesh_5ghz_bw": true, "mesh_5ghz_channel": true,
+	"acs": true,
 	"battery_monitor": true, "admin_password": true, "require_auth": true,
 	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
 	"multicast_mode": true,
@@ -940,9 +940,9 @@ var keyDescriptions = map[string]string{
 	"halow_regulatory_domain": "HaLow-specific regulatory domain override, independent of the WiFi regulatory_domain (e.g. MM8108 hardware can run HaLow on a different domain than the 2.4/5GHz radios). Empty = inherit regulatory_domain.",
 	"halow_bw":                "802.11ah HaLow channel bandwidth — EU domain supports 1MHz only; changing regulatory domain/bandwidth changes the on-air channel, so roll out to all HaLow nodes together, not one at a time",
 	"halow_channel":           "802.11ah HaLow channel (empty = Auto, domain/bandwidth default)",
-	"mesh_5ghz_bw":            "5GHz mesh channel width: 20 (deterministic peering, default) or 80 (higher throughput, can mismatch primary channel between nodes) — fleet-wide, never mixed per node",
-	"acs":                     "5GHz/2.4GHz mesh channel selection mode: n (default) pins static channels, y runs automatic channel selection/election",
-	"mesh_5ghz_channel":       "Explicit 5GHz mesh channel used when acs=n (empty = default 36/5180MHz). Ignored when acs=y — ACS elects its own channel.",
+	"mesh_5ghz_bw":            "5GHz mesh channel width: 20 (deterministic peering, default), 40 or 80 (higher throughput — 40 requires the patched wpa_supplicant and silently falls back to 20 without it; 80 without the patch can mismatch primary channel between nodes) — fleet-wide, never mixed per node",
+	"mesh_5ghz_channel":       "5GHz mesh channel number to pin the static-mode (acs=n) data channel to — valid: 36, 40, 44, 48, 149, 153, 157, 161, 165 (last five US-only, illegal under ETSI); unrecognized/absent falls back to the default lobby channel; has no effect when acs=y",
+	"acs":                     "5GHz/2.4GHz mesh channel selection mode: n (default) pins static channels, y runs automatic channel selection/election — live, applies within one 15s node-manager tick, no restart needed",
 	"battery_monitor":         "Enable Waveshare UPS HAT battery monitoring",
 	"admin_password":          "Password gating write/control API access when require_auth is set",
 	"require_auth":            "Require admin_password for control/config endpoints",
@@ -1050,6 +1050,12 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		}
 		domain := resolveHalowDomain(effective)
 		if err := validateHalowChannel(domain, effectiveHalowBW(effective), effective["halow_channel"]); err != nil {
+			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": err.Error()})
+			return
+		}
+	}
+	if ch, ok := updates["mesh_5ghz_channel"]; ok && ch != "" {
+		if err := validateMesh5GHzChannel(ch); err != nil {
 			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": err.Error()})
 			return
 		}
@@ -2105,6 +2111,32 @@ func halowChannelCandidates(domain, bw string) []int {
 		return nil
 	}
 	return bwTable[bw]
+}
+
+// mesh5GHzChannelCandidates are the channel numbers node-manager's
+// ensureStaticChannels will actually accept for mesh_5ghz_channel (36 is
+// lobbyFreq5/5180MHz; the rest are node-manager/scan.go's band5Channels,
+// 5200/5220/5240/5745/5765/5785/5805/5825 MHz) -- kept in sync with that
+// list by convention, not by import (separate Go modules/binaries). Five of
+// these (149/153/157/161/165, UNII-3) are US-only and illegal under ETSI;
+// this validator does not know the node's regulatory_domain (that lives in
+// node-manager/radio-setup.sh, not here) so it can't reject a UNII-3 pin on
+// a EU node -- it only rejects values that are never valid on any domain.
+var mesh5GHzChannelCandidates = map[string]bool{
+	"36": true, "40": true, "44": true, "48": true,
+	"149": true, "153": true, "157": true, "161": true, "165": true,
+}
+
+// validateMesh5GHzChannel rejects a mesh_5ghz_channel save outright rather
+// than silently persisting a value node-manager's desiredMesh5GHzChannel
+// would just fall back to the lobby channel on anyway -- matching
+// validateHalowChannel's own stated principle just below: an invalid value
+// must reject the whole save, not be silently coerced or ignored.
+func validateMesh5GHzChannel(channel string) error {
+	if !mesh5GHzChannelCandidates[channel] {
+		return fmt.Errorf("mesh_5ghz_channel %q is not a valid 5GHz mesh channel (valid: 36, 40, 44, 48, 149, 153, 157, 161, 165 -- the last five are US-only, illegal under ETSI)", channel)
+	}
+	return nil
 }
 
 // validateHalowChannel checks whether an explicit (or "Auto"/empty)

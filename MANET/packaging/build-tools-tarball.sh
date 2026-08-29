@@ -78,6 +78,13 @@ done
 # mesh-voice needs CGO — use pre-built binary
 install_file 0755 "$SRC/mesh-voice/bin/mesh-voice-linux-arm64" "$STAGE/usr/local/bin/mesh-voice"
 
+# Patched wpa_supplicant (mesh noscan fix) — this project's own build
+# artifact, not a vendor-supplied binary, so it lives under $SRC (see
+# src/wpa-supplicant-mesh/README.md), not $BINARIES. This is the OTA/
+# auto-update path: an existing fleet only picks this up via this tarball,
+# not a fresh provision — do not drop this line.
+install_file 0755 "$SRC/wpa-supplicant-mesh/bin/wpa_supplicant_mesh-linux-arm64" "$STAGE/usr/sbin/wpa_supplicant_mesh"
+
 # Pre-built arm64 binaries (alfred, batctl, wpa_supplicant_s1g, etc.) — same
 # set and destinations as build-rpi5-tarball.sh. These are git-tracked in
 # binaries_arm64/, so a software release should carry them same as any Go

@@ -151,6 +151,7 @@ func peerChannelVotes(registry map[string]map[string]string, candidates []int, b
 type electionResult struct {
 	freq     string
 	limp     bool
+	hold     bool
 	winnerCh int
 	score    float64
 }
@@ -173,9 +174,22 @@ type electionResult struct {
 // Only when nobody has voted for anything yet (true cold start — a lone
 // or freshly-booting node with no gossiped peer channel data) does the
 // election fall back to raw noise score with a small incumbentBiasDB
-// tiebreak, matching the original behavior for that case.
-func electBand(reports map[string]ChannelReport, registry map[string]map[string]string, candidates []int, currentFreq, lobbyFreq, band string) electionResult {
+// tiebreak toward biasFreq, matching the original behavior for that case.
+//
+// biasFreq is deliberately a separate parameter from currentFreq, not a
+// synonym for it: currentFreq keeps its existing job of being the "no
+// change" value the hold branch returns (which runACSTick then applies via
+// setIfaceFrequency) — it must always reflect the live conf, never a
+// remembered value, or a cold boot with a failed first scan would rewrite
+// the conf to a stale frequency and restart wpa_supplicant before any peer
+// could even find it. biasFreq only ever feeds this comparator. See
+// runACSTick's selectBiasFreq (acs_channel_persist.go) for how the two
+// diverge: on a lobby-reset cold start, currentFreq is still the (useless,
+// non-candidate) lobby frequency, while biasFreq can be the persisted
+// last-elected channel instead.
+func electBand(reports map[string]ChannelReport, registry map[string]map[string]string, candidates []int, currentFreq, biasFreq, lobbyFreq, band string) electionResult {
 	currentCh, _ := strconv.Atoi(currentFreq)
+	biasCh, _ := strconv.Atoi(biasFreq)
 	votes := peerChannelVotes(registry, candidates, band)
 	totalVotes := 0
 	for _, v := range votes {
@@ -188,12 +202,14 @@ func electBand(reports map[string]ChannelReport, registry map[string]map[string]
 		ch       int
 	}
 	var scored []candidate
+	hadAnyData := false
 
 	for _, ch := range candidates {
 		stats, ok := aggregateChannelReports(reports, ch)
 		if !ok {
 			continue
 		}
+		hadAnyData = true
 		if stats.maxNoise > noiseDisqualifyDBM {
 			log.Printf("[acs] %s: channel %d disqualified (max_noise %ddBm)", band, ch, stats.maxNoise)
 			continue
@@ -203,6 +219,22 @@ func electBand(reports map[string]ChannelReport, registry map[string]map[string]
 	}
 
 	if len(scored) == 0 {
+		if !hadAnyData {
+			// No candidate had ANY reading this cycle — an empty/filtered
+			// candidate list (e.g. activeBand5Channels found nothing usable
+			// on this phy right now, scan.go) or a failed/cold-boot scan
+			// with no survey data yet. This is a data outage, not "every
+			// candidate is too noisy" — falling back to lobby+limp here
+			// would be a mesh-wide disruption (limp throttles every radio
+			// in the mesh, setIfaceFrequency restarts wpa_supplicant)
+			// triggered by a transient/missing-data condition rather than
+			// a real RF problem, and the lobby frequency itself can be
+			// illegal under some regulatory domains (WORLD/00 makes
+			// 5170-5250 NO-IR, which includes lobbyFreq5's 5180). Hold the
+			// current channel instead and let the next cycle try again.
+			log.Printf("[acs] %s: no scan data for any candidate — holding current channel", band)
+			return electionResult{freq: currentFreq, winnerCh: currentCh, limp: false, hold: true}
+		}
 		log.Printf("[acs] %s: all channels disqualified, falling back to lobby", band)
 		return electionResult{freq: lobbyFreq, limp: true}
 	}
@@ -218,10 +250,10 @@ func electBand(reports map[string]ChannelReport, registry map[string]map[string]
 			return scored[i].ch < scored[j].ch
 		}
 		iScore, jScore := scored[i].rawScore, scored[j].rawScore
-		if scored[i].ch == currentCh {
+		if scored[i].ch == biasCh {
 			iScore -= incumbentBiasDB
 		}
-		if scored[j].ch == currentCh {
+		if scored[j].ch == biasCh {
 			jScore -= incumbentBiasDB
 		}
 		if iScore != jScore {

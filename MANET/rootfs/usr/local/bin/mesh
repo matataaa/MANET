@@ -34,9 +34,9 @@ Config keys:
   regulatory_domain     WiFi regulatory domain (US, EU, JP, AU)
   halow_bw              HaLow bandwidth (1MHz, 2MHz, 4MHz, 8MHz)
   halow_channel         HaLow channel for the current domain/bandwidth (blank = Auto)
-  mesh_5ghz_bw          5GHz mesh channel width: 20 (deterministic, default) or 80 (higher throughput, fleet-wide only)
-  acs                   5GHz/2.4GHz channel mode: n (default, static/pinned) or y (automatic election)
-  mesh_5ghz_channel     Pinned 5GHz channel used when acs=n (blank = default 36). Ignored when acs=y.
+  acs                   5GHz/2.4GHz channel mode: n (default, static/pinned) or y (automatic election); live, applies within one 15s node-manager tick, no restart needed
+  mesh_5ghz_bw          5GHz mesh channel width: 20 (deterministic, default), 40 or 80 (higher throughput -- 40 needs the patched wpa_supplicant, falls back to 20 without it; fleet-wide only)
+  mesh_5ghz_channel     5GHz channel number to pin the static-mode (acs=n) mesh data channel to: 36, 40, 44, 48, 149, 153, 157, 161, 165 (last five US-only, illegal under ETSI; blank = default lobby channel)
   multicast_mode        Multicast delivery: flood (default) or optimized
   eud                   EUD mode: wired, wireless, both, auto, none
   lan_ap_ssid           WiFi AP SSID

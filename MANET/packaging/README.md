@@ -11,6 +11,10 @@ Universal files come from this repository:
 - `MANET/cmd/manet-ctrl/manet-ctrl` -> `/usr/local/bin/manet-ctrl`
 - `MANET/www` -> `/usr/local/share/manet/www`
 - `MANET/binaries_arm64` -> `/usr/sbin` + `/usr/local/bin`
+- `MANET/src/wpa-supplicant-mesh/bin/wpa_supplicant_mesh-linux-arm64` ->
+  `/usr/sbin/wpa_supplicant_mesh` — this project's own build artifact (the
+  mesh `noscan` patch), not a `binaries_arm64` vendor binary; see that
+  directory's `README.md`
 - `MANET/systemd` -> `/etc/systemd/system`
 - `MANET/systemd-network` -> `/etc/systemd/network`
 - `MANET/udev/rules.d` -> `/etc/udev/rules.d`

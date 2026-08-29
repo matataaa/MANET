@@ -35,6 +35,13 @@ func main() {
 	log.SetPrefix("[node-manager] ")
 	log.Printf("starting (version %s)", Version)
 
+	// Must run before any width/static-channel reconcile below, at every
+	// startup — this is what closes the OTA gap noscanCapable's own comment
+	// describes: an OTA lands the patched binary but never runs
+	// radio-setup.sh (first-provision only), so nothing else regenerates
+	// the systemd drop-in wpa_supplicant@ actually needs to run it.
+	ensureNoscanDropIn()
+
 	acsEnabled := loadConf("acs") == "y"
 	if acsEnabled {
 		log.Println("ACS (automatic channel selection) enabled")
@@ -53,10 +60,15 @@ func main() {
 
 	loop := func() {
 		radioStateSync()
+		ensureNoscanDropIn()
 		if _, iface5 := meshIfaces(); iface5 != "" {
 			reconcile5GHzWidth(iface5)
 		}
-		if acsEnabled {
+		// Re-read acs from mesh.conf every tick rather than reusing the
+		// startup snapshot above — acs is now a live-settable key (Config
+		// UI, Fleet management, `mesh` CLI), and a cached bool here would
+		// mean toggling it has zero effect until node-manager restarts.
+		if loadConf("acs") == "y" {
 			runACSTick()
 		} else {
 			ensureStaticChannels()
@@ -205,12 +217,33 @@ func rewriteFrequencyLine(confPath, targetFreq, label string) bool {
 	return true
 }
 
+// restartWpaSupplicant restarts wpa_supplicant@<iface> and gives it a fixed
+// settle window — the one restart mechanism both setIfaceFrequency's
+// election-driven/static-enforcement changes and the ACS self-heal's
+// corrective restart (acsVerifyAfterApply, acs_selfheal.go) use, so there's
+// exactly one place in this codebase issuing this systemctl call.
+func restartWpaSupplicant(iface string) {
+	svc := "wpa_supplicant@" + iface + ".service"
+	log.Printf("restarting %s", svc)
+	if err := exec.Command("systemctl", "restart", svc).Run(); err != nil {
+		log.Printf("restart %s: %v", svc, err)
+	}
+	time.Sleep(5 * time.Second)
+}
+
 // setIfaceFrequency rewrites the frequency and restarts wpa_supplicant for
 // iface — the thorough path, used by static-channel enforcement and ACS's
 // election-driven channel changes (both infrequent enough to afford a full
 // service restart + settle time). Tourguide's time-boxed lobby hop uses the
 // lighter rewriteFrequencyLine + wpa_cli reconfigure path instead — see
 // tourguide.go's hopFrequency.
+//
+// Returns whether the config actually changed. A false return means the
+// config already matched targetFreq, so nothing restarted from this call —
+// callers in both ACS and static mode follow this up with
+// acsVerifyAfterApply (acs_selfheal.go) specifically to cover the case
+// where the config matches but live radio state has silently diverged from
+// it (a failed join, a driver hiccup, a race during some other restart).
 func setIfaceFrequency(iface, confPath, targetFreq, label string) bool {
 	if iface == "" {
 		return false
@@ -220,59 +253,97 @@ func setIfaceFrequency(iface, confPath, targetFreq, label string) bool {
 	}
 
 	if radioIfaceEnabled(iface) {
-		svc := "wpa_supplicant@" + iface + ".service"
-		log.Printf("restarting %s", svc)
-		exec.Command("systemctl", "restart", svc).Run()
-		time.Sleep(5 * time.Second)
+		restartWpaSupplicant(iface)
 	}
 	return true
 }
 
+// ensureStaticIfaceChannel enforces staticFreq (static/acs=n mode) and, per
+// ACS.md point 6 of the verify-after-apply design, runs the same live-state
+// self-heal ACS mode gets via runACSTick — a static node's config can
+// silently diverge from live radio state exactly the same ways an ACS
+// node's can, and it would otherwise lose this coverage entirely just
+// because it never calls runACSTick.
 func ensureStaticIfaceChannel(iface, confPath, staticFreq, band string) {
-	setIfaceFrequency(iface, confPath, staticFreq, band)
+	configChanged := setIfaceFrequency(iface, confPath, staticFreq, band)
+	acsVerifyAfterApply(iface, staticFreq, band, configChanged)
 }
 
 // Static mode permanently parks the mesh on the same frequencies ACS uses
 // as its lobby/rendezvous pair (lobbyFreq24/lobbyFreq5, channel_election.go)
 // — there's only one "the fixed, always-known channel" concept in this
-// codebase, not two, so both modes share the same constants. The 5GHz side
-// can be overridden via mesh_5ghz_channel (see desiredStatic5GHzFreq).
+// codebase, not two, so both modes share the same constants — except the
+// 5GHz side can now be pinned to an operator-chosen channel via
+// mesh_5ghz_channel; see desiredMesh5GHzChannel.
 func ensureStaticChannels() {
 	iface24, iface5 := meshIfaces()
 	if iface24 != "" {
 		ensureStaticIfaceChannel(iface24, wpaConfPath(iface24), lobbyFreq24, "2.4 GHz")
 	}
 	if iface5 != "" {
-		ensureStaticIfaceChannel(iface5, wpaConfPath(iface5), desiredStatic5GHzFreq(), "5 GHz")
+		ensureStaticIfaceChannel(iface5, wpaConfPath(iface5), desiredMesh5GHzChannel(), "5 GHz")
 	}
 }
 
-// mesh5GHzChannelKey lets static mode (acs=n) pin the 5GHz mesh to one of
-// the same candidate channels ACS elects between, instead of always parking
-// on the hardcoded lobby channel (36/5180MHz). Ignored entirely under ACS
-// mode, which elects its own channel via channel_election.go.
+// mesh5GHzChannelKey is the fleet-wide mesh.conf key pinning the 5GHz
+// static-mode (acs=n) data channel to a specific channel *number* —
+// matching the existing lan_ap_channel/halow_channel convention (a
+// human-readable channel number, not MHz), not a fleet-wide toggle like
+// mesh5GHzWidthKey.
 const mesh5GHzChannelKey = "mesh_5ghz_channel"
 
-// desiredStatic5GHzFreq reads mesh_5ghz_channel from mesh.conf as a channel
-// number (e.g. "149") and returns its MHz frequency, but only if it's one
-// of band5Channels' known candidates — matching the same physical channels
-// ACS already elects between and are known to work on this hardware/driver.
-// Absent, unparseable, or any other value resolves to lobbyFreq5, preserving
-// today's default behavior for every node that never sets this key.
-func desiredStatic5GHzFreq() string {
-	chStr := loadConf(mesh5GHzChannelKey)
-	if chStr == "" {
-		return lobbyFreq5
-	}
-	num, err := strconv.Atoi(chStr)
-	if err != nil {
-		return lobbyFreq5
-	}
-	freq := 5000 + num*5
-	for _, cand := range band5Channels {
-		if cand == freq {
-			return strconv.Itoa(freq)
+var loggedMesh5GHzChannelFallback bool
+
+// freqForBand5ChannelNum translates a 5GHz WiFi channel *number* to its
+// MHz frequency, validated only against band5Channels (the full known
+// 5GHz candidate superset) plus lobbyFreq5's own channel number — not
+// against activeBand5Channels. activeBand5Channels fails closed on any
+// transient `iw` error and is derived far more often here than in ACS
+// mode (ensureStaticChannels runs every 15s tick, not gated to the 180s
+// ACS cycle) — validating against it would turn a transient iw hiccup
+// into a self-inflicted route-flapping generator: target flips to lobby,
+// setIfaceFrequency rewrites the conf and restarts wpa_supplicant, then
+// the next tick flips back. Phy-legality is already independently
+// guarded downstream, at the right layer: ensureStaticIfaceChannel calls
+// acsVerifyAfterApply, which consults freqAvailableOnPhy before ever
+// firing a corrective restart.
+//
+// Deliberately 5GHz-only, not tourguide.go's wifiChannelFreq — that
+// checks band24Channels first and could misresolve a 5GHz-only channel
+// number that happens to collide with a 2.4GHz channel number's mapping.
+func freqForBand5ChannelNum(channelNum string) (string, bool) {
+	for _, freq := range band5Channels {
+		if strconv.Itoa(wifiFreqToChannelNum(freq)) == channelNum {
+			return strconv.Itoa(freq), true
 		}
+	}
+	if lobbyFreqInt, err := strconv.Atoi(lobbyFreq5); err == nil {
+		if strconv.Itoa(wifiFreqToChannelNum(lobbyFreqInt)) == channelNum {
+			return lobbyFreq5, true
+		}
+	}
+	return "", false
+}
+
+// desiredMesh5GHzChannel reads mesh_5ghz_channel from mesh.conf (a channel
+// number, e.g. "44") and resolves it to an MHz frequency for
+// ensureStaticChannels' 5GHz static-mode call site. Absent, non-numeric,
+// or not a member of band5Channels/not equal to lobbyFreq5's own channel
+// number resolves to lobbyFreq5 — matching desiredMeshWidth's own stated
+// "absent or unrecognized resolves to the safe default" convention.
+// Logged once per process (not every 15s tick) so a standing
+// misconfiguration doesn't spam the log.
+func desiredMesh5GHzChannel() string {
+	raw := loadConf(mesh5GHzChannelKey)
+	if raw == "" {
+		return lobbyFreq5
+	}
+	if freq, ok := freqForBand5ChannelNum(raw); ok {
+		return freq
+	}
+	if !loggedMesh5GHzChannelFallback {
+		log.Printf("mesh_5ghz_channel=%q not a valid 5GHz channel, using lobby channel", raw)
+		loggedMesh5GHzChannelFallback = true
 	}
 	return lobbyFreq5
 }
@@ -292,25 +363,179 @@ func wpaLobbyConfPath(iface string) string {
 // override.
 const mesh5GHzWidthKey = "mesh_5ghz_bw"
 
-// desiredMeshWidth reads mesh_5ghz_bw from mesh.conf. Absent, empty, or
-// anything other than "80" resolves to "20" — deliberate default-to-safe
-// (deterministic, lower-throughput 20MHz link), not default-to-legacy
-// (non-deterministic VHT80). Matches the lan_ap_bw-style "default read
-// with fallback" convention used elsewhere in this codebase's shell
-// scripts.
-func desiredMeshWidth() string {
-	if loadConf(mesh5GHzWidthKey) == "80" {
-		return "80"
+// patchedWpaSupplicantPath is this project's own build of wpa_supplicant
+// with the mesh `noscan` patch (MANET/src/wpa-supplicant-mesh/,
+// docs/wpa-supplicant-mesh-noscan.md), installed alongside — never over —
+// the system wpa_supplicant. manet-ctrl/collect.go checks this exact same
+// path for its own fault-visibility signal; kept in sync by convention/
+// naming, not by import (separate Go modules/binaries, no shared package).
+const patchedWpaSupplicantPath = "/usr/sbin/wpa_supplicant_mesh"
+
+// noscanDropInPath is the systemd drop-in that actually points
+// wpa_supplicant@<iface> at patchedWpaSupplicantPath. ensureNoscanDropIn
+// (below) is what creates/removes it — this must stay in sync with the
+// binary's presence on every boot, not just at first provision.
+const noscanDropInPath = "/etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf"
+
+const noscanDropInContent = "[Service]\nExecStart=\nExecStart=" + patchedWpaSupplicantPath +
+	" -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I\n"
+
+// noscanCapable reports whether this node has the patched wpa_supplicant
+// BOTH installed and actually wired into the unit that runs it. This is the
+// ONLY signal permitted to gate writing noscan=1 (or any other patch-added
+// key) into a mesh wpa_supplicant conf file — no binary-content scanning,
+// no version parsing. The stock system wpa_supplicant fails to parse an
+// entire network={} block on an unrecognized key and exits (status=255),
+// dropping that radio out of the mesh — see
+// docs/wpa-supplicant-mesh-noscan.md for the incident this guards against.
+//
+// Checking only the binary's presence was a real, reviewed-and-caught bug:
+// radio-setup.sh (which originally generated noscanDropInPath) only runs at
+// first provision, never on an OTA software update — an existing fleet node
+// taking an update gets the binary but keeps running wpa_supplicant@ under
+// the OLD unit (still pointed at stock) until something regenerates the
+// drop-in. ensureNoscanDropIn below is that "something" (called once at
+// startup and once per loop tick, so it self-heals within one 15s tick of
+// either the binary or the drop-in changing state), but this check also
+// verifies the drop-in directly rather than trusting ensureNoscanDropIn ran
+// first — no ordering assumption, no window where a true binary-presence
+// read could gate a write before the unit is actually wired to use it.
+func noscanCapable() bool {
+	info, err := os.Stat(patchedWpaSupplicantPath)
+	if err != nil || info.IsDir() || info.Mode()&0111 == 0 {
+		return false
 	}
-	return "20"
+	dropIn, err := os.ReadFile(noscanDropInPath)
+	if err != nil {
+		return false
+	}
+	return string(dropIn) == noscanDropInContent
 }
 
-// setMeshWidthKeys makes path's network={} block match want20: adds
-// "disable_ht40=1"/"disable_vht=1" if missing when want20 is true, removes
-// them if present when want20 is false. Returns whether the file was
-// actually changed. A no-op (false) if the file doesn't exist or already
-// matches — this is a plain compare-and-fix, not a template rewrite.
-func setMeshWidthKeys(path string, want20 bool) bool {
+// ensureNoscanDropIn keeps noscanDropInPath in sync with
+// patchedWpaSupplicantPath's presence — the fix for the OTA gap described
+// on noscanCapable above. Idempotent and cheap (a stat plus, on the common
+// no-change path, one more stat/read); safe to call every loop tick, not
+// just at startup, so it also self-heals if the binary is later removed.
+// Only ever writes/removes this one drop-in file — never touches
+// 10-mesh-prep.conf (radio-setup.sh's own drop-in in the same directory)
+// or any wpa_supplicant conf.
+func ensureNoscanDropIn() {
+	capableNow := false
+	if info, err := os.Stat(patchedWpaSupplicantPath); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+		capableNow = true
+	}
+
+	existing, readErr := os.ReadFile(noscanDropInPath)
+	upToDate := readErr == nil && string(existing) == noscanDropInContent
+
+	if capableNow == upToDate {
+		return
+	}
+
+	if capableNow {
+		if err := os.MkdirAll(filepath.Dir(noscanDropInPath), 0755); err != nil {
+			log.Printf("[acs] mkdir %s: %v", filepath.Dir(noscanDropInPath), err)
+			return
+		}
+		if err := os.WriteFile(noscanDropInPath, []byte(noscanDropInContent), 0644); err != nil {
+			log.Printf("[acs] write %s: %v", noscanDropInPath, err)
+			return
+		}
+		log.Printf("[acs] wpa_supplicant_mesh present, wired %s", noscanDropInPath)
+	} else {
+		if err := os.Remove(noscanDropInPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[acs] remove %s: %v", noscanDropInPath, err)
+			return
+		}
+		log.Printf("[acs] wpa_supplicant_mesh absent, removed %s", noscanDropInPath)
+	}
+
+	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+		log.Printf("[acs] daemon-reload after noscan drop-in change: %v", err)
+	}
+}
+
+// desiredMeshWidth reads mesh_5ghz_bw from mesh.conf. Absent, empty, or
+// anything other than "40"/"80" resolves to "20" — deliberate
+// default-to-safe (deterministic, lower-throughput 20MHz link), not
+// default-to-legacy (non-deterministic VHT80). Matches the lan_ap_bw-style
+// "default read with fallback" convention used elsewhere in this
+// codebase's shell scripts.
+//
+// "40" additionally requires noscanCapable() — the patched wpa_supplicant.
+// Without it, HT40 shares the identical coex-scan nondeterminism VHT80
+// has (docs/wpa-supplicant-mesh-noscan.md section 1: "40MHz does not
+// dodge the bug"), so a node lacking the fix resolves to 20, never "40
+// without noscan" — that would silently reintroduce the exact HT40
+// coex-scan nondeterminism this project already fixed, just under a new
+// config value.
+func desiredMeshWidth() string {
+	switch loadConf(mesh5GHzWidthKey) {
+	case "40":
+		if noscanCapable() {
+			return "40"
+		}
+		return "20"
+	case "80":
+		return "80"
+	default:
+		return "20"
+	}
+}
+
+// meshWidthKeyNames enumerates every network={} block key setMeshWidthKeys
+// manages, in the fixed order they're written when added. Order only
+// affects output layout, not correctness.
+var meshWidthKeyNames = []string{"disable_ht40=1", "disable_vht=1", "noscan=1", "max_oper_chwidth=1"}
+
+// meshWidthKeys is the single source of truth setMeshWidthKeys reconciles
+// a conf file's network={} block against: the exact key set wanted for
+// desiredWidth ("20", "40", or "80") given whether this node has the
+// patched wpa_supplicant (capable).
+//
+// "40" is only ever passed in already gated by desiredMeshWidth's own
+// capability check above (it never returns "40" when !capable) — but "80"
+// without capable is a real, reachable case, and deliberately keeps
+// today's existing behavior (no disable_* keys, no noscan/
+// max_oper_chwidth either): that's the already-documented, already-UI-
+// warned-about VHT80 nondeterminism risk, not something this change needs
+// to newly protect against. "20" (default/fallback) stays byte-identical
+// to pre-mesh_5ghz_bw=40 behavior regardless of capable.
+func meshWidthKeys(desiredWidth string, capable bool) map[string]bool {
+	switch desiredWidth {
+	case "40":
+		if capable {
+			return map[string]bool{"noscan=1": true, "disable_vht=1": true}
+		}
+		return map[string]bool{"disable_ht40=1": true, "disable_vht=1": true}
+	case "80":
+		if capable {
+			return map[string]bool{"noscan=1": true, "max_oper_chwidth=1": true}
+		}
+		return map[string]bool{}
+	default: // "20", and any unrecognized value
+		return map[string]bool{"disable_ht40=1": true, "disable_vht=1": true}
+	}
+}
+
+func isMeshWidthKey(trimmed string) bool {
+	for _, key := range meshWidthKeyNames {
+		if trimmed == key {
+			return true
+		}
+	}
+	return false
+}
+
+// setMeshWidthKeys makes path's network={} block match exactly the key set
+// meshWidthKeys(desiredWidth, capable) wants: adds whichever of
+// {disable_ht40, disable_vht, noscan, max_oper_chwidth} are wanted and
+// missing, removes whichever are present and not wanted. Returns whether
+// the file was actually changed. A no-op (false) if the file doesn't exist
+// or already matches — this is a plain compare-and-fix, not a template
+// rewrite.
+func setMeshWidthKeys(path, desiredWidth string, capable bool) bool {
 	if !fileExists(path) {
 		return false
 	}
@@ -320,10 +545,12 @@ func setMeshWidthKeys(path string, want20 bool) bool {
 		return false
 	}
 
+	want := meshWidthKeys(desiredWidth, capable)
+
 	lines := strings.Split(string(data), "\n")
-	out := make([]string, 0, len(lines)+2)
+	out := make([]string, 0, len(lines)+len(meshWidthKeyNames))
 	inNetwork := false
-	hasHT40, hasVHT := false, false
+	present := make(map[string]bool, len(meshWidthKeyNames))
 	changed := false
 
 	for _, line := range lines {
@@ -334,28 +561,19 @@ func setMeshWidthKeys(path string, want20 bool) bool {
 			out = append(out, line)
 			continue
 		case inNetwork && trimmed == "}":
-			if want20 {
-				if !hasHT40 {
-					out = append(out, "    disable_ht40=1")
-					changed = true
-				}
-				if !hasVHT {
-					out = append(out, "    disable_vht=1")
+			for _, key := range meshWidthKeyNames {
+				if want[key] && !present[key] {
+					out = append(out, "    "+key)
 					changed = true
 				}
 			}
 			inNetwork = false
 			out = append(out, line)
 			continue
-		case inNetwork && trimmed == "disable_ht40=1":
-			hasHT40 = true
-			if !want20 {
-				changed = true
-				continue // drop the line
-			}
-		case inNetwork && trimmed == "disable_vht=1":
-			hasVHT = true
-			if !want20 {
+		}
+		if inNetwork && isMeshWidthKey(trimmed) {
+			present[trimmed] = true
+			if !want[trimmed] {
 				changed = true
 				continue // drop the line
 			}
@@ -388,17 +606,40 @@ func reconcile5GHzWidth(iface string) {
 	if iface == "" {
 		return
 	}
-	want20 := desiredMeshWidth() != "80"
+	// meshIfaces() identifies iface purely by its position in /var/lib/mesh_if
+	// (line 0 = 2.4GHz, line 1 = 5GHz), with no band cross-check -- unlike
+	// this same reconciler's shell counterparts (radio-setup.sh,
+	// manet-wlan-reconcile.sh), which both gate their WIDTH_LINES on
+	// `FREQ -ge 5000`. Before noscan existed, a mis-ordered mesh_if writing
+	// disable_ht40/disable_vht into a 2.4GHz conf was a harmless no-op; now
+	// it would write noscan=1 (which the mesh-noscan patch's own table
+	// extends to enable 2.4GHz HT40 with the coex scan disabled on exactly
+	// the band where that scan is a real requirement, not a workaround).
+	// Cross-check the conf's actual frequency before doing anything.
+	if freq := getConfFreq(wpaConfPath(iface)); freq != "" {
+		if f, err := strconv.Atoi(freq); err != nil || f < 5000 {
+			return
+		}
+	}
+	targetWidth := desiredMeshWidth()
+	capable := noscanCapable()
 
-	liveChanged := setMeshWidthKeys(wpaConfPath(iface), want20)
-	lobbyChanged := setMeshWidthKeys(wpaLobbyConfPath(iface), want20)
+	liveChanged := setMeshWidthKeys(wpaConfPath(iface), targetWidth, capable)
+	lobbyChanged := setMeshWidthKeys(wpaLobbyConfPath(iface), targetWidth, capable)
 	if !liveChanged && !lobbyChanged {
 		return
 	}
 
-	target := "80MHz (VHT80)"
-	if want20 {
-		target = "20MHz (disable_ht40+disable_vht)"
+	target := targetWidth + "MHz"
+	switch {
+	case targetWidth == "20":
+		target += " (disable_ht40+disable_vht)"
+	case targetWidth == "40" && capable:
+		target += " (HT40, noscan+disable_vht)"
+	case targetWidth == "80" && capable:
+		target += " (VHT80, noscan+max_oper_chwidth)"
+	case targetWidth == "80":
+		target += " (VHT80, no noscan — patched wpa_supplicant not present)"
 	}
 	log.Printf("[acs] %s 5GHz mesh width now targets %s, restarting wpa_supplicant", iface, target)
 
@@ -460,7 +701,13 @@ func runACSTick() {
 
 	lastACSCycle = time.Now()
 
-	report := performScan(iface24, iface5)
+	// Computed once per tick and reused for both scanning and electBand's
+	// candidate list below (rather than recomputed separately for each),
+	// so both operate against the exact same phy-filtered candidate set —
+	// see activeBand5Channels (scan.go) for why this is derived live.
+	candidates5 := activeBand5Channels(iface5)
+
+	report := performScan(iface24, iface5, candidates5)
 	writeChannelReport(report)
 
 	registry := readRegistry(registryFile)
@@ -484,26 +731,73 @@ func runACSTick() {
 
 	limp := false
 
+	// writeFreq24/writeFreq5 carry this cycle's "persist as last-elected"
+	// value for maybeWriteLastElectedFreq below, "" meaning "don't touch
+	// that band's persisted value this cycle". Populated per band only when
+	// quorum && !result.hold && result.winnerCh != 0 — see the write gate
+	// comments in each block below (ACS.md's cold-boot fix, blocking
+	// correction 2).
+	writeFreq24, writeFreq5 := "", ""
+
 	if iface24 != "" {
 		cur := getConfFreq(wpaConfPath(iface24))
-		result := electBand(reports, registry, band24Channels, cur, lobbyFreq24, "2.4GHz")
+		biasFreq := selectBiasFreq(cur, band24Channels, "2.4GHz")
+		result := electBand(reports, registry, band24Channels, cur, biasFreq, lobbyFreq24, "2.4GHz")
 		freq := result.freq
 		if !quorum {
 			freq = lobbyFreq24
 		}
-		setIfaceFrequency(iface24, wpaConfPath(iface24), freq, "2.4 GHz (ACS)")
+		// The self-heal check must run immediately here, between this call
+		// and maybeRunTourguide below — never moved to the end of the tick
+		// or into the 15s loop closure. maybeRunTourguide can hop this same
+		// radio off-channel for up to tourguideDwell (~12s); running the
+		// check any later would see that expected, temporary lobby hop and
+		// false-trigger a corrective restart on top of it. See ACS.md's
+		// validated design, point 2.
+		configChanged := setIfaceFrequency(iface24, wpaConfPath(iface24), freq, "2.4 GHz (ACS)")
+		acsVerifyAfterApply(iface24, freq, "2.4GHz", configChanged)
+		acsTrackHold(iface24, result, "2.4GHz")
 		limp = limp || result.limp
+		// Write gate: quorum must hold (a !quorum tick overrides freq to
+		// the lobby above regardless of what electBand picked, so
+		// result.winnerCh was never actually run as a data channel), the
+		// election must not have held (a hold's winnerCh is just the
+		// already-live frequency re-echoed, not a fresh election), and
+		// winnerCh must be nonzero (electBand's own lobby/limp fallback
+		// leaves it 0 — never persist a lobby frequency as "last known
+		// good").
+		if quorum && !result.hold && result.winnerCh != 0 {
+			writeFreq24 = strconv.Itoa(result.winnerCh)
+		}
 	}
 	if iface5 != "" {
 		cur := getConfFreq(wpaConfPath(iface5))
-		result := electBand(reports, registry, band5Channels, cur, lobbyFreq5, "5GHz")
+		biasFreq := selectBiasFreq(cur, candidates5, "5GHz")
+		result := electBand(reports, registry, candidates5, cur, biasFreq, lobbyFreq5, "5GHz")
 		freq := result.freq
 		if !quorum {
 			freq = lobbyFreq5
 		}
-		setIfaceFrequency(iface5, wpaConfPath(iface5), freq, "5 GHz (ACS)")
+		// Same ordering constraint as the 2.4GHz block above — must stay
+		// immediately after this setIfaceFrequency call.
+		configChanged := setIfaceFrequency(iface5, wpaConfPath(iface5), freq, "5 GHz (ACS)")
+		acsVerifyAfterApply(iface5, freq, "5GHz", configChanged)
+		acsTrackHold(iface5, result, "5GHz")
 		limp = limp || result.limp
+		// Same write gate as the 2.4GHz block above.
+		if quorum && !result.hold && result.winnerCh != 0 {
+			writeFreq5 = strconv.Itoa(result.winnerCh)
+		}
 	}
+
+	// Placement is deliberate: after both bands' election/apply blocks,
+	// before maybeRunTourguide below — tourguide's hopFrequency/
+	// applyPartitionMerge paths call rewriteFrequencyLine/setIfaceFrequency
+	// directly and never produce an electionResult, so they structurally
+	// can't reach this write; keeping the call here (not inside the
+	// `if quorum` tourguide block) keeps that insulation obvious rather
+	// than incidental.
+	maybeWriteLastElectedFreq(writeFreq24, writeFreq5)
 
 	setLimpMode(limp)
 
