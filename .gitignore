@@ -16,6 +16,10 @@
 # Packaged tarballs — regenerate with MANET/packaging/build-*-tarball.sh
 MANET/install_packages/*.tar.gz
 
+# Stray atomic-replace build output (e.g. manet-ctrl-arm64.new) — never an
+# intentional deploy convention in this repo, just leftover local builds.
+*.new
+
 # Cross-compiled Go services — regenerate with the packaging scripts
 MANET/src/atak-overlay/atak-overlay
 MANET/src/battery-reader/battery-reader
