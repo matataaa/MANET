@@ -95,6 +95,49 @@ function radioLabel(iface) {
   return iface;
 }
 
+// Generic channel-picker <select> refresher, shared by config.js's HaLow
+// picker and fleet.js's HaLow + 5GHz mesh pickers so there is exactly one
+// implementation of this fetch/rebuild/preserve-or-fallback logic. Fetches
+// `url`, which must respond with {channels:[{channel,freq_mhz}],
+// default_channel, default_freq_mhz} (see api.go's apiHalowChannels/
+// apiMesh5GHzChannels), rebuilds selEl's <option>s with a leading "Auto"
+// entry, and keeps currentValue selected if it is still present in the new
+// list -- otherwise falls back to Auto ('') rather than silently submitting
+// a channel that no longer applies for the resolved domain/bw.
+//
+// Returns {fellBack: bool} so a caller can surface the fallback to the
+// operator (a pinned channel getting silently reset to Auto on a
+// fleet-wide picker is easy to miss otherwise) -- returns undefined on a
+// fetch error or if superseded (see below), which callers should treat as
+// "nothing to report".
+//
+// Tags selEl with an incrementing request sequence so rapid successive
+// calls (e.g. flipping regulatory_domain twice quickly) can't resolve out
+// of order: a response for a call already superseded by a newer one is
+// discarded instead of overwriting the select with stale options.
+async function refreshChannelSelect(selEl, url, currentValue) {
+  if (!selEl) return;
+  const reqSeq = (selEl._chReqSeq = (selEl._chReqSeq || 0) + 1);
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    if (selEl._chReqSeq !== reqSeq) return; // superseded by a newer request
+    let opts = '<option value="">Auto (Channel ' + d.default_channel +
+      (d.default_freq_mhz ? ', ' + d.default_freq_mhz + ' MHz' : '') + ')</option>';
+    (d.channels || []).forEach(function(c) {
+      opts += '<option value="' + c.channel + '">' + c.channel +
+        (c.freq_mhz ? ' (' + c.freq_mhz + ' MHz)' : '') + '</option>';
+    });
+    selEl.innerHTML = opts;
+    const stillLegal = Array.from(selEl.options).some(function(o) { return o.value === currentValue; });
+    selEl.value = stillLegal ? currentValue : '';
+    return { fellBack: currentValue !== '' && !stillLegal };
+  } catch (e) {
+    // Transient fetch failure — leave whatever options are already
+    // rendered rather than wiping the picker.
+  }
+}
+
 function escHtml(str) {
   const d = document.createElement('div');
   d.textContent = str;

@@ -482,11 +482,8 @@ function configRenderEdit(panel, cfg) {
     { label: '5GHz Mesh Width', key: 'mesh_5ghz_bw', type: 'select', options: [
       {v:'20',l:'20 MHz (default)'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
     ], hint: 'Fleet-wide — never mix widths across nodes. 40MHz requires the patched wpa_supplicant and silently falls back to 20MHz without it. 80MHz without the patch can mismatch primary channel between peers.' },
-    { label: '5GHz Pinned Channel', key: 'mesh_5ghz_channel', type: 'select', options: [
-      {v:'',l:'36 / 5180 MHz (default)'},
-      {v:'40',l:'40 / 5200 MHz'},{v:'44',l:'44 / 5220 MHz'},{v:'48',l:'48 / 5240 MHz'},
-      {v:'149',l:'149 / 5745 MHz'},{v:'153',l:'153 / 5765 MHz'},{v:'157',l:'157 / 5785 MHz'},{v:'161',l:'161 / 5805 MHz'},{v:'165',l:'165 / 5825 MHz'}
-    ], hint: 'Only used when 5GHz Mesh Channel Mode above is Static. Ignored under Automatic (ACS), which elects its own channel.',
+    { label: '5GHz Pinned Channel', key: 'mesh_5ghz_channel', type: 'select', options: [{v:'',l:'Auto'}],
+      hint: 'Only used when 5GHz Mesh Channel Mode above is Static. Ignored under Automatic (ACS), which elects its own channel. Legal channels depend on Regulatory Domain — narrowed via /api/mesh5ghz/channels, same as HaLow Channel above.',
       showIf: [{key:'acs', equals:'n'}] },
     { label: 'Multicast Mode', key: 'multicast_mode', type: 'select', options: [
       {v:'flood',l:'Flood (recommended ≤10 nodes)'},
@@ -676,26 +673,9 @@ function configRenderEdit(panel, cfg) {
     bwEl.value = allowedBw.includes(currentBw) ? currentBw : allowedBw[0];
 
     const current = chEl.value;
-    try {
-      const url = configBaseUrl() + '/api/halow/channels?domain=' + encodeURIComponent(resolvedDomain) +
-        '&bw=' + encodeURIComponent(bwEl.value);
-      const r = await fetch(url);
-      const d = await r.json();
-      let opts = '<option value="">Auto (Channel ' + d.default_channel +
-        (d.default_freq_mhz ? ', ' + d.default_freq_mhz + ' MHz' : '') + ')</option>';
-      (d.channels || []).forEach(c => {
-        opts += '<option value="' + c.channel + '">' + c.channel +
-          (c.freq_mhz ? ' (' + c.freq_mhz + ' MHz)' : '') + '</option>';
-      });
-      chEl.innerHTML = opts;
-      // Keep the previously-selected explicit channel if it is still legal
-      // for the new domain/bw; otherwise fall back to Auto rather than
-      // silently submitting a channel that no longer applies.
-      chEl.value = Array.from(chEl.options).some(o => o.value === current) ? current : '';
-    } catch (e) {
-      // Transient fetch failure — leave whatever options are already
-      // rendered rather than wiping the picker.
-    }
+    const url = configBaseUrl() + '/api/halow/channels?domain=' + encodeURIComponent(resolvedDomain) +
+      '&bw=' + encodeURIComponent(bwEl.value);
+    await refreshChannelSelect(chEl, url, current);
   }
   const halowDomainEl = document.getElementById('cfg-f-regulatory_domain');
   const halowRegDomainSelectEl = document.getElementById('cfg-f-halow_regulatory_domain');
@@ -704,6 +684,26 @@ function configRenderEdit(panel, cfg) {
   if (halowRegDomainSelectEl) halowRegDomainSelectEl.addEventListener('change', configRefreshHalowChannels);
   if (halowBwEl) halowBwEl.addEventListener('change', configRefreshHalowChannels);
   configRefreshHalowChannels();
+
+  // 5GHz Pinned Channel's option list isn't static either — legal channels
+  // depend on Regulatory Domain (same table fleet.js's picker uses via
+  // /api/mesh5ghz/channels), so it's rebuilt on load and whenever that
+  // field changes. Deliberately reads plain regulatory_domain only, NOT
+  // halow_regulatory_domain — HaLow and 5GHz WiFi can run different
+  // domains on the same node (e.g. MM8108), so reusing HaLow's resolved
+  // domain here could show/accept a channel illegal for the actual WiFi
+  // domain. Channel candidates don't vary by bandwidth for 5GHz (unlike
+  // HaLow), so no bw param is sent.
+  async function configRefreshMesh5GHzChannels() {
+    const chEl = document.getElementById('cfg-f-mesh_5ghz_channel');
+    const domainEl = document.getElementById('cfg-f-regulatory_domain');
+    if (!chEl || !domainEl) return;
+    const current = chEl.value;
+    const url = configBaseUrl() + '/api/mesh5ghz/channels?domain=' + encodeURIComponent(domainEl.value);
+    await refreshChannelSelect(chEl, url, current);
+  }
+  if (halowDomainEl) halowDomainEl.addEventListener('change', configRefreshMesh5GHzChannels);
+  configRefreshMesh5GHzChannels();
 
   document.getElementById('cfg-back-btn').addEventListener('click', () => {
     configEditing = false;
