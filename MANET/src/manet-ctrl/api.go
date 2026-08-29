@@ -536,9 +536,9 @@ func apiRegistry(w http.ResponseWriter, r *http.Request) {
 	myMAC := getMyMAC()
 
 	type RegEntry struct {
-		ID        string            `json:"id"`
-		Fields    map[string]string `json:"fields"`
-		IsMe      bool              `json:"is_me"`
+		ID     string            `json:"id"`
+		Fields map[string]string `json:"fields"`
+		IsMe   bool              `json:"is_me"`
 	}
 
 	var entries []RegEntry
@@ -688,18 +688,18 @@ func apiMesh(w http.ResponseWriter, r *http.Request) {
 			"algo":    bat0["algo"],
 			"gw_mode": bat0["gw_mode"],
 		},
-		"hostname":          myHostname,
-		"halow_bw":          halowBW,
-		"mesh_ssid":         conf["mesh_ssid"],
-		"network":           confGet(conf, "ipv4_network", "10.30.2.0/24"),
-		"originators":       origList,
-		"neighbors":         neighList,
-		"gateways":          gwList,
-		"originator_count":  len(origMap),
-		"neighbor_count":    len(neighbors),
-		"gateway_count":     len(gateways),
-		"dns_records":       dnsRecords,
-		"euds":              getEUDs(),
+		"hostname":         myHostname,
+		"halow_bw":         halowBW,
+		"mesh_ssid":        conf["mesh_ssid"],
+		"network":          confGet(conf, "ipv4_network", "10.30.2.0/24"),
+		"originators":      origList,
+		"neighbors":        neighList,
+		"gateways":         gwList,
+		"originator_count": len(origMap),
+		"neighbor_count":   len(neighbors),
+		"gateway_count":    len(gateways),
+		"dns_records":      dnsRecords,
+		"euds":             getEUDs(),
 	})
 }
 
@@ -906,17 +906,17 @@ var saveableKeys = map[string]bool{
 	"lan_ap_channel": true, "lan_ap_bw": true,
 	"max_euds_per_node": true, "mesh_ssid": true, "mesh_key": true,
 	"ipv4_network": true, "regulatory_domain": true, "halow_regulatory_domain": true, "halow_bw": true, "halow_channel": true, "mesh_5ghz_bw": true, "mesh_5ghz_channel": true,
-	"acs": true,
+	"acs":             true,
 	"battery_monitor": true, "admin_password": true, "require_auth": true,
 	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
-	"multicast_mode": true,
+	"multicast_mode":   true,
 	"voice_mic_volume": true, "voice_speaker_volume": true,
 	"voice_channel": true, "voice_rx_channels": true,
 	"voice_ptt_mode": true, "voice_gain": true, "voice_enabled": true,
 	"voice_beep_tx_start": true, "voice_beep_rx_end": true,
-	"dns_servers": true,
+	"dns_servers":   true,
 	"eud_bandwidth": true,
-	"qos_enabled": true, "qos_voice_band": true, "qos_cot_band": true, "qos_chat_band": true,
+	"qos_enabled":   true, "qos_voice_band": true, "qos_cot_band": true, "qos_chat_band": true,
 	"auto_update": true, "update_url": true, "auto_update_overlay": true, "auto_update_min_mbps": true,
 	"gps": true, "gps_source": true, "gps_static_lat": true, "gps_static_lon": true, "gps_static_alt": true,
 	"callsign": true, "cot_type": true, "cot_team": true, "cot_role": true, "cot_icon": true,
@@ -1054,8 +1054,30 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if ch, ok := updates["mesh_5ghz_channel"]; ok && ch != "" {
-		if err := validateMesh5GHzChannel(ch); err != nil {
+	// Narrow trigger: only fires when mesh_5ghz_channel is actually being
+	// changed to a new value, not merely present in the submission --
+	// config.js's configSave submits every meshFields entry on every save
+	// (not just edited ones), so without the != existingConf comparison
+	// this would re-validate the already-persisted channel on every
+	// unrelated save (e.g. changing the hostname), rejecting the whole
+	// save with a 400 on any node with a channel pinned outside its
+	// resolved domain's list.
+	//
+	// Deliberately not widened to also fire on a bare regulatory_domain
+	// change (unlike the HaLow block above, which does fire on domain
+	// change): a US->EU domain switch on a node already pinned to e.g.
+	// channel 149 would then reject the *entire* config save with an error
+	// that doesn't clearly point at the 5GHz channel field as the problem.
+	// Known, accepted gap -- not fixed here.
+	if ch, ok := updates["mesh_5ghz_channel"]; ok && ch != "" && ch != existingConf["mesh_5ghz_channel"] {
+		effective := make(map[string]string, len(existingConf)+len(updates))
+		for k, v := range existingConf {
+			effective[k] = v
+		}
+		for k, v := range updates {
+			effective[k] = v
+		}
+		if err := validateMesh5GHzChannel(resolveMesh5GHzDomain(effective), ch); err != nil {
 			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": err.Error()})
 			return
 		}
@@ -1453,7 +1475,7 @@ func apiServiceAction(w http.ResponseWriter, r *http.Request) {
 // --- Perf endpoints ---
 
 var (
-	activeStreams   = make(map[string]*exec.Cmd)
+	activeStreams  = make(map[string]*exec.Cmd)
 	activeStreamMu sync.Mutex
 )
 
@@ -2035,6 +2057,22 @@ var euHalowCountryCodes = map[string]bool{
 	"SI": true, "ES": true, "SE": true, "GB": true, "CH": true, "NO": true,
 }
 
+// normalizeRegDomain maps a real ISO country code (e.g. "HR", "NL") to the
+// literal "EU" domain used by halowChannelTable/mesh5GHzChannelTable when it
+// is in euHalowCountryCodes, leaving any other value (an already-literal
+// "US"/"EU", or an out-of-scope code like "JP"/"AU") unchanged. Callers that
+// accept a domain from anywhere other than resolveHalowDomain/
+// resolveMesh5GHzDomain (e.g. an explicit ?domain= query param) MUST run it
+// through this before using it for a channel-table lookup -- otherwise a
+// real country code silently falls through to the permissive out-of-scope
+// fallback instead of the domain's real restricted list.
+func normalizeRegDomain(domain string) string {
+	if euHalowCountryCodes[domain] {
+		return "EU"
+	}
+	return domain
+}
+
 // resolveHalowDomain resolves the effective HaLow regulatory domain for a
 // node, mirroring radio-setup.sh's halow_regulatory_domain fallback
 // (lines 391-392): halow_regulatory_domain takes precedence over the
@@ -2051,10 +2089,7 @@ func resolveHalowDomain(conf map[string]string) string {
 	if domain == "" {
 		domain = confGet(conf, "regulatory_domain", "US")
 	}
-	if euHalowCountryCodes[domain] {
-		domain = "EU"
-	}
-	return domain
+	return normalizeRegDomain(domain)
 }
 
 // halowChannelTable is the ground-truth legal HaLow channel list per
@@ -2113,30 +2148,121 @@ func halowChannelCandidates(domain, bw string) []int {
 	return bwTable[bw]
 }
 
-// mesh5GHzChannelCandidates are the channel numbers node-manager's
-// ensureStaticChannels will actually accept for mesh_5ghz_channel (36 is
-// lobbyFreq5/5180MHz; the rest are node-manager/scan.go's band5Channels,
-// 5200/5220/5240/5745/5765/5785/5805/5825 MHz) -- kept in sync with that
-// list by convention, not by import (separate Go modules/binaries). Five of
-// these (149/153/157/161/165, UNII-3) are US-only and illegal under ETSI;
-// this validator does not know the node's regulatory_domain (that lives in
-// node-manager/radio-setup.sh, not here) so it can't reject a UNII-3 pin on
-// a EU node -- it only rejects values that are never valid on any domain.
-var mesh5GHzChannelCandidates = map[string]bool{
-	"36": true, "40": true, "44": true, "48": true,
-	"149": true, "153": true, "157": true, "161": true, "165": true,
+// resolveMesh5GHzDomain resolves the effective regulatory domain for the
+// 5GHz mesh (WiFi) radio: reads the plain regulatory_domain key only,
+// defaulting to "US" if unset. Deliberately does NOT reuse
+// resolveHalowDomain/halow_regulatory_domain -- HaLow and 5GHz WiFi can
+// legitimately run different regulatory domains on the same node (e.g. an
+// MM8108 unit), so letting halow_regulatory_domain=US leak into this check
+// could unlock illegal 5GHz WiFi channels under a EU regulatory_domain.
+//
+// regulatory_domain holds a real ISO country code in provisioned config
+// (e.g. "HR", "NL"), not just the literal "EU" the web UI's select emits --
+// normalize via euHalowCountryCodes the same way resolveHalowDomain does, or
+// every ETSI-country node falls through to the permissive fallback and
+// accepts UNII-3 channels unchecked, defeating this validator entirely.
+func resolveMesh5GHzDomain(conf map[string]string) string {
+	return normalizeRegDomain(confGet(conf, "regulatory_domain", "US"))
+}
+
+// mesh5GHzChannelTable is the per-domain guardrail for mesh_5ghz_channel,
+// mirroring halowChannelTable's shape. The full channel list (36, 40, 44,
+// 48, 149, 153, 157, 161, 165) matches node-manager's ensureStaticChannels/
+// scan.go band5Channels -- kept in sync with that list by convention, not by
+// import (separate Go modules/binaries).
+//
+// EU is limited to the non-DFS UNII-1 channels (36/40/44/48); UNII-2/
+// UNII-2e (52-144, the DFS-requiring range) is deliberately absent from
+// every domain's list here, not just EU's -- this stack has no DFS
+// radar-detection handling implemented anywhere in node-manager, so pinning
+// a channel in that range would be a live RF violation on any domain, not
+// just a config-validation gap.
+//
+// Domains not explicitly modeled here (JP, AU, ...) keep the full
+// permissive list rather than being rejected outright: there is no
+// hardware-verified per-domain table for them, and rejecting by default
+// would break already-persisted values (e.g. channel 149) on nodes
+// provisioned under those domains before this validator existed.
+var mesh5GHzChannelTable = map[string][]string{
+	"US": {"36", "40", "44", "48", "149", "153", "157", "161", "165"},
+	"EU": {"36", "40", "44", "48"},
+}
+
+// mesh5GHzChannelCandidatesForDomain returns the legal mesh_5ghz_channel
+// values for a resolved regulatory domain, falling back to the full
+// permissive list (same as "US") for domains with no explicit table entry.
+func mesh5GHzChannelCandidatesForDomain(domain string) []string {
+	if list, ok := mesh5GHzChannelTable[domain]; ok {
+		return list
+	}
+	return mesh5GHzChannelTable["US"]
 }
 
 // validateMesh5GHzChannel rejects a mesh_5ghz_channel save outright rather
 // than silently persisting a value node-manager's desiredMesh5GHzChannel
 // would just fall back to the lobby channel on anyway -- matching
 // validateHalowChannel's own stated principle just below: an invalid value
-// must reject the whole save, not be silently coerced or ignored.
-func validateMesh5GHzChannel(channel string) error {
-	if !mesh5GHzChannelCandidates[channel] {
-		return fmt.Errorf("mesh_5ghz_channel %q is not a valid 5GHz mesh channel (valid: 36, 40, 44, 48, 149, 153, 157, 161, 165 -- the last five are US-only, illegal under ETSI)", channel)
+// must reject the whole save, not be silently coerced or ignored. Domain is
+// resolved by the caller via resolveMesh5GHzDomain (or, on the fleet-apply
+// side, per-node -- see applyFleetMesh5GHzChannel in fleet.go).
+func validateMesh5GHzChannel(domain, channel string) error {
+	for _, c := range mesh5GHzChannelCandidatesForDomain(domain) {
+		if c == channel {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("mesh_5ghz_channel %q is not valid for regulatory domain %q (valid: %s)",
+		channel, domain, strings.Join(mesh5GHzChannelCandidatesForDomain(domain), ", "))
+}
+
+// apiMesh5GHzChannels reports the legal 5GHz mesh channel list for a
+// regulatory domain, so the web UI can build a channel picker without
+// duplicating mesh5GHzChannelTable in JS. Response shape matches
+// apiHalowChannels. Missing domain query param falls back to this node's
+// current config via resolveMesh5GHzDomain -- callers editing a remote/fleet
+// node should always pass domain= explicitly rather than relying on that
+// fallback, since it reflects the serving node's own domain, not
+// necessarily the node being edited.
+//
+// Accepts a bw= query param for URL-shape parity with /api/halow/channels,
+// but does not currently filter on it -- unlike HaLow, mesh5GHzChannelTable's
+// candidate list doesn't vary by channel width (20/40/80 MHz), only by
+// regulatory domain.
+func apiMesh5GHzChannels(w http.ResponseWriter, r *http.Request) {
+	conf := loadKVFile(MeshConfFile)
+	domain := r.URL.Query().Get("domain")
+	if domain == "" {
+		domain = resolveMesh5GHzDomain(conf)
+	} else {
+		// resolveMesh5GHzDomain already normalizes for the empty-param
+		// fallback above; an explicit ?domain= (e.g. the fleet UI passing a
+		// real ISO country code like "HR" straight through) needs the same
+		// normalization here, or it falls through to the permissive
+		// out-of-scope default instead of the domain's real restricted list
+		// -- exactly the gap that let a EU country-code node's picker show
+		// unfiltered UNII-3 channels despite the save path already rejecting
+		// them correctly.
+		domain = normalizeRegDomain(domain)
+	}
+	candidates := mesh5GHzChannelCandidatesForDomain(domain)
+	channels := make([]map[string]interface{}, 0, len(candidates))
+	for _, chStr := range candidates {
+		ch, err := strconv.Atoi(chStr)
+		if err != nil {
+			continue
+		}
+		// "channel" is an int here, matching apiHalowChannels's response
+		// shape exactly (that endpoint's candidates are already []int).
+		channels = append(channels, map[string]interface{}{"channel": ch, "freq_mhz": 5000 + ch*5})
+	}
+
+	defaultChannel := 36
+	resp := map[string]interface{}{
+		"channels":         channels,
+		"default_channel":  defaultChannel,
+		"default_freq_mhz": 5000 + defaultChannel*5,
+	}
+	writeJSON(w, 200, resp)
 }
 
 // validateHalowChannel checks whether an explicit (or "Auto"/empty)
@@ -2175,6 +2301,13 @@ func apiHalowChannels(w http.ResponseWriter, r *http.Request) {
 	domain := r.URL.Query().Get("domain")
 	if domain == "" {
 		domain = resolveHalowDomain(conf)
+	} else {
+		// See the matching comment in apiMesh5GHzChannels: an explicit
+		// ?domain= needs the same country-code normalization
+		// resolveHalowDomain already applies in the empty-param fallback
+		// case above, or a real ISO country code silently gets the
+		// permissive out-of-scope channel list instead of its real one.
+		domain = normalizeRegDomain(domain)
 	}
 	bw := r.URL.Query().Get("bw")
 	if bw == "" {

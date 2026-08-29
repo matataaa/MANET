@@ -87,6 +87,8 @@ done
 iw dev
 ```
 
+**`iw dev` is not reliable for HaLow (S1G) channel/bandwidth — it reports a synthetic mapped channel, not the real one.** Confirmed live: after setting HaLow to channel 26 (915.0 MHz, 2MHz bandwidth) and verifying it was genuinely applied, `iw dev wlan2 info` still reported `channel 108 (5540 MHz), width: 40 MHz` — a completely different-looking 5GHz-shaped channel that would suggest the change failed if taken at face value. This is the Morse driver mapping the real S1G channel onto a synthetic HT-equivalent channel number for cfg80211 tools that aren't S1G-aware (visible in the driver's own log as e.g. `S1G mapped HT channel 110`). To verify the real HaLow channel/frequency/bandwidth, check `wpa_supplicant_s1g`'s own journal (`journalctl -u 'wpa_supplicant-s1g-*'`, look for lines like `Operating Frequency: 915000 kHz`, `Operating BW: 2 MHz`) or the generated `/etc/wpa_supplicant/wpa_supplicant-wlan2-s1g.conf`'s `channel=`/`op_class=` lines — not `iw dev`.
+
 ### 3. Batman-adv Mesh
 
 ```bash
@@ -380,6 +382,8 @@ ssh radio@<node> "chmod +x /usr/local/bin/<service>.new && \
 ```
 
 Always back up the existing binary first (`cp /usr/local/bin/<service> /usr/local/bin/<service>.bak-<reason>`) so there's a fast manual rollback if the new one misbehaves. After restarting, confirm the new binary actually landed — `md5sum /usr/local/bin/<service>` against the build output, and `systemctl status <service>` should show `NRestarts=0` and a fresh start time, not a crash-restart loop.
+
+**Direct `scp` to `/usr/local/bin/` can fail with `Permission denied` under the `radio` user on mesh-only nodes.** Confirmed on EUD1/EUD2/EUD3 (all reached via the ProxyCommand jump through EUD4) — `scp` straight to `/usr/local/bin/<service>.new` was rejected, while the same command worked fine on EUD4 (the directly LAN-reachable node). Workaround: `scp` to `/tmp/<service>.new` first, then `sudo mv /tmp/<service>.new /usr/local/bin/<service>.new` over SSH before the atomic replace above — the `mv` needs `sudo`, the `scp` doesn't if the destination is `/tmp`.
 
 ## Parallel Multi-Node Check
 
