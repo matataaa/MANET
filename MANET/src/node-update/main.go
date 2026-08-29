@@ -31,7 +31,7 @@ const (
 	cooldown           = 1 * time.Hour
 	httpTimeout        = 30 * time.Second
 	downloadTimeout    = 10 * time.Minute
-	startupDelay       = 30 * time.Second
+	startupDelay       = 5 * time.Minute
 	minRebootJitter    = 1 * time.Minute
 	maxRebootJitter    = 15 * time.Minute
 	defaultMinMbps     = 10
