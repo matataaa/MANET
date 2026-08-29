@@ -179,7 +179,16 @@ function fleetConfirm(msg, opts, onConfirm) {
 // --- View mode ---
 
 function fleetRender() {
-  if (!fleetData || fleetEditing) return;
+  // fleetEditing already guards the edit-form case against the 5s
+  // background poll (fleetFetch -> fleetRender, see fleetPollTimer above).
+  // fleetConfirm's confirmation bar needs the same guard: it's inserted
+  // directly into #tab-fleet (fleetConfirm, above) rather than being part
+  // of the html string this function builds, so without this check the
+  // very next poll tick's panel.innerHTML replace below would wipe it out
+  // from under the operator — anywhere from near-instantly to 5s after it
+  // appears, depending on poll timing. This was reported live: the
+  // Activate-fleet-config confirmation disappeared before it could be read.
+  if (!fleetData || fleetEditing || document.querySelector('.fleet-confirm-bar')) return;
   var panel = document.getElementById('tab-fleet');
   var d = fleetData;
   var prefs = d.preferences || {};
