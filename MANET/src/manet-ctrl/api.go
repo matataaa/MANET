@@ -1190,8 +1190,13 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Apply mesh key/SSID changes to wpa_supplicant configs
-	if updates["mesh_ssid"] != "" || updates["mesh_key"] != "" {
+	// Apply mesh key/SSID changes to wpa_supplicant configs. Narrow
+	// trigger, mirroring mesh_5ghz_channel's guard above: config.js
+	// resends every field on every save, not just edited ones, so without
+	// the != existingConf comparison this restarts wpa_supplicant on
+	// every mesh radio (tearing down every plink) on any unrelated save.
+	if (updates["mesh_ssid"] != "" && updates["mesh_ssid"] != existingConf["mesh_ssid"]) ||
+		(updates["mesh_key"] != "" && updates["mesh_key"] != existingConf["mesh_key"]) {
 		applyWPAConfig(conf)
 		applied["mesh_updated"] = true
 	}

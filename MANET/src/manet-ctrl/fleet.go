@@ -156,7 +156,12 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 		applyHostapdConfig(conf)
 		runCmd(10*time.Second, "systemctl", "restart", "hostapd")
 	}
-	if updates["mesh_ssid"] != "" || updates["mesh_key"] != "" {
+	// Narrow trigger, mirroring mesh_5ghz_channel's guard in apiAdminSave:
+	// a fleet push resends every field every time, not just changed ones,
+	// so without the != existingConf comparison this restarts wpa_supplicant
+	// on every mesh radio (tearing down every plink) on any unrelated push.
+	if (updates["mesh_ssid"] != "" && updates["mesh_ssid"] != existingConf["mesh_ssid"]) ||
+		(updates["mesh_key"] != "" && updates["mesh_key"] != existingConf["mesh_key"]) {
 		applyWPAConfig(conf)
 	}
 	if updates["multicast_mode"] != "" {
