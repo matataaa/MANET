@@ -112,6 +112,12 @@ function configRenderView(panel, cfg) {
         if (startKHz && !isNaN(ch)) return v + ' (' + ((startKHz + ch * 500) / 1000) + ' MHz)';
         return v;
       } },
+      { label: '5GHz Mesh Channel Mode', key: 'acs', fmt: function(v) { return v === 'y' ? 'Automatic (ACS)' : 'Static (pinned)'; } },
+      { label: '5GHz Mesh Width', key: 'mesh_5ghz_bw', fmt: function(v) { return v === '80' ? '80 MHz' : v === '40' ? '40 MHz' : '20 MHz (default)'; } },
+      { label: '5GHz Pinned Channel', key: 'mesh_5ghz_channel', fmt: function(v) {
+        var chLabel = v || '36 (default)';
+        return cfg.acs === 'y' ? chLabel + ' — unused while Automatic (ACS) is active' : chLabel;
+      } },
       { label: 'Multicast Mode', key: 'multicast_mode', fmt: function(v) { return v === 'optimized' ? 'Optimized (IGMP)' : 'Flood (default)'; } },
     ]},
     { title: 'Services', fields: [
@@ -470,6 +476,18 @@ function configRenderEdit(panel, cfg) {
     ], hint: 'Primary channel width for 802.11ah mesh. EU supports 1MHz only. Narrower = longer range.' },
     { label: 'HaLow Channel', key: 'halow_channel', type: 'select', options: [{v:'',l:'Auto'}],
       hint: 'Explicit HaLow channel for the current regulatory domain/bandwidth. Auto (default) picks the standard channel for that combination.' },
+    { label: '5GHz Mesh Channel Mode', key: 'acs', type: 'select', options: [
+      {v:'n',l:'Static (pinned channel)'},{v:'y',l:'Automatic (ACS)'}
+    ], hint: 'Static pins the 5GHz (and 2.4GHz) mesh to a fixed channel — deterministic, recommended. Automatic elects a channel via scanning/consensus across the fleet. Live — applies within one 15s tick, no restart needed.' },
+    { label: '5GHz Mesh Width', key: 'mesh_5ghz_bw', type: 'select', options: [
+      {v:'20',l:'20 MHz (default)'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
+    ], hint: 'Fleet-wide — never mix widths across nodes. 40MHz requires the patched wpa_supplicant and silently falls back to 20MHz without it. 80MHz without the patch can mismatch primary channel between peers.' },
+    { label: '5GHz Pinned Channel', key: 'mesh_5ghz_channel', type: 'select', options: [
+      {v:'',l:'36 / 5180 MHz (default)'},
+      {v:'40',l:'40 / 5200 MHz'},{v:'44',l:'44 / 5220 MHz'},{v:'48',l:'48 / 5240 MHz'},
+      {v:'149',l:'149 / 5745 MHz'},{v:'153',l:'153 / 5765 MHz'},{v:'157',l:'157 / 5785 MHz'},{v:'161',l:'161 / 5805 MHz'},{v:'165',l:'165 / 5825 MHz'}
+    ], hint: 'Only used when 5GHz Mesh Channel Mode above is Static. Ignored under Automatic (ACS), which elects its own channel.',
+      showIf: [{key:'acs', equals:'n'}] },
     { label: 'Multicast Mode', key: 'multicast_mode', type: 'select', options: [
       {v:'flood',l:'Flood (recommended ≤10 nodes)'},
       {v:'optimized',l:'Optimized IGMP (10+ nodes)'}
@@ -733,7 +751,7 @@ async function configSave() {
   }
 
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','eud_bandwidth','mesh_ssid','mesh_key',
-    'ipv4_network','regulatory_domain','halow_regulatory_domain','halow_bw','halow_channel','multicast_mode','battery_monitor','admin_password','require_auth',
+    'ipv4_network','regulatory_domain','halow_regulatory_domain','halow_bw','halow_channel','acs','mesh_5ghz_bw','mesh_5ghz_channel','multicast_mode','battery_monitor','admin_password','require_auth',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
     'auto_update','update_url','auto_update_overlay','auto_update_min_mbps',
     'gps','gps_source','gps_static_lat','gps_static_lon','gps_static_alt','callsign','cot_type','cot_team','cot_role','cot_icon',

@@ -64,7 +64,11 @@ func main() {
 		if _, iface5 := meshIfaces(); iface5 != "" {
 			reconcile5GHzWidth(iface5)
 		}
-		if acsEnabled {
+		// Re-read acs from mesh.conf every tick rather than reusing the
+		// startup snapshot above — acs is now a live-settable key (Config
+		// UI, Fleet management, `mesh` CLI), and a cached bool here would
+		// mean toggling it has zero effect until node-manager restarts.
+		if loadConf("acs") == "y" {
 			runACSTick()
 		} else {
 			ensureStaticChannels()
