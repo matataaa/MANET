@@ -1,0 +1,1 @@
+/root/MANET/.cursor/skills/mesh-debug/SKILL.md

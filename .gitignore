@@ -53,3 +53,9 @@ MANET/provisioning/.image-cache/
 # MANET/packaging/fetch-cm4-overlay.sh.
 kernel-work/*
 !kernel-work/packages/cm4-sbc-overlay/VENDORED_FROM.md
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+.claude/
+.ignore
+.mcp.json
