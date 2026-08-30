@@ -1637,11 +1637,30 @@ hardware-verified — added to "What needs testing" below.
       faster and would otherwise risk yanking the node's *other*,
       already-working band to the lobby every ~15s — exactly the gossip
       path the cold-starting band is waiting on.
-      **Not yet re-verified on hardware** — the fast-retry fix above has
-      not had its own EUD3+EUD4 reboot test yet. Re-run before trusting
-      this over the original persisted-bias fix in the field. The
-      true-first-boot and EU-regulatory-domain cases the original fix also
-      left untested remain untested here too.
+      **Fast-retry fix (`5d9a5ec`) hardware-verified 2026-08-30, same
+      EUD3+EUD4 sequential-reboot methodology.** EUD3's first post-boot
+      tick already found `votes 1` for both bands (EUD4's vote had
+      already gossiped in) and elected immediately — outage (reboot →
+      5GHz plink up) **~79.6s**, down from the regression build's 4m21s.
+      EUD4 did exercise the hold path — `journalctl -u node-manager
+      -o short-monotonic` shows holds at boot+26s and retries landing at
+      boot+41.5s and boot+56.5s (~15s apart, matching `loopInterval`,
+      confirming the `lastACSCycle` rewind fires on schedule instead of
+      the old 180s wall) before electing both bands and re-establishing
+      the plink — outage **~80.8s**, down from 4m7s. Neither figure lands
+      in the ideal 15-45s band, but the remainder is legitimate boot time
+      plus gossip-propagation latency plus sequential per-band
+      wpa_supplicant reassociation, not the 180s throttle bug recurring —
+      confirmed by the ~15s-spaced retry log lines above. Also confirmed:
+      no tourguide/coldStart bleed onto the other, already-converged node
+      in either direction (neither node's healthy band was disturbed
+      during the other's downtime), and `iperf3` post-recovery held at
+      437/435 Mbit/s, in line with the previously documented healthy
+      range. If ~80s outages are still too slow for the target use case,
+      the next lever is registry/alfred gossip propagation speed or how
+      early node-manager starts its first ACS tick relative to boot — not
+      this commit. The true-first-boot and EU-regulatory-domain cases the
+      original fix also left untested remain untested here too.
 - [x] **Cold-boot bias fix (`mesh_acs_last_channels`)** — **hardware-
       verified 2026-08-28** (historical — see superseded note above.)
       Deployed the fix and rebooted both EUD3 and
