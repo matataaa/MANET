@@ -30,7 +30,8 @@ const (
 	defaultInterval    = 6 * time.Hour
 	cooldown           = 1 * time.Hour
 	httpTimeout        = 30 * time.Second
-	startupDelay       = 30 * time.Second
+	downloadTimeout    = 10 * time.Minute
+	startupDelay       = 5 * time.Minute
 	minRebootJitter    = 1 * time.Minute
 	maxRebootJitter    = 15 * time.Minute
 	defaultMinMbps     = 10
@@ -39,8 +40,13 @@ const (
 var (
 	lastCheck time.Time
 	mu        sync.Mutex
-	client    = &http.Client{Timeout: httpTimeout}
-	Version   = "dev"
+	// client is for tiny version-check text fetches — keep its timeout short.
+	client = &http.Client{Timeout: httpTimeout}
+	// downloadClient is for full tarball GETs, which can be tens of MB over a
+	// mesh link well under 10 Mbps; httpTimeout's 30s is a hard deadline on
+	// the whole body read and reliably clips real downloads on slow uplinks.
+	downloadClient = &http.Client{Timeout: downloadTimeout}
+	Version        = "dev"
 )
 
 func main() {
@@ -583,7 +589,7 @@ func fetchText(url string) (string, error) {
 func download(url, dest string) error {
 	log.Printf("downloading %s", url)
 
-	resp, err := client.Get(url)
+	resp, err := downloadClient.Get(url)
 	if err != nil {
 		return err
 	}

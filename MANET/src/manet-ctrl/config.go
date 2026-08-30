@@ -103,6 +103,7 @@ type Iface struct {
 	State         string   `json:"state"`
 	Channel       string   `json:"channel"`
 	FreqMHz       string   `json:"freq_mhz"`
+	WidthMHz      string   `json:"width_mhz,omitempty"`
 	TxPowerDBM    string   `json:"txpower_dbm"`
 	TxPowerCapDBM string   `json:"txpower_cap_dbm"`
 	TxPowerOpts   []string `json:"txpower_options_dbm"`
@@ -197,6 +198,7 @@ type LocalData struct {
 	Airtime    *AirtimeInfo    `json:"airtime,omitempty"`
 	UplinkMbps float64         `json:"uplink_mbps"`
 	UplinkType string          `json:"uplink_type"`
+	CoreDown   []string        `json:"core_down,omitempty"`
 }
 
 type BatOriginator struct {

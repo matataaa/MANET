@@ -14,6 +14,30 @@
 #
 set -e
 
+# --config <name>: skip the interactive load/create menu below and load
+# .mesh-configs/<name>.conf directly (must already exist -- this flag never
+# creates one). --hardware <rpi5|rpi4|cm4>: skip the interactive
+# select_hardware menu. Both are needed together to drive a fully
+# non-interactive build (an external release/automation script) -- omit
+# both and nothing about the normal interactive flow changes.
+NONINTERACTIVE_CONFIG=""
+NONINTERACTIVE_HARDWARE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config)
+            NONINTERACTIVE_CONFIG="$2"
+            shift 2
+            ;;
+        --hardware)
+            NONINTERACTIVE_HARDWARE="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
 # Pick up the Go/Android SDK toolchain build-tarballs-linux.sh installs,
 # even if this shell was started before that profile snippet existed —
 # /etc/profile.d is only sourced when a shell *starts*, so a terminal left
@@ -296,6 +320,19 @@ ask_questions() {
     GPS_ENABLED=${GPS_ENABLED:-y}
     if [ "$GPS_ENABLED" = "y" ] || [ "$GPS_ENABLED" = "Y" ]; then GPS_ENABLED="y"; else GPS_ENABLED="n"; fi
 
+    # HALOW_BW/HALOW_CHANNEL: previously referenced by firstrun.sh.template
+    # (halow_bw=__HALOW_BW__ / halow_channel=__HALOW_CHANNEL__) with no
+    # prompt, save/load, or sed substitution anywhere in this script -- a
+    # fresh image wrote the literal placeholder text into /etc/mesh.conf
+    # instead of a real value. Default matches radio-setup.sh's own runtime
+    # fallback (halow_bw="${halow_bw:-4MHz}") for consistency between
+    # "value baked at image time" and "value radio-setup.sh would pick
+    # anyway if this were left unset" -- not an arbitrary new default.
+    read -p "HaLow bandwidth (1MHz/2MHz/4MHz/8MHz) [4MHz]: " HALOW_BW
+    HALOW_BW=${HALOW_BW:-4MHz}
+    read -p "HaLow channel [blank for Auto]: " HALOW_CHANNEL
+    HALOW_CHANNEL=${HALOW_CHANNEL:-}
+
     echo "----------------------------------"
 }
 
@@ -323,6 +360,8 @@ RADIO_PW="$RADIO_PW"
 ADMIN_PW="$ADMIN_PW"
 AUTO_UPDATE="$AUTO_UPDATE"
 NODE_HOSTNAME="$NODE_HOSTNAME"
+HALOW_BW="$HALOW_BW"
+HALOW_CHANNEL="$HALOW_CHANNEL"
 EOF
         echo "Configuration saved to $CONFIG_DIR/$config_name.conf"
     fi
@@ -334,6 +373,8 @@ load_config() {
     source "$CONFIG_FILE"
     HALOW_REGULATORY_DOMAIN=${HALOW_REGULATORY_DOMAIN:-$(halow_regulatory_domain_for_wifi_domain "$REGULATORY_DOMAIN")}
     GPS_ENABLED=${GPS_ENABLED:-y}
+    HALOW_BW=${HALOW_BW:-4MHz}
+    HALOW_CHANNEL=${HALOW_CHANNEL:-}
     echo "--- Loaded Configuration ---"
     head -n 1 "$CONFIG_FILE" | sed 's/\#//'
     echo "  EUD Connection: $EUD_CONNECTION"
@@ -448,6 +489,8 @@ build_image() {
         -e "s|__ADMIN_PW__|${ADMIN_PW}|g" \
         -e "s|__AUTO_UPDATE__|${AUTO_UPDATE}|g" \
         -e "s|__NODE_HOSTNAME__|${NODE_HOSTNAME}|g" \
+        -e "s|__HALOW_BW__|${HALOW_BW}|g" \
+        -e "s|__HALOW_CHANNEL__|${HALOW_CHANNEL}|g" \
         "$TEMPLATE_FILE" | tr -d '\r')
 
     # Write a wrapper that runs firstrun.sh then removes itself from
@@ -539,7 +582,14 @@ WRAPPER_HEAD
 #  Main
 # ============================================================
 
-select_hardware
+if [ -n "$NONINTERACTIVE_HARDWARE" ]; then
+    case "$NONINTERACTIVE_HARDWARE" in
+        rpi5|rpi4|cm4) HARDWARE_MODEL="$NONINTERACTIVE_HARDWARE" ;;
+        *) echo "ERROR: --hardware $NONINTERACTIVE_HARDWARE: must be one of rpi5, rpi4, cm4" >&2; exit 1 ;;
+    esac
+else
+    select_hardware
+fi
 
 # --- Check dependencies ---
 if [ ! -f "$TEMPLATE_FILE" ]; then
@@ -570,6 +620,12 @@ fi
 mkdir -p "$CONFIG_DIR"
 
 # --- Load or create config ---
+if [ -n "$NONINTERACTIVE_CONFIG" ]; then
+    NONINTERACTIVE_CONFIG_FILE="$CONFIG_DIR/$NONINTERACTIVE_CONFIG.conf"
+    [ -f "$NONINTERACTIVE_CONFIG_FILE" ] || { echo "ERROR: --config $NONINTERACTIVE_CONFIG: no such saved config at $NONINTERACTIVE_CONFIG_FILE" >&2; exit 1; }
+    RADIO_NAME="$NONINTERACTIVE_CONFIG"
+    load_config "$NONINTERACTIVE_CONFIG_FILE"
+else
 config_files=("$CONFIG_DIR"/*.conf)
 num_configs=${#config_files[@]}
 [ ! -f "${config_files[0]}" ] && num_configs=0
@@ -609,6 +665,7 @@ else
     ask_questions
     save_config
     RADIO_NAME="${config_name:-node}"
+fi
 fi
 
 # --- Download base image and build ---

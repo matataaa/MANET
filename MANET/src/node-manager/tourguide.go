@@ -61,7 +61,7 @@ func readTourguideState() (lastTimestamp int64, lastRadio string) {
 // have upstream's separate lobby/data *state machine*, just a per-cycle
 // election, so there's no separate clock to synchronize against.
 func maybeRunTourguide(registry map[string]map[string]string, selfMAC, iface24, iface5 string, mySize int) {
-	lastTS, lastRadio := readTourguideState()
+	lastTS, _ := readTourguideState()
 
 	winner := electTourguide(registry, selfMAC, lastTS)
 	if winner != selfMAC {
@@ -82,7 +82,7 @@ func maybeRunTourguide(registry map[string]map[string]string, selfMAC, iface24, 
 	myCh24 := getConfFreq(wpaConfPath(iface24))
 	myCh5 := getConfFreq(wpaConfPath(iface5))
 
-	radio := selectTourguideRadio(iface24, iface5, lastRadio)
+	radio := selectTourguideRadio(iface24, iface5)
 	is24 := radio == iface24
 	confPath := wpaConfPath(radio)
 	homeFreq, lobbyFreq := myCh5, lobbyFreq5
@@ -101,7 +101,7 @@ func maybeRunTourguide(registry map[string]map[string]string, selfMAC, iface24, 
 	// of silently reverting the merge that was just applied.
 	returnFreq := homeFreq
 	if foreign := analyzeForeignPartitions(readRegistry(registryFile), selfMAC, myCh24, myCh5); foreign != nil {
-		if applyPartitionMerge(foreign, iface24, iface5, myCh24, myCh5, mySize) {
+		if applyPartitionMerge(foreign, selfMAC, iface24, iface5, myCh24, myCh5, mySize) {
 			if is24 {
 				returnFreq = foreign.dataCh24
 			} else {
@@ -200,13 +200,22 @@ func directBatmanNeighbors() []string {
 	return macs
 }
 
-func selectTourguideRadio(iface24, iface5, lastRadio string) string {
-	switch lastRadio {
-	case iface24:
-		return iface5
-	default:
+// selectTourguideRadio picks which radio hops to the lobby this round.
+// Derived from a global window index over wall-clock time — (now /
+// acsCycleInterval) % 2 — rather than each node's own last-used radio.
+// Per-node "last radio" state can go out of phase between two healing
+// partitions: one missed turn (a restart, a failed hop, a future
+// service-hosting exclusion) and each side's tourguide starts alternating
+// to the opposite band from the other, so their lobby dwells never
+// overlap on the same band again and partition healing silently stops
+// working forever. A window computed identically from the same clock on
+// every node can't drift the way independent per-node state can — nodes
+// disagreeing here would be a clock-sync problem, not an alternation bug.
+func selectTourguideRadio(iface24, iface5 string) string {
+	if (time.Now().Unix()/int64(acsCycleInterval/time.Second))%2 == 0 {
 		return iface24
 	}
+	return iface5
 }
 
 // hopFrequency rewrites the radio to targetFreq and nudges wpa_supplicant
@@ -221,7 +230,15 @@ func selectTourguideRadio(iface24, iface5, lastRadio string) string {
 func hopFrequency(iface, confPath, targetFreq string, is24, toLobby bool) {
 	rewriteFrequencyLine(confPath, targetFreq, "tourguide")
 	exec.Command("wpa_cli", "-i", iface, "reconfigure").Run()
-	waitForFrequency(iface, targetFreq)
+	if !waitForFrequency(iface, targetFreq) {
+		// Not escalated further here — a radio stranded off its intended
+		// frequency after a failed hop (lobby-bound or the return-to-data
+		// hop) is exactly the live-vs-elected divergence
+		// acsVerifyAfterApply already catches on the next ACS cycle;
+		// building a second escalation path here would be redundant (see
+		// ACS.md's validated design, point 2).
+		log.Printf("[acs] tourguide: %s did not reach %s MHz within the poll window", iface, targetFreq)
+	}
 	if toLobby {
 		setLegacyBitrate(iface, is24)
 	} else {
@@ -229,15 +246,26 @@ func hopFrequency(iface, confPath, targetFreq string, is24, toLobby bool) {
 	}
 }
 
-func waitForFrequency(iface, targetFreq string) {
-	needle := targetFreq + " MHz"
+// waitForFrequency polls iface (via readIfaceFreq, acs_selfheal.go) until it
+// reports targetFreq or the poll budget is exhausted. A thin retry loop over
+// that single-shot reader rather than an independent poller — this used to
+// do its own `strings.Contains(out, targetFreq+" MHz")` against the full
+// `iw dev info` output, which also matches unrelated lines like
+// "width: 80 MHz" or "center1: 5210 MHz" and could produce a false pass if a
+// future candidate frequency happened to collide with one of those values.
+// Returns whether targetFreq was actually observed, so a caller that cares
+// can tell a genuine join from a timeout — hopFrequency below doesn't act on
+// this today (a failed hop is left to the next ACS cycle's own
+// verify-after-apply self-heal to catch, see ACS.md, rather than building a
+// second escalation path here), but logs on timeout for visibility.
+func waitForFrequency(iface, targetFreq string) bool {
 	for i := 0; i < 20; i++ {
-		out, _ := exec.Command("iw", "dev", iface, "info").Output()
-		if strings.Contains(string(out), needle) {
-			return
+		if freq, ok := readIfaceFreq(iface); ok && freq == targetFreq {
+			return true
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+	return false
 }
 
 type foreignPartition struct {
@@ -323,23 +351,30 @@ func analyzeForeignPartitions(registry map[string]map[string]string, selfMAC, my
 }
 
 // applyPartitionMerge migrates this node onto the foreign partition's
-// channels if it's the larger side (tie broken by lexicographically lower
-// channel-pair string) — the smaller partition migrates to the larger one
-// rather than the other way around, so a healing mesh converges on
-// whichever side already has more nodes instead of thrashing. Reports
-// whether it actually migrated, so the caller's tourguide-radio return hop
-// can land on the new (not stale pre-merge) frequency. myCh24/myCh5 must be
-// the pre-hop home channels, not read fresh here — during the tourguide's
-// dwell window, one radio's conf file currently holds the lobby frequency,
-// not its real data channel. mySize is likewise the caller's single
-// per-cycle originator count taken before the hop, not recomputed here —
-// measuring it now would undercount whatever this partition can only reach
-// through the radio that's currently sitting in the lobby.
-func applyPartitionMerge(foreign *foreignPartition, iface24, iface5, myCh24, myCh5 string, mySize int) bool {
-	myConfig := myCh24 + "-" + myCh5
+// channels if it's the larger side (tie broken by lowest MAC, which stays
+// put) — the smaller partition migrates to the larger one rather than the
+// other way around, so a healing mesh converges on whichever side already
+// has more nodes instead of thrashing. Reports whether it actually
+// migrated, so the caller's tourguide-radio return hop can land on the new
+// (not stale pre-merge) frequency. myCh24/myCh5 must be the pre-hop home
+// channels, not read fresh here — during the tourguide's dwell window, one
+// radio's conf file currently holds the lobby frequency, not its real data
+// channel. mySize is likewise the caller's single per-cycle originator
+// count taken before the hop, not recomputed here — measuring it now would
+// undercount whatever this partition can only reach through the radio
+// that's currently sitting in the lobby.
+//
+// The tie is broken on MAC rather than on the channel-pair string: an
+// equal-size merge used to keep whichever side had the lexicographically
+// lower "ch24-ch5" string, which silently biases every equal-size merge
+// toward the numerically lower channel pair — a node that fled a jammed
+// low channel would get pulled straight back onto it. MAC is neutral with
+// respect to channel number, and the normal election re-optimizes away
+// from a bad channel on the next cycle regardless of which side won here.
+func applyPartitionMerge(foreign *foreignPartition, selfMAC, iface24, iface5, myCh24, myCh5 string, mySize int) bool {
 	foreignConfig := foreign.dataCh24 + "-" + foreign.dataCh5
 
-	winnerIsForeign := foreign.size > mySize || (foreign.size == mySize && foreignConfig < myConfig)
+	winnerIsForeign := foreign.size > mySize || (foreign.size == mySize && foreign.mac < selfMAC)
 	if !winnerIsForeign {
 		log.Printf("[acs] partition merge: foreign partition %s on %s (size %d) smaller than ours (size %d) — staying put",
 			foreign.mac, foreignConfig, foreign.size, mySize)

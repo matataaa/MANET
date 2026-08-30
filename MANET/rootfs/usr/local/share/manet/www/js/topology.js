@@ -121,23 +121,22 @@ function topoInit(container) {
   svg.call(topoZoom);
 
   topoSim = d3.forceSimulation()
-    .force('charge', d3.forceManyBody().strength(-1500))
+    .force('charge', d3.forceManyBody().strength(-2200))
     .force('link', d3.forceLink().id(function(d) { return d.id; }).distance(function(d) {
-      // Two directly-linked nodes each carrying a 115px collision radius
-      // need >=230px of separation to avoid touching; a 120px minimum
-      // here fought that (link force pulling them closer than collision
-      // wanted to allow), which is part of what produced the crowded,
-      // overlapping layout. 200px minimum leaves enough room.
+      // Two directly-linked nodes each carrying a 150px collision radius
+      // need >=300px of separation to avoid touching. Real meshes often
+      // report uniformly high TQ between physically close nodes, which
+      // used to collapse this toward its old 200px floor — tight enough
+      // that node icons and label text (hostname/IP/sublabel) crowded
+      // each other even without literal overlap. 300px minimum keeps a
+      // clear visual gap at any link quality.
       var tq = d.tq != null ? d.tq : 128;
-      return 200 + ((255 - tq) / 255) * 180;
+      return 300 + ((255 - tq) / 255) * 220;
     }))
-    // Each node's label stack (hostname/IP/sublabel) extends to roughly
-    // r+63 below its center — the previous flat 80px collision radius
-    // didn't account for that, so nodes could still be pushed close
-    // enough for one node's label text to run through a neighbor's icon
-    // or edge labels (confirmed live via screenshot). 115 gives the full
-    // label stack clearance regardless of node radius.
-    .force('collision', d3.forceCollide(115))
+    // Each node's label stack extends to roughly r+63 below its center —
+    // 150 gives that stack (plus a visible gap to the next node) clearance
+    // regardless of node radius.
+    .force('collision', d3.forceCollide(150))
     .alphaDecay(0.05);
 
   topoNodeMap = {};

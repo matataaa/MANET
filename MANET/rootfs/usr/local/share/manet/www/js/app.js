@@ -215,6 +215,7 @@ async function fetchData() {
 function onDataUpdated() {
   if (activeTab === 'dashboard') dashboardUpdate();
   else if (activeTab === 'nodes') nodesUpdate();
+  else if (activeTab === 'mesh') meshFetch();
   pollAppletBadges();
 }
 
@@ -287,11 +288,22 @@ function updateHeader() {
   if (LOCAL_DATA.interfaces) {
     const faults = LOCAL_DATA.interfaces.filter(i => i.health === 'fault');
     const warns = LOCAL_DATA.interfaces.filter(i => i.health === 'warn');
-    let cls, dotColor, text;
-    if (faults.length > 0) {
+    // core_down lists always-should-be-running services (alfred,
+    // mesh-registry, mesh-boot-lobby) that systemctl reports as not
+    // active — surfaced here because a stopped alfred, for instance,
+    // silently drops this node from the fleet registry with no other
+    // visible symptom (SSH/batman-adv stay healthy throughout).
+    const coreDown = LOCAL_DATA.core_down || [];
+    let cls, dotColor, text, clickHash = '#dashboard';
+    if (coreDown.length > 0 || faults.length > 0) {
       cls = 'health-fault';
       dotColor = 'var(--bad)';
-      text = faults.length === 1 ? '⚠ ' + faults[0].name + ' FAULT' : '⚠ ' + faults.length + ' FAULTS';
+      if (coreDown.length > 0) {
+        clickHash = '#services';
+        text = coreDown.length === 1 ? '⚠ ' + coreDown[0] + ' DOWN' : '⚠ ' + coreDown.length + ' SERVICES DOWN';
+      } else {
+        text = faults.length === 1 ? '⚠ ' + faults[0].name + ' FAULT' : '⚠ ' + faults.length + ' FAULTS';
+      }
     } else if (warns.length > 0) {
       cls = 'health-warn';
       dotColor = 'var(--warn)';
@@ -305,11 +317,14 @@ function updateHeader() {
     dot.style.background = dotColor;
     label.textContent = text;
     label.style.color = dotColor;
-    hdr.style.cursor = (faults.length || warns.length) ? 'pointer' : '';
-    hdr.title = (faults.length || warns.length)
-      ? faults.concat(warns).map(i => i.name + ': ' + (i.faults||[]).join(', ')).join('\n')
+    const hasIssue = faults.length > 0 || warns.length > 0 || coreDown.length > 0;
+    hdr.style.cursor = hasIssue ? 'pointer' : '';
+    hdr.title = hasIssue
+      ? coreDown.map(id => id + ': service not active')
+          .concat(faults.concat(warns).map(i => i.name + ': ' + (i.faults||[]).join(', ')))
+          .join('\n')
       : '';
-    hdr.onclick = (faults.length || warns.length) ? function() { location.hash = '#dashboard'; } : null;
+    hdr.onclick = hasIssue ? function() { location.hash = clickHash; } : null;
   }
 }
 

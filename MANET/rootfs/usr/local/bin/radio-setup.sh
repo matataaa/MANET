@@ -392,6 +392,43 @@ HALOW_REGULATORY_DOMAIN=$(grep "^halow_regulatory_domain=" /etc/mesh.conf 2>/dev
 HALOW_REGULATORY_DOMAIN=${HALOW_REGULATORY_DOMAIN:-$REGULATORY_DOMAIN}
 REG=$REGULATORY_DOMAIN
 
+# 5GHz mesh channel width. Default 20MHz (safe/deterministic — see ACS.md
+# "Decision: 20MHz-only 5GHz mesh"): wpa_supplicant's mesh mode has no
+# config-level fix for a primary-channel mismatch bug on VHT80, so an
+# absent key must resolve to the narrower, deterministic width, not the
+# legacy 80MHz default. Set to "80" explicitly to opt back into VHT80.
+MESH_5GHZ_BW=$(grep "^mesh_5ghz_bw=" /etc/mesh.conf 2>/dev/null | cut -d'=' -f2)
+MESH_5GHZ_BW=${MESH_5GHZ_BW:-20}
+
+# NOSCAN_CAPABLE gates every write of noscan=1 (or any other mesh-noscan-
+# patch key) below — the ONLY signal permitted to do so, per
+# docs/wpa-supplicant-mesh-noscan.md. The stock system wpa_supplicant fails
+# to parse an entire network={} block on an unrecognized key and exits
+# (status=255), dropping that radio out of the mesh entirely — never write
+# these keys without this check passing first.
+NOSCAN_CAPABLE=0
+[[ -x /usr/sbin/wpa_supplicant_mesh ]] && NOSCAN_CAPABLE=1
+
+# Point every wpa_supplicant@<iface> instance at this project's own patched
+# binary (see MANET/src/wpa-supplicant-mesh/) instead of the system-package
+# one -- generated here, gated on NOSCAN_CAPABLE, rather than shipped as a
+# static rootfs file: a static drop-in with no fallback pointed ExecStart at
+# a binary that isn't present on every platform this rootfs overlay ships to
+# (confirmed: the x86 gateway tarball carries this same /etc tree but never
+# installs the arm64-only binary), which would take down BOTH mesh radios'
+# wpa_supplicant instances unconditionally, a worse failure than anything
+# noscan=1 itself can cause. Binary presence is the single source of truth
+# for both this file and every noscan=1 write below -- keep it that way.
+if [[ "$NOSCAN_CAPABLE" -eq 1 ]]; then
+    cat << EOF > /etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/wpa_supplicant_mesh -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I
+EOF
+else
+    rm -f /etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf
+fi
+
 echo REGDOMAIN=$REGULATORY_DOMAIN > /etc/default/crda
 
 uses_eu_halow_region() {
@@ -1009,6 +1046,51 @@ for WLAN in $(cat /var/lib/mesh_if); do
 
     echo " > Setting SAE key/SSID for $WLAN (${FREQ} MHz) ..."
 
+    # 5GHz mesh links default to 20MHz-only (disable_ht40 + disable_vht) —
+    # both are required together (disable_ht40 alone breaks mesh join
+    # outright, live-confirmed). See ACS.md "Decision: 20MHz-only 5GHz
+    # mesh" for why: wpa_supplicant's own coex-scan-driven primary/
+    # secondary reselection has no config-level fix for mesh mode, so
+    # VHT80 links can silently mismatch primary channel between nodes.
+    #
+    # mesh_5ghz_bw=40/80 use the patched wpa_supplicant's noscan=1 instead
+    # (docs/wpa-supplicant-mesh-noscan.md) — the actual fix for that
+    # nondeterminism — but ONLY when NOSCAN_CAPABLE=1. Without the patched
+    # binary, 40 falls back to today's 20MHz-only behavior (never "40
+    # without noscan" — that would reintroduce the identical HT40 coex-scan
+    # nondeterminism under a new config value), and 80 keeps today's
+    # existing, already-documented, already-UI-warned-about VHT80
+    # nondeterminism unchanged. 2.4GHz (FREQ < 5000) never gets any of
+    # these keys.
+    WIDTH_LINES=""
+    if [[ "$FREQ" -ge 5000 ]]; then
+        case "$MESH_5GHZ_BW" in
+            40)
+                if [[ "$NOSCAN_CAPABLE" -eq 1 ]]; then
+                    WIDTH_LINES="    noscan=1
+    disable_vht=1
+"
+                else
+                    WIDTH_LINES="    disable_ht40=1
+    disable_vht=1
+"
+                fi
+                ;;
+            80)
+                if [[ "$NOSCAN_CAPABLE" -eq 1 ]]; then
+                    WIDTH_LINES="    noscan=1
+    max_oper_chwidth=1
+"
+                fi
+                ;;
+            *)
+                WIDTH_LINES="    disable_ht40=1
+    disable_vht=1
+"
+                ;;
+        esac
+    fi
+
 cat <<-EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf
 ctrl_interface=/var/run/wpa_supplicant
 country=$CFG80211_REGDOM
@@ -1024,7 +1106,7 @@ network={
     ieee80211w=2
     mesh_fwding=0
     group_rekey=0
-}
+${WIDTH_LINES}}
 EOF
 
     # Create the network interface config
@@ -1271,6 +1353,37 @@ done
 # === HALOW CONFIGURATION ===
 # ============================================================================
 
+# Ground-truth legal HaLow channel list per regulatory domain + bandwidth,
+# reverse-engineered from the compiled wpa_supplicant_s1g binary's
+# s1g_op_classes table (see api.go's halowChannelTable for the same table,
+# kept byte-consistent between the two). Returns 1 (invalid) for any
+# domain/bw not covered here -- that includes EU + anything but 1MHz, and
+# every domain other than US/EU.
+halow_channel_valid() {
+    local domain="$1" bw="$2" ch="$3" list=""
+    case "$domain" in
+        US)
+            case "$bw" in
+                1MHz) list="1 3 5 7 9 11 13 15 17 19 21 23 25 27 29 31 33 35 37 39 41 43 45 47 49 51" ;;
+                2MHz) list="2 6 10 14 18 22 26 30 34 38 42 46 50" ;;
+                4MHz) list="8 16 24 32 40 48" ;;
+                8MHz) list="12 28 44" ;;
+            esac
+            ;;
+        EU)
+            case "$bw" in
+                1MHz) list="1 3 5 7 9" ;;
+            esac
+            ;;
+    esac
+    [ -z "$list" ] && return 1
+    local c
+    for c in $list; do
+        [ "$c" = "$ch" ] && return 0
+    done
+    return 1
+}
+
 for WLAN in $(cat /var/lib/halow_if | head -n 1); do
     if [ "$needs_rerun" -eq 1 ]; then
         echo " > Rename pending — deferring HaLow wpa config for $WLAN to post-reboot re-run"
@@ -1300,6 +1413,7 @@ EOF
             case "$halow_bw" in
                 1MHz)  S1G_OP_CLASS=68; S1G_CHANNEL=11; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
                 2MHz)  S1G_OP_CLASS=69; S1G_CHANNEL=10; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2400 ;;
+                4MHz)  S1G_OP_CLASS=70; S1G_CHANNEL=24; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2200 ;;
                 # op_class 72 / channel 8 is rejected outright by
                 # wpa_supplicant_s1g ("error determining S1G operating
                 # channel width from operating class") — confirmed live on
@@ -1315,6 +1429,35 @@ EOF
             esac
             S1G_COUNTRY="US"
             S1G_MBCA=1
+            if [ -n "${halow_channel:-}" ]; then
+                if halow_channel_valid "US" "$halow_bw" "$halow_channel"; then
+                    S1G_CHANNEL="$halow_channel"
+                else
+                    echo " > WARNING: halow_channel=$halow_channel is not valid for US/$halow_bw -- falling back to default channel $S1G_CHANNEL"
+                fi
+            fi
+            ;;
+        EU)
+            case "$halow_bw" in
+                1MHz)  S1G_OP_CLASS=66; S1G_CHANNEL=5; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
+                # The compiled wpa_supplicant_s1g op-class table has no
+                # 2MHz/4MHz/8MHz entry for EU at all -- EU is genuinely
+                # 1MHz-only on this hardware/firmware. apiAdminSave rejects
+                # an EU + non-1MHz halow_bw save outright; provisioning has
+                # no save-time reject path, so fall back to the only real
+                # EU width instead of writing an invalid op_class/channel
+                # pair into the s1g wpa_supplicant conf.
+                *)     S1G_OP_CLASS=66; S1G_CHANNEL=5; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
+            esac
+            S1G_COUNTRY="$HALOW_REGULATORY_DOMAIN"
+            S1G_MBCA=0
+            if [ -n "${halow_channel:-}" ]; then
+                if halow_channel_valid "EU" "1MHz" "$halow_channel"; then
+                    S1G_CHANNEL="$halow_channel"
+                else
+                    echo " > WARNING: halow_channel=$halow_channel is not valid for EU/1MHz -- falling back to default channel $S1G_CHANNEL"
+                fi
+            fi
             ;;
         *)
             case "$halow_bw" in
@@ -1570,12 +1713,20 @@ systemctl enable batman-enslave.service
 systemctl enable batman-enslave-watch.service
 
 # Alfred master listener for mesh data messages
+#
+# Wants=/After=, not Requires=, on batman-enslave.service: Requires=
+# propagates a stop, so every time morse-spi-watchdog.sh's gpio_recover()
+# bounces batman-enslave.service for radio-fault recovery, alfred (and
+# batman-enslave-watch.service, same reasoning) got silently stopped as a
+# side effect and never restarted — the confirmed root cause of alfred
+# being found cleanly `inactive` for days with no crash/error anywhere.
+# Restart=always below doesn't help; this was a deliberate stop, not a
+# crash. Wants=/After= keeps normal startup ordering without the cascade.
 cat <<- EOF > /etc/systemd/system/alfred.service
 [Unit]
 Description=B.A.T.M.A.N. Advanced Layer 2 Forwarding Daemon
-After=network-online.target
-Wants=network-online.target
-Requires=batman-enslave.service
+After=network-online.target batman-enslave.service
+Wants=network-online.target batman-enslave.service
 
 [Service]
 Type=simple

@@ -89,6 +89,7 @@ function hwRenderRadios() {
       }
       rows += hwRow(isHalow ? 'S1G Channel' : 'Channel', chLabel);
     }
+    if (r.width_mhz) rows += hwRow('Channel Width', r.width_mhz + ' MHz');
     if (r.halow_bw) rows += hwRow('Primary BW', r.halow_bw);
     if (r.txpower_dbm) {
       var txLabel = r.txpower_dbm + ' dBm';

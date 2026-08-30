@@ -14,10 +14,28 @@ const MESH_FIELDS = [
   { key: 'mesh_key', label: 'Mesh Key', dangerous: true, type: 'password' },
   { key: 'ipv4_network', label: 'IPv4 Network', dangerous: true },
   { key: 'halow_bw', label: 'HaLow Bandwidth', type: 'select', options: ['1MHz','2MHz','4MHz','8MHz'] },
+  { key: 'halow_channel', label: 'HaLow Channel', type: 'channel-halow', hint: 'Blank = Auto. Validated per-node against its own regulatory domain on apply, since a fleet push can span nodes on different domains.' },
+  { key: 'acs', label: '5GHz Mesh Channel Mode', dangerous: true, type: 'select', options: [
+    {v:'n',l:'Static (pinned channel)'},{v:'y',l:'Automatic (ACS)'}
+  ], hint: 'Must match across the fleet — nodes on different modes won\'t elect/scan together. Live — applies within one 15s tick per node, no restart needed.' },
+  { key: 'mesh_5ghz_bw', label: '5GHz Mesh Width', dangerous: true, type: 'select', options: [
+    {v:'20',l:'20 MHz (default)'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
+  ], hint: 'Never mix widths across nodes. 40MHz requires the patched wpa_supplicant and silently falls back to 20MHz without it. 80MHz without the patch can mismatch primary channel between peers.' },
+  // Hidden (not removed) when acs='y' — see showIf below. Still always
+  // collected by fleetCollectEditState regardless of visibility, matching
+  // config.js's meshFields submit list (config.js ~753-754): toggling ACS
+  // on/off in this same edit session must not blank out the pinned channel
+  // fleet-wide just because its row was hidden.
+  { key: 'mesh_5ghz_channel', label: '5GHz Pinned Channel', dangerous: true, type: 'channel-5ghz',
+    hint: 'Only used when 5GHz Mesh Channel Mode is Static. Blank = default 36. Must match across the fleet.',
+    showIf: [{key:'acs', equals:'n'}] },
   { key: 'multicast_mode', label: 'Multicast Mode', type: 'select', options: [
     {v:'flood',l:'Flood (recommended ≤10 nodes)'},{v:'optimized',l:'Optimized IGMP (10+ nodes)'}
   ] },
-  { key: 'regulatory_domain', label: 'Reg Domain' },
+  { key: 'regulatory_domain', label: 'Reg Domain', type: 'select', options: ['US', 'EU', 'JP', 'AU'] },
+  { key: 'halow_regulatory_domain', label: 'HaLow Reg Domain', type: 'select', options: [
+    {v:'',l:'Inherit from Reg Domain'},'US','EU','JP','AU'
+  ], hint: 'Blank = inherit Reg Domain. Overrides it for HaLow specifically (e.g. MM8108 nodes running HaLow on a different domain than their WiFi radios).' },
   { key: 'dns_servers', label: 'DNS Servers', hint: 'Comma-separated (e.g. 8.8.8.8,8.8.4.4)' },
   { key: 'admin_password', label: 'Admin Password', type: 'password' },
   { key: 'require_auth', label: 'Require Auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },
@@ -64,7 +82,14 @@ const PROFILE_SECTIONS = [
       {v:'20',l:'20 MHz'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
     ] },
   ]},
+  { id: 'gps', cat: 'GPS', fields: [
+    { key: 'gps', label: 'GPS Enabled', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
+    { key: 'gps_source', label: 'GPS Source', type: 'select', options: [
+      {v:'receiver',l:'Receiver (hardware GPS)'},{v:'static',l:'Static (fixed location)'}
+    ], hint: 'Static coordinates are set per-node in that node\'s own Config, not here' },
+  ]},
   { id: 'voice', cat: 'Voice', fields: [
+    { key: 'voice_enabled', label: 'Voice Enabled', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { key: 'voice_ptt_mode', label: 'PTT Mode', type: 'select', options: [
       {v:'openvlm',l:'OpenVLM HID'},{v:'gpio',l:'GPIO Button'},{v:'always',l:'Always On'},{v:'vox',l:'VOX (auto)'}
     ] },
@@ -154,7 +179,16 @@ function fleetConfirm(msg, opts, onConfirm) {
 // --- View mode ---
 
 function fleetRender() {
-  if (!fleetData || fleetEditing) return;
+  // fleetEditing already guards the edit-form case against the 5s
+  // background poll (fleetFetch -> fleetRender, see fleetPollTimer above).
+  // fleetConfirm's confirmation bar needs the same guard: it's inserted
+  // directly into #tab-fleet (fleetConfirm, above) rather than being part
+  // of the html string this function builds, so without this check the
+  // very next poll tick's panel.innerHTML replace below would wipe it out
+  // from under the operator — anywhere from near-instantly to 5s after it
+  // appears, depending on poll timing. This was reported live: the
+  // Activate-fleet-config confirmation disappeared before it could be read.
+  if (!fleetData || fleetEditing || document.querySelector('.fleet-confirm-bar')) return;
   var panel = document.getElementById('tab-fleet');
   var d = fleetData;
   var prefs = d.preferences || {};
@@ -483,20 +517,48 @@ function fleetStartEdit() {
   document.getElementById('fleet-edit-cancel').addEventListener('click', function() { fleetEditing = false; fleetRender(); });
   document.getElementById('fleet-add-profile').addEventListener('click', fleetAddProfile);
   fleetBindProfileEvents();
+
+  fleetBindFieldBehaviors(MESH_FIELDS, 'mesh-');
 }
 
 function fleetRenderField(f, val, prefix) {
   var cls = f.dangerous ? ' fleet-field-danger' : '';
-  var html = '<div class="fleet-field' + cls + '">';
+  // id on the wrapper row is used by fleetApplyShowIf to hide/show the whole
+  // row -- see the showIf-equivalent mechanism below fleetRenderField.
+  var html = '<div class="fleet-field' + cls + '" id="fleet-row-' + prefix + f.key + '">';
   html += '<label>' + escHtml(f.label) + '</label>';
   if (f.type === 'select' && f.options) {
     html += '<select id="fleet-f-' + prefix + f.key + '">';
+    // If the persisted value isn't one of the preset options (e.g.
+    // regulatory_domain holds a real ISO country code like "HR", but this
+    // list only offers US/EU/JP/AU), the browser would otherwise silently
+    // select whichever option renders first -- and since fleetCollectEditState
+    // always collects every field, staging any unrelated change would then
+    // fleet-push that wrong value over every node's real setting. Prepend a
+    // synthetic option holding the actual current value so it stays selected
+    // and round-trips untouched unless the operator deliberately picks a
+    // different one.
+    var knownValues = f.options.map(function(opt) { return typeof opt === 'object' ? opt.v : opt; });
+    if (val !== '' && knownValues.indexOf(val) === -1) {
+      html += '<option value="' + escHtml(val) + '" selected>' + escHtml(val) + ' (current)</option>';
+    }
     f.options.forEach(function(opt) {
       var ov = typeof opt === 'object' ? opt.v : opt;
       var ol = typeof opt === 'object' ? opt.l : opt;
       html += '<option value="' + escHtml(ov) + '"' + (val === ov ? ' selected' : '') + '>' + escHtml(ol) + '</option>';
     });
     html += '</select>';
+  } else if (f.type === 'channel-halow' || f.type === 'channel-5ghz') {
+    // Pre-seeded with a single option holding the current value (selected)
+    // BEFORE the real channel list is fetched asynchronously (see
+    // fleetRefreshChannelPicker below) -- fixes an async-population race: if
+    // the operator hits Stage before the fetch resolves (e.g. over a slow
+    // HaLow-backhauled node's connection to the fleet UI),
+    // fleetCollectEditState's el.value read must still return the real
+    // current value, not blank/Auto.
+    html += '<select id="fleet-f-' + prefix + f.key + '"><option value="' + escHtml(val) + '" selected>' +
+      escHtml(val || 'Auto') + '</option></select>';
+    html += '<div class="fleet-field-hint" id="fleet-f-' + prefix + f.key + '-domain-label"></div>';
   } else {
     var inputType = f.type === 'password' ? 'password' : 'text';
     html += '<input type="' + inputType + '" id="fleet-f-' + prefix + f.key + '" value="' + escHtml(val) + '"' +
@@ -506,6 +568,131 @@ function fleetRenderField(f, val, prefix) {
   else if (f.hint) html += '<div style="font-size:10px;color:var(--muted);margin-top:2px">' + escHtml(f.hint) + '</div>';
   html += '</div>';
   return html;
+}
+
+// Resolves the effective regulatory domain client-side from the current
+// form state, scoped by id prefix ('mesh-' for the network-wide card,
+// 'p-<pid>-' per profile card) so this works under both id schemes. Mirrors
+// the server's own precedence (resolveHalowDomain / resolveMesh5GHzDomain in
+// api.go) closely enough to build a client-side channel list -- the server
+// still validates for real on stage/apply. NEVER returns '': on the fleet
+// page (unlike config.js, which targets one known node) a blank domain=
+// falls back server-side to the *serving* node's own domain, which would
+// silently show a US channel list while editing a fleet that's actually on
+// EU.
+function fleetResolveDomain(prefix, forHalow) {
+  var domainEl = document.getElementById('fleet-f-' + prefix + 'regulatory_domain');
+  var domain = (domainEl && domainEl.value) || 'US';
+  if (forHalow) {
+    var halowDomainEl = document.getElementById('fleet-f-' + prefix + 'halow_regulatory_domain');
+    if (halowDomainEl && halowDomainEl.value) domain = halowDomainEl.value;
+  }
+  return domain;
+}
+
+// Refreshes one channel-picker <select> via the shared common.js helper,
+// then labels it with the domain it was resolved for. Relative URLs only
+// (/api/halow/channels, /api/mesh5ghz/channels) -- fleet.js always talks to
+// the local node, unlike config.js which can target a remote peer via
+// configBaseUrl(), so that helper doesn't apply here.
+function fleetRefreshChannelPicker(f, prefix) {
+  var chEl = document.getElementById('fleet-f-' + prefix + f.key);
+  if (!chEl) return;
+  var current = chEl.value;
+  var domain, url;
+  if (f.type === 'channel-halow') {
+    domain = fleetResolveDomain(prefix, true);
+    var bwEl = document.getElementById('fleet-f-' + prefix + 'halow_bw');
+    var bw = (bwEl && bwEl.value) || '4MHz';
+    url = '/api/halow/channels?domain=' + encodeURIComponent(domain) + '&bw=' + encodeURIComponent(bw);
+  } else if (f.type === 'channel-5ghz') {
+    domain = fleetResolveDomain(prefix, false);
+    url = '/api/mesh5ghz/channels?domain=' + encodeURIComponent(domain);
+  } else {
+    return;
+  }
+  refreshChannelSelect(chEl, url, current).then(function(result) {
+    var label = document.getElementById('fleet-f-' + prefix + f.key + '-domain-label');
+    if (!label) return;
+    if (result && result.fellBack) {
+      label.textContent = 'Channel ' + current + ' is not legal under domain ' + domain + ' — reset to Auto';
+      label.style.color = 'var(--danger, #ef4444)';
+    } else {
+      label.textContent = 'Resolved for regulatory domain: ' + domain;
+      label.style.color = '';
+    }
+  });
+}
+
+// Wires each channel-picker field in `fields` (scoped by `prefix`) to
+// refetch its option list whenever a sibling domain/bandwidth control
+// changes, and fires the initial fetch immediately.
+function fleetWireChannelPickers(fields, prefix) {
+  fields.forEach(function(f) {
+    if (f.type !== 'channel-halow' && f.type !== 'channel-5ghz') return;
+    var controllerKeys = f.type === 'channel-halow'
+      ? ['regulatory_domain', 'halow_regulatory_domain', 'halow_bw']
+      : ['regulatory_domain'];
+    controllerKeys.forEach(function(key) {
+      var el = document.getElementById('fleet-f-' + prefix + key);
+      if (el) el.addEventListener('change', function() { fleetRefreshChannelPicker(f, prefix); });
+    });
+    fleetRefreshChannelPicker(f, prefix);
+  });
+}
+
+// Generic showIf-equivalent evaluator/binder for the fleet edit form,
+// mirroring config.js's configApplyShowIf but scoped by id prefix since
+// fleet.js renders the same field list under multiple id schemes
+// (network-wide 'mesh-' vs per-profile 'p-<pid>-').
+//
+// IMPORTANT: this only ever toggles row visibility (style.display) — it
+// never removes the row or its input from the DOM. fleetCollectEditState
+// reads every field's value by id unconditionally, regardless of
+// style.display, so a hidden row's value is still collected and staged.
+// Do NOT special-case hidden fields out of fleetCollectEditState: toggling
+// ACS on/off within the same edit session must not blank the pinned 5GHz
+// channel fleet-wide just because its row happened to be hidden the moment
+// Stage was clicked.
+function fleetApplyShowIf(fields, prefix) {
+  fields.forEach(function(f) {
+    if (!f.showIf) return;
+    var row = document.getElementById('fleet-row-' + prefix + f.key);
+    if (!row) return;
+    var visible = f.showIf.every(function(cond) {
+      var el = document.getElementById('fleet-f-' + prefix + cond.key);
+      if (!el) return false;
+      if (cond.notEmpty) return el.value !== '';
+      return el.value === cond.equals;
+    });
+    row.style.display = visible ? '' : 'none';
+  });
+}
+
+function fleetBindShowIf(fields, prefix) {
+  var controllers = {};
+  fields.forEach(function(f) { if (f.showIf) f.showIf.forEach(function(cond) { controllers[cond.key] = true; }); });
+  Object.keys(controllers).forEach(function(key) {
+    var el = document.getElementById('fleet-f-' + prefix + key);
+    if (el) el.addEventListener('change', function() { fleetApplyShowIf(fields, prefix); });
+  });
+  fleetApplyShowIf(fields, prefix);
+}
+
+// Binds both the showIf visibility mechanism and the channel-picker fetch
+// wiring for one rendered field list/prefix pair. Only called for
+// MESH_FIELDS ('mesh-' prefix) today — PROFILE_SECTIONS' fields have no
+// showIf and no channel-halow/channel-5ghz field yet, so binding this under
+// a 'p-<pid>-' prefix would be untested dead code, and fleetResolveDomain
+// falls back to a hardcoded 'US' when a prefixed regulatory_domain element
+// doesn't exist (profile cards don't have one) — silently wrong for a EU
+// fleet if a profile-scoped picker is ever added without also fixing that
+// fallback. Add the profile-prefix call back only once a profile field
+// actually needs showIf or a channel picker, and fix fleetResolveDomain's
+// fallback at the same time.
+function fleetBindFieldBehaviors(fields, prefix) {
+  fleetBindShowIf(fields, prefix);
+  fleetWireChannelPickers(fields, prefix);
 }
 
 function fleetRenderProfileCard(pid, profile, curCfg, nodes, nodeProfiles) {

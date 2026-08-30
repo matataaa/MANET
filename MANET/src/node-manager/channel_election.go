@@ -14,15 +14,6 @@ const (
 	reportStaleAfter = 240 * time.Second
 	// Disqualify a channel if ANY reporting node saw noise worse than this.
 	noiseDisqualifyDBM = -70
-	// Cold-start-only tiebreak (see electBand): once any peer has voted
-	// for a candidate this cycle, incumbentBiasDB plays no role at all —
-	// peerChannelVotes decides. It only prevents flapping between two
-	// channels whose scores differ purely by scan-to-scan noise before
-	// any peer data exists yet. Picked from observed live noise drift on
-	// a repeatedly-re-elected channel (~2-4dB cycle to cycle): large
-	// enough to absorb that, deliberately far below a single peer vote's
-	// weight so it can never compete with real peer consensus.
-	incumbentBiasDB = 4.0
 	// If even the best surviving channel scores worse than this, the RF
 	// environment itself is the problem, not the choice of channel —
 	// fall back to the lobby frequency and raise limp mode.
@@ -149,10 +140,12 @@ func peerChannelVotes(registry map[string]map[string]string, candidates []int, b
 }
 
 type electionResult struct {
-	freq     string
-	limp     bool
-	winnerCh int
-	score    float64
+	freq      string
+	limp      bool
+	hold      bool
+	coldStart bool
+	winnerCh  int
+	score     float64
 }
 
 // electBand runs the deterministic, decentralized election for one band:
@@ -162,18 +155,41 @@ type electionResult struct {
 //
 // Once any peer has voted for any candidate (peerChannelVotes), the
 // election is decided purely by (votes desc, rawScore asc, channel asc) —
-// no incumbent bias at all in this branch. That's deliberate: an additive
-// combination of votes and an incumbent bonus was tried and rejected
-// during design, because it reintroduces the same failure this replaces —
-// a tied vote split still lets each node's own incumbent bias break the
-// tie in its own favor, so two nodes can independently "agree to disagree"
-// forever. A comparator with zero per-node state once real peer data
-// exists is what actually guarantees convergence.
+// no incumbent bias at all. That's deliberate: an additive combination of
+// votes and an incumbent bonus was tried and rejected during design,
+// because it reintroduces the same failure this replaces — a tied vote
+// split still lets each node's own incumbent bias break the tie in its own
+// favor, so two nodes can independently "agree to disagree" forever. A
+// comparator with zero per-node state once real peer data exists is what
+// actually guarantees convergence.
 //
-// Only when nobody has voted for anything yet (true cold start — a lone
-// or freshly-booting node with no gossiped peer channel data) does the
-// election fall back to raw noise score with a small incumbentBiasDB
-// tiebreak, matching the original behavior for that case.
+// When nobody has voted for anything yet (totalVotes == 0 — a lone or
+// freshly-booting node with no gossiped peer channel data), this doesn't
+// run an election at all: it holds the current channel and waits. This
+// removes the cold-start race outright rather than biasing it toward a
+// remembered value (the previous approach, see git history's
+// mesh_acs_last_channels/acs_channel_persist.go): a truly isolated node
+// has no mesh to optimize for yet, and a simultaneous mesh-wide power loss
+// still converges without any persisted state, because
+// mesh-boot-lobby.service puts every node's conf back on the lobby
+// frequency before wpa_supplicant even starts — a simultaneous cold start
+// means every node meshes at the lobby, gossips, gets votes, and elects
+// together on the next tick. The tradeoff: a node that is and stays
+// genuinely alone (no peer ever) now parks on the lobby frequency
+// indefinitely instead of self-optimizing to the quietest channel it can
+// see — acceptable since there's no mesh to serve by moving.
+//
+// "The next tick" only converges quickly because of a companion fix in
+// runACSTick (main.go): a hardware test (2026-08-30, EUD3+EUD4 reboot)
+// found that without it, this hold's own acsCycleInterval throttle turns
+// "wait for a peer vote" into "wait up to 180s for one", reproducing the
+// exact 3.5-4 minute outage this fix lineage exists to eliminate.
+// electionResult.coldStart (set here only when currentFreq is still the
+// lobby frequency — never on an already-converged node with a momentary
+// vote gap) tells the caller to retry on the very next 15s loop tick
+// instead of waiting out the full interval. Still NOT field-verified for
+// the true-first-boot and EU-regulatory-domain cases the superseded
+// persisted-bias fix also left untested (see docs/ACS.md).
 func electBand(reports map[string]ChannelReport, registry map[string]map[string]string, candidates []int, currentFreq, lobbyFreq, band string) electionResult {
 	currentCh, _ := strconv.Atoi(currentFreq)
 	votes := peerChannelVotes(registry, candidates, band)
@@ -182,18 +198,33 @@ func electBand(reports map[string]ChannelReport, registry map[string]map[string]
 		totalVotes += v
 	}
 
+	if totalVotes == 0 {
+		log.Printf("[acs] %s: no peer votes yet (cold start or isolated) — holding current channel", band)
+		// coldStart only when we haven't elected anything real yet (still
+		// on the lobby frequency) — never on an already-converged node
+		// whose peer just temporarily dropped out of gossip. The caller
+		// uses coldStart to retry sooner than the normal cycle interval;
+		// doing that for a converged node with a momentary vote gap would
+		// make its tourguide start yanking an already-working data-channel
+		// radio to the lobby every retry for no benefit, right when a
+		// rebooting peer needs it to stay put as a stable rendezvous point.
+		return electionResult{freq: currentFreq, winnerCh: currentCh, hold: true, coldStart: currentFreq == lobbyFreq}
+	}
+
 	type candidate struct {
 		votes    int
 		rawScore float64
 		ch       int
 	}
 	var scored []candidate
+	hadAnyData := false
 
 	for _, ch := range candidates {
 		stats, ok := aggregateChannelReports(reports, ch)
 		if !ok {
 			continue
 		}
+		hadAnyData = true
 		if stats.maxNoise > noiseDisqualifyDBM {
 			log.Printf("[acs] %s: channel %d disqualified (max_noise %ddBm)", band, ch, stats.maxNoise)
 			continue
@@ -203,29 +234,32 @@ func electBand(reports map[string]ChannelReport, registry map[string]map[string]
 	}
 
 	if len(scored) == 0 {
+		if !hadAnyData {
+			// No candidate had ANY reading this cycle — an empty/filtered
+			// candidate list (e.g. activeBand5Channels found nothing usable
+			// on this phy right now, scan.go) or a failed scan with no
+			// survey data yet. This is a data outage, not "every candidate
+			// is too noisy" — falling back to lobby+limp here would be a
+			// mesh-wide disruption (limp throttles every radio in the
+			// mesh, setIfaceFrequency restarts wpa_supplicant) triggered
+			// by a transient/missing-data condition rather than a real RF
+			// problem, and the lobby frequency itself can be illegal under
+			// some regulatory domains (WORLD/00 makes 5170-5250 NO-IR,
+			// which includes lobbyFreq5's 5180). Hold the current channel
+			// instead and let the next cycle try again.
+			log.Printf("[acs] %s: no scan data for any candidate — holding current channel", band)
+			return electionResult{freq: currentFreq, winnerCh: currentCh, hold: true}
+		}
 		log.Printf("[acs] %s: all channels disqualified, falling back to lobby", band)
 		return electionResult{freq: lobbyFreq, limp: true}
 	}
 
 	sort.Slice(scored, func(i, j int) bool {
-		if totalVotes > 0 {
-			if scored[i].votes != scored[j].votes {
-				return scored[i].votes > scored[j].votes
-			}
-			if scored[i].rawScore != scored[j].rawScore {
-				return scored[i].rawScore < scored[j].rawScore
-			}
-			return scored[i].ch < scored[j].ch
+		if scored[i].votes != scored[j].votes {
+			return scored[i].votes > scored[j].votes
 		}
-		iScore, jScore := scored[i].rawScore, scored[j].rawScore
-		if scored[i].ch == currentCh {
-			iScore -= incumbentBiasDB
-		}
-		if scored[j].ch == currentCh {
-			jScore -= incumbentBiasDB
-		}
-		if iScore != jScore {
-			return iScore < jScore
+		if scored[i].rawScore != scored[j].rawScore {
+			return scored[i].rawScore < scored[j].rawScore
 		}
 		return scored[i].ch < scored[j].ch
 	})

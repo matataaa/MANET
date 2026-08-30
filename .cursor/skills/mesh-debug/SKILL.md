@@ -27,6 +27,23 @@ For **repository layout** and where provisioning sources of truth live, see `MAN
 sshpass -p '$MESH_PASSWORD' ssh -o StrictHostKeyChecking=no $MESH_USER@$NODE_IP
 ```
 
+### Reaching mesh-only nodes (ProxyJump)
+
+Per `.cursor/mesh-nodes.env`, only one node is typically LAN-reachable directly (e.g. EUD4) — the rest sit on the mesh-only subnet and need a jump through it. Plain `ssh -J` combined with `sshpass` for both hops is unreliable in practice (silently fails, e.g. exit code 5, with no useful error). Use an explicit nested `ProxyCommand` instead — this has been confirmed to work reliably for both `ssh` and `scp`:
+
+```bash
+sshpass -p '$MESH_PASSWORD' ssh -o StrictHostKeyChecking=no \
+  -o ProxyCommand="sshpass -p '$MESH_PASSWORD' ssh -o StrictHostKeyChecking=no -W %h:%p $MESH_USER@$JUMP_IP" \
+  $MESH_USER@$NODE_IP "<command>"
+
+# scp works the same way — same -o ProxyCommand, target as user@host:path
+sshpass -p '$MESH_PASSWORD' scp -o StrictHostKeyChecking=no \
+  -o ProxyCommand="sshpass -p '$MESH_PASSWORD' ssh -o StrictHostKeyChecking=no -W %h:%p $MESH_USER@$JUMP_IP" \
+  local_file $MESH_USER@$NODE_IP:/tmp/
+```
+
+A HaLow-only-backhaul node's file transfers can be genuinely slow (a ~13MB combined payload took ~5.5 minutes over one such link) without being stuck — let a single `scp` run with a generous timeout to completion rather than wrapping it in a second polling/timeout loop with its own shorter deadline; killing the wrapper is easy to mistake for the transfer itself failing.
+
 For sudo commands in non-interactive SSH, pipe the password:
 
 ```bash
@@ -69,6 +86,8 @@ done
 # Detailed wireless info (PHY, channel, mode, txpower)
 iw dev
 ```
+
+**`iw dev` is not reliable for HaLow (S1G) channel/bandwidth — it reports a synthetic mapped channel, not the real one.** Confirmed live: after setting HaLow to channel 26 (915.0 MHz, 2MHz bandwidth) and verifying it was genuinely applied, `iw dev wlan2 info` still reported `channel 108 (5540 MHz), width: 40 MHz` — a completely different-looking 5GHz-shaped channel that would suggest the change failed if taken at face value. This is the Morse driver mapping the real S1G channel onto a synthetic HT-equivalent channel number for cfg80211 tools that aren't S1G-aware (visible in the driver's own log as e.g. `S1G mapped HT channel 110`). To verify the real HaLow channel/frequency/bandwidth, check `wpa_supplicant_s1g`'s own journal (`journalctl -u 'wpa_supplicant-s1g-*'`, look for lines like `Operating Frequency: 915000 kHz`, `Operating BW: 2 MHz`) or the generated `/etc/wpa_supplicant/wpa_supplicant-wlan2-s1g.conf`'s `channel=`/`op_class=` lines — not `iw dev`.
 
 ### 3. Batman-adv Mesh
 
@@ -123,10 +142,11 @@ ip -6 addr show dev br0
 
 ```bash
 # Full mesh topology as JSON (all nodes, links, TQ values)
-curl -s http://localhost/api/data | python3 -m json.tool
+# plain http:// now 301-redirects to https:// on current builds — use -sk
+curl -sk https://localhost/api/data | python3 -m json.tool
 
 # Local node state only (interfaces, services, IP, channel)
-curl -s http://localhost/api/local | python3 -m json.tool
+curl -sk https://localhost/api/local | python3 -m json.tool
 ```
 
 ### 7. Alfred & Node Manager
@@ -228,7 +248,7 @@ dmesg | grep -iE 'morse|wifi|wlan|bat0|mesh|mt7915|brcmfmac' | tail -30
 ### No IPv4 on br0
 
 **Symptom**: Node has no 10.x.x.x address.
-**Check**: `journalctl -u node-manager` — look for IP allocation errors. Verify peers are visible via `curl -s http://localhost/api/data` (see §6).
+**Check**: `journalctl -u node-manager` — look for IP allocation errors. Verify peers are visible via `curl -sk https://localhost/api/data` (see §6).
 
 ### AP not broadcasting
 
@@ -315,9 +335,16 @@ systemctl is-enabled mesh-provision 2>/dev/null || echo "done"
 
 ### Via node-update (official path)
 
+`node-update` is a long-running daemon (`node-update.service`), not a one-shot
+script — there is no `node-update.sh`. It rechecks on its own schedule, and a
+plain `SIGHUP` re-check is gated by a 1-hour in-memory cooldown. To force an
+immediate check+apply that bypasses the cooldown and bandwidth gate (the same
+thing a UI "Update Now" click does):
+
 ```bash
-# Manual trigger (checks internet, compares versions, downloads tarball)
-sudo node-update.sh
+# channel is "software", "overlay", or "both"
+echo both | sudo tee /run/manet-update-trigger
+sudo pkill -USR1 -x node-update
 
 # Check current version
 cat /etc/manet_version.txt
@@ -355,6 +382,8 @@ ssh radio@<node> "chmod +x /usr/local/bin/<service>.new && \
 ```
 
 Always back up the existing binary first (`cp /usr/local/bin/<service> /usr/local/bin/<service>.bak-<reason>`) so there's a fast manual rollback if the new one misbehaves. After restarting, confirm the new binary actually landed — `md5sum /usr/local/bin/<service>` against the build output, and `systemctl status <service>` should show `NRestarts=0` and a fresh start time, not a crash-restart loop.
+
+**Direct `scp` to `/usr/local/bin/` can fail with `Permission denied` under the `radio` user on mesh-only nodes.** Confirmed on EUD1/EUD2/EUD3 (all reached via the ProxyCommand jump through EUD4) — `scp` straight to `/usr/local/bin/<service>.new` was rejected, while the same command worked fine on EUD4 (the directly LAN-reachable node). Workaround: `scp` to `/tmp/<service>.new` first, then `sudo mv /tmp/<service>.new /usr/local/bin/<service>.new` over SSH before the atomic replace above — the `mv` needs `sudo`, the `scp` doesn't if the destination is `/tmp`.
 
 ## Parallel Multi-Node Check
 

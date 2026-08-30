@@ -94,7 +94,39 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	if len(updates) == 0 {
 		return
 	}
-	expandNodeTemplates(updates, loadKVFile(MeshConfFile))
+
+	existingConf := loadKVFile(MeshConfFile)
+
+	// halow_channel and halow_bw must be persisted as a coupled, valid pair
+	// or not persisted at all -- a fleet push can span nodes on different
+	// domains/hardware, so a combination valid on the node that staged the
+	// config is not guaranteed valid here. Validating only AFTER the write
+	// below (as applyFleetHalowBW does further down, for the operational
+	// apply/restart step) still leaves an invalid combination sitting in
+	// mesh.conf, silently, with only a journalctl line to reveal it. Catch
+	// it BEFORE the write instead: if the resulting pair is invalid for
+	// this node's own resolved domain, drop both keys from updates so this
+	// node's existing, already-working pair is left untouched -- silently,
+	// by design, matching the fleet-apply convention of skip-not-abort.
+	_, bwInUpdate := updates["halow_bw"]
+	_, chInUpdate := updates["halow_channel"]
+	if bwInUpdate || chInUpdate {
+		effective := make(map[string]string, len(existingConf)+len(updates))
+		for k, v := range existingConf {
+			effective[k] = v
+		}
+		for k, v := range updates {
+			effective[k] = v
+		}
+		domain := resolveHalowDomain(effective)
+		if err := validateHalowChannel(domain, effectiveHalowBW(effective), effective["halow_channel"]); err != nil {
+			log.Printf("fleet: dropping halow_bw/halow_channel from this node's apply, invalid for domain %q: %v", domain, err)
+			delete(updates, "halow_bw")
+			delete(updates, "halow_channel")
+		}
+	}
+
+	expandNodeTemplates(updates, existingConf)
 	if err := saveKVFile(MeshConfFile, updates); err != nil {
 		log.Printf("fleet: apply save error: %v", err)
 		return
@@ -124,7 +156,12 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 		applyHostapdConfig(conf)
 		runCmd(10*time.Second, "systemctl", "restart", "hostapd")
 	}
-	if updates["mesh_ssid"] != "" || updates["mesh_key"] != "" {
+	// Narrow trigger, mirroring mesh_5ghz_channel's guard in apiAdminSave:
+	// a fleet push resends every field every time, not just changed ones,
+	// so without the != existingConf comparison this restarts wpa_supplicant
+	// on every mesh radio (tearing down every plink) on any unrelated push.
+	if (updates["mesh_ssid"] != "" && updates["mesh_ssid"] != existingConf["mesh_ssid"]) ||
+		(updates["mesh_key"] != "" && updates["mesh_key"] != existingConf["mesh_key"]) {
 		applyWPAConfig(conf)
 	}
 	if updates["multicast_mode"] != "" {
@@ -156,8 +193,93 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	if updates["qos_enabled"] != "" || updates["qos_voice_band"] != "" || updates["qos_cot_band"] != "" || updates["qos_chat_band"] != "" {
 		applyQoSFromConf(conf)
 	}
-	if updates["halow_bw"] != "" {
-		applyHalowBW(conf)
+	_, bwChanged := updates["halow_bw"]
+	_, chChanged := updates["halow_channel"]
+	if bwChanged || chChanged {
+		applyFleetHalowBW(conf)
+	}
+	if _, ch5Changed := updates["mesh_5ghz_channel"]; ch5Changed {
+		applyFleetMesh5GHzChannel(conf)
+	}
+	// Mirrors apiAdminSave's gps block (api.go) — a stop/restart-only
+	// toggle here looks like it worked but silently reverts on the node's
+	// next reboot, since radio-setup.sh only sets gpsd's boot-enabled
+	// state once at first provisioning.
+	if updates["gps"] != "" || updates["gps_source"] != "" {
+		if conf["gps"] == "n" {
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gps-reader")
+			// gpsd.socket must be disabled too — see api.go's matching
+			// block for why (socket activation silently respawns gpsd
+			// otherwise).
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd.socket")
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd")
+		} else if conf["gps_source"] == "static" {
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd.socket")
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "gpsd")
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gps-reader")
+		} else {
+			if _, err := exec.LookPath("gpsd"); err != nil {
+				runCmd(60*time.Second, "apt-get", "install", "-y", "gpsd", "gpsd-clients")
+			}
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gpsd.socket")
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gpsd")
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "gps-reader")
+		}
+	}
+}
+
+// applyFleetHalowBW validates halow_bw/halow_channel against the resolved
+// domain in `conf`, which is read AFTER fleetApplyConfig's saveKVFile call --
+// so this validates against the domain that results from this push, not a
+// pre-existing per-node domain that might genuinely differ from what was
+// just written. In practice regulatory_domain/halow_regulatory_domain are
+// themselves network-wide fields that fleet.js always collects and pushes
+// alongside every save, so by the time this runs every node in the fleet
+// already has the identical newly-pushed domain -- there is no surviving
+// cross-node divergence left to detect for THIS push.
+//
+// This is now a defensive re-check, not the primary gate: fleetApplyConfig
+// already validates and drops an invalid halow_bw/halow_channel pair BEFORE
+// persisting it (so mesh.conf never ends up holding a mismatched pair in
+// the first place), and only calls this function at all when that pair
+// survived the pre-write filter -- so by the time we get here the
+// combination should already be valid. Kept as a cheap belt-and-suspenders
+// check rather than removed. Unlike apiAdminSave (which rejects the whole
+// save before it is persisted), a genuinely-invalid combination reaching
+// this point is logged and the operational apply is skipped rather than
+// applied, leaving this node's current working HaLow config running.
+func applyFleetHalowBW(conf map[string]string) {
+	domain := resolveHalowDomain(conf)
+	if err := validateHalowChannel(domain, effectiveHalowBW(conf), conf["halow_channel"]); err != nil {
+		log.Printf("fleet: skipping halow_bw/halow_channel apply, invalid for this node's domain %q: %v", domain, err)
+		return
+	}
+	applyHalowBW(conf)
+}
+
+// applyFleetMesh5GHzChannel validates mesh_5ghz_channel against the resolved
+// domain in `conf`, which — like applyFleetHalowBW above — is read after the
+// fleet push has already been written, so this checks the channel just
+// pushed against the domain just pushed alongside it, not a genuinely
+// surviving per-node divergence (see applyFleetHalowBW's comment for why
+// that divergence doesn't survive a network-wide push). Resolves the domain via
+// resolveMesh5GHzDomain (api.go) -- deliberately not resolveHalowDomain/
+// halow_regulatory_domain, since HaLow and 5GHz WiFi can run different
+// domains on the same node. Unlike applyFleetHalowBW there is no
+// restart/apply step for mesh_5ghz_channel to skip -- node-manager reads it
+// straight from mesh.conf on its own live 15s tick and already falls back
+// to the default lobby channel for a value it doesn't recognize -- so this
+// is a log-only guardrail for operator visibility: it never errors/aborts
+// the fleet push, and it leaves the pushed value in mesh.conf untouched for
+// node-manager's own fallback to handle.
+func applyFleetMesh5GHzChannel(conf map[string]string) {
+	ch := conf["mesh_5ghz_channel"]
+	if ch == "" {
+		return
+	}
+	domain := resolveMesh5GHzDomain(conf)
+	if err := validateMesh5GHzChannel(domain, ch); err != nil {
+		log.Printf("fleet: mesh_5ghz_channel invalid for this node's domain %q, node-manager will fall back to its default: %v", domain, err)
 	}
 }
 

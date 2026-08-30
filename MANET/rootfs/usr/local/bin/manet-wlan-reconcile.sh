@@ -61,6 +61,19 @@ MESH_NAME=$(grep '^mesh_ssid=' /etc/mesh.conf 2>/dev/null | cut -d= -f2-)
 KEY=$(grep '^mesh_key=' /etc/mesh.conf 2>/dev/null | cut -d= -f2-)
 CFG80211_REGDOM=$(grep '^regulatory_domain=' /etc/mesh.conf 2>/dev/null | cut -d= -f2-)
 CFG80211_REGDOM="${CFG80211_REGDOM:-US}"
+# 5GHz mesh channel width. Default 20MHz (safe/deterministic — see ACS.md
+# "Decision: 20MHz-only 5GHz mesh"). Kept byte-consistent with
+# radio-setup.sh's identical read + template logic below.
+MESH_5GHZ_BW=$(grep '^mesh_5ghz_bw=' /etc/mesh.conf 2>/dev/null | cut -d= -f2-)
+MESH_5GHZ_BW="${MESH_5GHZ_BW:-20}"
+# NOSCAN_CAPABLE gates every write of noscan=1 (or any other mesh-noscan-
+# patch key) below — the ONLY signal permitted to do so, kept
+# byte-consistent with radio-setup.sh's identical check. See
+# docs/wpa-supplicant-mesh-noscan.md: the stock system wpa_supplicant fails
+# to parse an entire network={} block on an unrecognized key and exits
+# (status=255), dropping that radio out of the mesh entirely.
+NOSCAN_CAPABLE=0
+[ -x /usr/sbin/wpa_supplicant_mesh ] && NOSCAN_CAPABLE=1
 EUD=$(grep '^eud=' /etc/mesh.conf 2>/dev/null | cut -d= -f2-)
 AP_INTERFACE=""
 [ -f "$AP_IF_FILE" ] && AP_INTERFACE=$(head -1 "$AP_IF_FILE" | tr -d '\r')
@@ -316,6 +329,43 @@ for WLAN in $(cat "$MESH_IF_FILE"); do
         CHANGED=1
         echo "manet-wlan-reconcile: generating mesh config for $WLAN (${FREQ} MHz)"
 
+        # 5GHz mesh links default to 20MHz-only (disable_ht40 + disable_vht),
+        # kept byte-consistent with radio-setup.sh's identical block — see
+        # ACS.md "Decision: 20MHz-only 5GHz mesh". mesh_5ghz_bw=40/80 use
+        # the patched wpa_supplicant's noscan=1 instead
+        # (docs/wpa-supplicant-mesh-noscan.md) ONLY when NOSCAN_CAPABLE=1 —
+        # without it, 40 falls back to 20MHz-only (never "40 without
+        # noscan"), and 80 keeps today's existing VHT80 nondeterminism
+        # unchanged. 2.4GHz (FREQ < 5000) never gets any of these keys.
+        WIDTH_LINES=""
+        if [ "$FREQ" -ge 5000 ]; then
+            case "$MESH_5GHZ_BW" in
+                40)
+                    if [ "$NOSCAN_CAPABLE" -eq 1 ]; then
+                        WIDTH_LINES="    noscan=1
+    disable_vht=1
+"
+                    else
+                        WIDTH_LINES="    disable_ht40=1
+    disable_vht=1
+"
+                    fi
+                    ;;
+                80)
+                    if [ "$NOSCAN_CAPABLE" -eq 1 ]; then
+                        WIDTH_LINES="    noscan=1
+    max_oper_chwidth=1
+"
+                    fi
+                    ;;
+                *)
+                    WIDTH_LINES="    disable_ht40=1
+    disable_vht=1
+"
+                    ;;
+            esac
+        fi
+
         cat <<-EOF > "/etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf"
 		ctrl_interface=/var/run/wpa_supplicant
 		country=$CFG80211_REGDOM
@@ -331,7 +381,7 @@ for WLAN in $(cat "$MESH_IF_FILE"); do
 		    ieee80211w=2
 		    mesh_fwding=0
 		    group_rekey=0
-		}
+		${WIDTH_LINES}}
 		EOF
 
         cat <<-EOF > "/etc/systemd/network/30-$WLAN.network"
