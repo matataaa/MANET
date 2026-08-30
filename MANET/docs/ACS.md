@@ -1591,31 +1591,57 @@ hardware-verified — added to "What needs testing" below.
       the hostapd-disable fix held across reboot (partial re-verification,
       not the full 5-value round trip).
 - [x] **Cold-boot bias fix (`mesh_acs_last_channels`)** — **SUPERSEDED,
-      not yet field-verified in its new form.** An external review of this
-      doc (a different MANET fork's maintainer) argued that persisting a
-      last-known-good channel bias was fixing the symptom rather than the
-      race: `electBand` now holds outright when `totalVotes == 0` instead
-      of running any election (`channel_election.go`), removing this
-      failure mode structurally rather than biasing it, and
-      `acs_channel_persist.go`/`mesh_acs_last_channels` were deleted as no
-      longer needed. The argument: `mesh-boot-lobby.service` already
-      resets every node to the lobby frequency at boot, so a simultaneous
-      mesh-wide power loss still converges (everyone meshes at the lobby,
-      gossips, gets votes, elects together) without persisted state, and a
-      truly isolated node has nothing to optimize for by biasing toward a
-      remembered channel anyway.
-      **Known risk, not yet checked:** the specific incident below was
-      hardware-verified to recover in the *same* ACS cycle via the
-      persisted bias. Under the new hold-based gate, a solo reboot (only
-      one node cold-starting, its peer already live on a real data
-      channel) may instead have to wait for that peer's own vote to gossip
-      in over another interface/band before the next ACS tick — up to
-      ~180s (`acsCycleInterval`), which is close to the *original* bug's
-      3.5-4 minute outage window this fix was written to eliminate. This
-      needs the same EUD3+EUD4 sequential-reboot test re-run before this
-      replaces the verified fix below in the field. The true-first-boot
-      and EU-regulatory-domain cases the original fix also left untested
-      remain untested here too.
+      re-broken then re-fixed, hardware-verification pending re-run.** An
+      external review of this doc (a different MANET fork's maintainer)
+      argued that persisting a last-known-good channel bias was fixing the
+      symptom rather than the race: `electBand` now holds outright when
+      `totalVotes == 0` instead of running any election
+      (`channel_election.go`), removing this failure mode structurally
+      rather than biasing it, and `acs_channel_persist.go`/
+      `mesh_acs_last_channels` were deleted as no longer needed. The
+      argument: `mesh-boot-lobby.service` already resets every node to the
+      lobby frequency at boot, so a simultaneous mesh-wide power loss
+      still converges (everyone meshes at the lobby, gossips, gets votes,
+      elects together) without persisted state, and a truly isolated node
+      has nothing to optimize for by biasing toward a remembered channel
+      anyway.
+      **Confirmed on real hardware, 2026-08-30, EUD3+EUD4 sequential
+      reboot (same methodology as the original verification below):** the
+      flagged risk materialized exactly as predicted, on both nodes.
+      Neither recovered same-cycle — both waited for the *next*
+      `acsCycleInterval` tick. EUD3 (rebooted first): reboot 17:17:23 BST
+      → first tick 17:18:30 (`no peer votes yet — holding`) → second tick
+      17:21:31 (`elected channel 5745, votes 1`) → plink to EUD4 up
+      17:21:44 — **4m21s outage.** EUD4 (rebooted second): reboot 17:25:13
+      → first tick 17:25:55 (hold) → second tick 17:29:15 (elected) →
+      plink up 17:29:20 — **4m7s outage.** Both at or past the *original*
+      bug's reported 3.5-4 minute window — this reproduced the outage the
+      fix lineage exists to eliminate, not the same-cycle recovery below.
+      Also directly observed: during EUD3's downtime, EUD4's own next tick
+      logged the same "no peer votes yet — holding" for its *own*,
+      already-correct channel (harmless — hold just re-echoes the current
+      value — but confirms the two nodes have no third party to shorten
+      convergence through).
+      **Root cause and fix, same session:** the `acsCycleInterval` (180s)
+      throttle in `runACSTick` exists to stop a *converged* mesh from
+      rescanning too often — it was never meant to make a node with
+      nothing elected yet wait a full cycle between attempts, but that's
+      exactly what it did here. Fix: `electionResult.coldStart` (set only
+      when the node is still sitting on the lobby frequency, never on an
+      already-converged node with a momentary vote gap — see
+      `channel_election.go`) tells `runACSTick` to rewind `lastACSCycle`
+      to zero, so the very next 15s `loopInterval` tick retries the
+      election immediately instead of waiting out the full interval.
+      Tourguide is also skipped on a `coldStart` tick (`quorum &&
+      !coldStart`), since dwelling at the lobby doesn't make a vote arrive
+      faster and would otherwise risk yanking the node's *other*,
+      already-working band to the lobby every ~15s — exactly the gossip
+      path the cold-starting band is waiting on.
+      **Not yet re-verified on hardware** — the fast-retry fix above has
+      not had its own EUD3+EUD4 reboot test yet. Re-run before trusting
+      this over the original persisted-bias fix in the field. The
+      true-first-boot and EU-regulatory-domain cases the original fix also
+      left untested remain untested here too.
 - [x] **Cold-boot bias fix (`mesh_acs_last_channels`)** — **hardware-
       verified 2026-08-28** (historical — see superseded note above.)
       Deployed the fix and rebooted both EUD3 and

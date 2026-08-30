@@ -140,11 +140,12 @@ func peerChannelVotes(registry map[string]map[string]string, candidates []int, b
 }
 
 type electionResult struct {
-	freq     string
-	limp     bool
-	hold     bool
-	winnerCh int
-	score    float64
+	freq      string
+	limp      bool
+	hold      bool
+	coldStart bool
+	winnerCh  int
+	score     float64
 }
 
 // electBand runs the deterministic, decentralized election for one band:
@@ -176,11 +177,19 @@ type electionResult struct {
 // together on the next tick. The tradeoff: a node that is and stays
 // genuinely alone (no peer ever) now parks on the lobby frequency
 // indefinitely instead of self-optimizing to the quietest channel it can
-// see — acceptable since there's no mesh to serve by moving. NOT yet
-// field-verified for the true-first-boot and EU-regulatory-domain cases
-// the superseded persisted-bias fix explicitly called out as untested
-// (see docs/ACS.md) — confirm on real hardware before trusting this over
-// the old fix in the field.
+// see — acceptable since there's no mesh to serve by moving.
+//
+// "The next tick" only converges quickly because of a companion fix in
+// runACSTick (main.go): a hardware test (2026-08-30, EUD3+EUD4 reboot)
+// found that without it, this hold's own acsCycleInterval throttle turns
+// "wait for a peer vote" into "wait up to 180s for one", reproducing the
+// exact 3.5-4 minute outage this fix lineage exists to eliminate.
+// electionResult.coldStart (set here only when currentFreq is still the
+// lobby frequency — never on an already-converged node with a momentary
+// vote gap) tells the caller to retry on the very next 15s loop tick
+// instead of waiting out the full interval. Still NOT field-verified for
+// the true-first-boot and EU-regulatory-domain cases the superseded
+// persisted-bias fix also left untested (see docs/ACS.md).
 func electBand(reports map[string]ChannelReport, registry map[string]map[string]string, candidates []int, currentFreq, lobbyFreq, band string) electionResult {
 	currentCh, _ := strconv.Atoi(currentFreq)
 	votes := peerChannelVotes(registry, candidates, band)
@@ -191,7 +200,15 @@ func electBand(reports map[string]ChannelReport, registry map[string]map[string]
 
 	if totalVotes == 0 {
 		log.Printf("[acs] %s: no peer votes yet (cold start or isolated) — holding current channel", band)
-		return electionResult{freq: currentFreq, winnerCh: currentCh, hold: true}
+		// coldStart only when we haven't elected anything real yet (still
+		// on the lobby frequency) — never on an already-converged node
+		// whose peer just temporarily dropped out of gossip. The caller
+		// uses coldStart to retry sooner than the normal cycle interval;
+		// doing that for a converged node with a momentary vote gap would
+		// make its tourguide start yanking an already-working data-channel
+		// radio to the lobby every retry for no benefit, right when a
+		// rebooting peer needs it to stay put as a stable rendezvous point.
+		return electionResult{freq: currentFreq, winnerCh: currentCh, hold: true, coldStart: currentFreq == lobbyFreq}
 	}
 
 	type candidate struct {
