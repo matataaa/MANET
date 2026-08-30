@@ -731,18 +731,9 @@ func runACSTick() {
 
 	limp := false
 
-	// writeFreq24/writeFreq5 carry this cycle's "persist as last-elected"
-	// value for maybeWriteLastElectedFreq below, "" meaning "don't touch
-	// that band's persisted value this cycle". Populated per band only when
-	// quorum && !result.hold && result.winnerCh != 0 — see the write gate
-	// comments in each block below (ACS.md's cold-boot fix, blocking
-	// correction 2).
-	writeFreq24, writeFreq5 := "", ""
-
 	if iface24 != "" {
 		cur := getConfFreq(wpaConfPath(iface24))
-		biasFreq := selectBiasFreq(cur, band24Channels, "2.4GHz")
-		result := electBand(reports, registry, band24Channels, cur, biasFreq, lobbyFreq24, "2.4GHz")
+		result := electBand(reports, registry, band24Channels, cur, lobbyFreq24, "2.4GHz")
 		freq := result.freq
 		if !quorum {
 			freq = lobbyFreq24
@@ -758,22 +749,10 @@ func runACSTick() {
 		acsVerifyAfterApply(iface24, freq, "2.4GHz", configChanged)
 		acsTrackHold(iface24, result, "2.4GHz")
 		limp = limp || result.limp
-		// Write gate: quorum must hold (a !quorum tick overrides freq to
-		// the lobby above regardless of what electBand picked, so
-		// result.winnerCh was never actually run as a data channel), the
-		// election must not have held (a hold's winnerCh is just the
-		// already-live frequency re-echoed, not a fresh election), and
-		// winnerCh must be nonzero (electBand's own lobby/limp fallback
-		// leaves it 0 — never persist a lobby frequency as "last known
-		// good").
-		if quorum && !result.hold && result.winnerCh != 0 {
-			writeFreq24 = strconv.Itoa(result.winnerCh)
-		}
 	}
 	if iface5 != "" {
 		cur := getConfFreq(wpaConfPath(iface5))
-		biasFreq := selectBiasFreq(cur, candidates5, "5GHz")
-		result := electBand(reports, registry, candidates5, cur, biasFreq, lobbyFreq5, "5GHz")
+		result := electBand(reports, registry, candidates5, cur, lobbyFreq5, "5GHz")
 		freq := result.freq
 		if !quorum {
 			freq = lobbyFreq5
@@ -784,20 +763,7 @@ func runACSTick() {
 		acsVerifyAfterApply(iface5, freq, "5GHz", configChanged)
 		acsTrackHold(iface5, result, "5GHz")
 		limp = limp || result.limp
-		// Same write gate as the 2.4GHz block above.
-		if quorum && !result.hold && result.winnerCh != 0 {
-			writeFreq5 = strconv.Itoa(result.winnerCh)
-		}
 	}
-
-	// Placement is deliberate: after both bands' election/apply blocks,
-	// before maybeRunTourguide below — tourguide's hopFrequency/
-	// applyPartitionMerge paths call rewriteFrequencyLine/setIfaceFrequency
-	// directly and never produce an electionResult, so they structurally
-	// can't reach this write; keeping the call here (not inside the
-	// `if quorum` tourguide block) keeps that insulation obvious rather
-	// than incidental.
-	maybeWriteLastElectedFreq(writeFreq24, writeFreq5)
 
 	setLimpMode(limp)
 

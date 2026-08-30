@@ -1590,8 +1590,35 @@ hardware-verified — added to "What needs testing" below.
       especially since `eud=wired` was re-tested on EUD3 this session and
       the hostapd-disable fix held across reboot (partial re-verification,
       not the full 5-value round trip).
+- [x] **Cold-boot bias fix (`mesh_acs_last_channels`)** — **SUPERSEDED,
+      not yet field-verified in its new form.** An external review of this
+      doc (a different MANET fork's maintainer) argued that persisting a
+      last-known-good channel bias was fixing the symptom rather than the
+      race: `electBand` now holds outright when `totalVotes == 0` instead
+      of running any election (`channel_election.go`), removing this
+      failure mode structurally rather than biasing it, and
+      `acs_channel_persist.go`/`mesh_acs_last_channels` were deleted as no
+      longer needed. The argument: `mesh-boot-lobby.service` already
+      resets every node to the lobby frequency at boot, so a simultaneous
+      mesh-wide power loss still converges (everyone meshes at the lobby,
+      gossips, gets votes, elects together) without persisted state, and a
+      truly isolated node has nothing to optimize for by biasing toward a
+      remembered channel anyway.
+      **Known risk, not yet checked:** the specific incident below was
+      hardware-verified to recover in the *same* ACS cycle via the
+      persisted bias. Under the new hold-based gate, a solo reboot (only
+      one node cold-starting, its peer already live on a real data
+      channel) may instead have to wait for that peer's own vote to gossip
+      in over another interface/band before the next ACS tick — up to
+      ~180s (`acsCycleInterval`), which is close to the *original* bug's
+      3.5-4 minute outage window this fix was written to eliminate. This
+      needs the same EUD3+EUD4 sequential-reboot test re-run before this
+      replaces the verified fix below in the field. The true-first-boot
+      and EU-regulatory-domain cases the original fix also left untested
+      remain untested here too.
 - [x] **Cold-boot bias fix (`mesh_acs_last_channels`)** — **hardware-
-      verified 2026-08-28.** Deployed the fix and rebooted both EUD3 and
+      verified 2026-08-28** (historical — see superseded note above.)
+      Deployed the fix and rebooted both EUD3 and
       EUD4 sequentially (EUD3 first — the node that broke originally —
       confirmed fully re-meshed before rebooting EUD4). Both nodes'
       first post-boot election was still a true cold start (`votes 0`,
