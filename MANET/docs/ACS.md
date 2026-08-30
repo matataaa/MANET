@@ -1590,8 +1590,80 @@ hardware-verified — added to "What needs testing" below.
       especially since `eud=wired` was re-tested on EUD3 this session and
       the hostapd-disable fix held across reboot (partial re-verification,
       not the full 5-value round trip).
+- [x] **Cold-boot bias fix (`mesh_acs_last_channels`)** — **SUPERSEDED,
+      re-broken then re-fixed, hardware-verification pending re-run.** An
+      external review of this doc (a different MANET fork's maintainer)
+      argued that persisting a last-known-good channel bias was fixing the
+      symptom rather than the race: `electBand` now holds outright when
+      `totalVotes == 0` instead of running any election
+      (`channel_election.go`), removing this failure mode structurally
+      rather than biasing it, and `acs_channel_persist.go`/
+      `mesh_acs_last_channels` were deleted as no longer needed. The
+      argument: `mesh-boot-lobby.service` already resets every node to the
+      lobby frequency at boot, so a simultaneous mesh-wide power loss
+      still converges (everyone meshes at the lobby, gossips, gets votes,
+      elects together) without persisted state, and a truly isolated node
+      has nothing to optimize for by biasing toward a remembered channel
+      anyway.
+      **Confirmed on real hardware, 2026-08-30, EUD3+EUD4 sequential
+      reboot (same methodology as the original verification below):** the
+      flagged risk materialized exactly as predicted, on both nodes.
+      Neither recovered same-cycle — both waited for the *next*
+      `acsCycleInterval` tick. EUD3 (rebooted first): reboot 17:17:23 BST
+      → first tick 17:18:30 (`no peer votes yet — holding`) → second tick
+      17:21:31 (`elected channel 5745, votes 1`) → plink to EUD4 up
+      17:21:44 — **4m21s outage.** EUD4 (rebooted second): reboot 17:25:13
+      → first tick 17:25:55 (hold) → second tick 17:29:15 (elected) →
+      plink up 17:29:20 — **4m7s outage.** Both at or past the *original*
+      bug's reported 3.5-4 minute window — this reproduced the outage the
+      fix lineage exists to eliminate, not the same-cycle recovery below.
+      Also directly observed: during EUD3's downtime, EUD4's own next tick
+      logged the same "no peer votes yet — holding" for its *own*,
+      already-correct channel (harmless — hold just re-echoes the current
+      value — but confirms the two nodes have no third party to shorten
+      convergence through).
+      **Root cause and fix, same session:** the `acsCycleInterval` (180s)
+      throttle in `runACSTick` exists to stop a *converged* mesh from
+      rescanning too often — it was never meant to make a node with
+      nothing elected yet wait a full cycle between attempts, but that's
+      exactly what it did here. Fix: `electionResult.coldStart` (set only
+      when the node is still sitting on the lobby frequency, never on an
+      already-converged node with a momentary vote gap — see
+      `channel_election.go`) tells `runACSTick` to rewind `lastACSCycle`
+      to zero, so the very next 15s `loopInterval` tick retries the
+      election immediately instead of waiting out the full interval.
+      Tourguide is also skipped on a `coldStart` tick (`quorum &&
+      !coldStart`), since dwelling at the lobby doesn't make a vote arrive
+      faster and would otherwise risk yanking the node's *other*,
+      already-working band to the lobby every ~15s — exactly the gossip
+      path the cold-starting band is waiting on.
+      **Fast-retry fix (`5d9a5ec`) hardware-verified 2026-08-30, same
+      EUD3+EUD4 sequential-reboot methodology.** EUD3's first post-boot
+      tick already found `votes 1` for both bands (EUD4's vote had
+      already gossiped in) and elected immediately — outage (reboot →
+      5GHz plink up) **~79.6s**, down from the regression build's 4m21s.
+      EUD4 did exercise the hold path — `journalctl -u node-manager
+      -o short-monotonic` shows holds at boot+26s and retries landing at
+      boot+41.5s and boot+56.5s (~15s apart, matching `loopInterval`,
+      confirming the `lastACSCycle` rewind fires on schedule instead of
+      the old 180s wall) before electing both bands and re-establishing
+      the plink — outage **~80.8s**, down from 4m7s. Neither figure lands
+      in the ideal 15-45s band, but the remainder is legitimate boot time
+      plus gossip-propagation latency plus sequential per-band
+      wpa_supplicant reassociation, not the 180s throttle bug recurring —
+      confirmed by the ~15s-spaced retry log lines above. Also confirmed:
+      no tourguide/coldStart bleed onto the other, already-converged node
+      in either direction (neither node's healthy band was disturbed
+      during the other's downtime), and `iperf3` post-recovery held at
+      437/435 Mbit/s, in line with the previously documented healthy
+      range. If ~80s outages are still too slow for the target use case,
+      the next lever is registry/alfred gossip propagation speed or how
+      early node-manager starts its first ACS tick relative to boot — not
+      this commit. The true-first-boot and EU-regulatory-domain cases the
+      original fix also left untested remain untested here too.
 - [x] **Cold-boot bias fix (`mesh_acs_last_channels`)** — **hardware-
-      verified 2026-08-28.** Deployed the fix and rebooted both EUD3 and
+      verified 2026-08-28** (historical — see superseded note above.)
+      Deployed the fix and rebooted both EUD3 and
       EUD4 sequentially (EUD3 first — the node that broke originally —
       confirmed fully re-meshed before rebooting EUD4). Both nodes'
       first post-boot election was still a true cold start (`votes 0`,

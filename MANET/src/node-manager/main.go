@@ -730,19 +730,11 @@ func runACSTick() {
 	quorum := quorumOK(registry, originators)
 
 	limp := false
-
-	// writeFreq24/writeFreq5 carry this cycle's "persist as last-elected"
-	// value for maybeWriteLastElectedFreq below, "" meaning "don't touch
-	// that band's persisted value this cycle". Populated per band only when
-	// quorum && !result.hold && result.winnerCh != 0 — see the write gate
-	// comments in each block below (ACS.md's cold-boot fix, blocking
-	// correction 2).
-	writeFreq24, writeFreq5 := "", ""
+	coldStart := false
 
 	if iface24 != "" {
 		cur := getConfFreq(wpaConfPath(iface24))
-		biasFreq := selectBiasFreq(cur, band24Channels, "2.4GHz")
-		result := electBand(reports, registry, band24Channels, cur, biasFreq, lobbyFreq24, "2.4GHz")
+		result := electBand(reports, registry, band24Channels, cur, lobbyFreq24, "2.4GHz")
 		freq := result.freq
 		if !quorum {
 			freq = lobbyFreq24
@@ -758,22 +750,11 @@ func runACSTick() {
 		acsVerifyAfterApply(iface24, freq, "2.4GHz", configChanged)
 		acsTrackHold(iface24, result, "2.4GHz")
 		limp = limp || result.limp
-		// Write gate: quorum must hold (a !quorum tick overrides freq to
-		// the lobby above regardless of what electBand picked, so
-		// result.winnerCh was never actually run as a data channel), the
-		// election must not have held (a hold's winnerCh is just the
-		// already-live frequency re-echoed, not a fresh election), and
-		// winnerCh must be nonzero (electBand's own lobby/limp fallback
-		// leaves it 0 — never persist a lobby frequency as "last known
-		// good").
-		if quorum && !result.hold && result.winnerCh != 0 {
-			writeFreq24 = strconv.Itoa(result.winnerCh)
-		}
+		coldStart = coldStart || result.coldStart
 	}
 	if iface5 != "" {
 		cur := getConfFreq(wpaConfPath(iface5))
-		biasFreq := selectBiasFreq(cur, candidates5, "5GHz")
-		result := electBand(reports, registry, candidates5, cur, biasFreq, lobbyFreq5, "5GHz")
+		result := electBand(reports, registry, candidates5, cur, lobbyFreq5, "5GHz")
 		freq := result.freq
 		if !quorum {
 			freq = lobbyFreq5
@@ -784,28 +765,39 @@ func runACSTick() {
 		acsVerifyAfterApply(iface5, freq, "5GHz", configChanged)
 		acsTrackHold(iface5, result, "5GHz")
 		limp = limp || result.limp
-		// Same write gate as the 2.4GHz block above.
-		if quorum && !result.hold && result.winnerCh != 0 {
-			writeFreq5 = strconv.Itoa(result.winnerCh)
-		}
+		coldStart = coldStart || result.coldStart
 	}
 
-	// Placement is deliberate: after both bands' election/apply blocks,
-	// before maybeRunTourguide below — tourguide's hopFrequency/
-	// applyPartitionMerge paths call rewriteFrequencyLine/setIfaceFrequency
-	// directly and never produce an electionResult, so they structurally
-	// can't reach this write; keeping the call here (not inside the
-	// `if quorum` tourguide block) keeps that insulation obvious rather
-	// than incidental.
-	maybeWriteLastElectedFreq(writeFreq24, writeFreq5)
+	if coldStart {
+		// At least one band came back with no peer votes yet. The
+		// acsCycleInterval throttle above exists to stop a *converged*
+		// mesh from rescanning/re-electing too often — it was never meant
+		// to make a node that has nothing elected yet wait a full 180s
+		// between attempts. Rewinding lastACSCycle to zero here means the
+		// very next 15s loopInterval tick (main, above) retries the real
+		// election immediately instead of waiting for the next full
+		// cycle — hardware-verified (2026-08-30, EUD3/EUD4 reboot test)
+		// that without this, a cold-start hold's own gate turns "wait for
+		// a peer vote" into "wait up to 180s for a peer vote", reproducing
+		// the original 3.5-4 minute outage this fix lineage exists to
+		// eliminate.
+		lastACSCycle = time.Time{}
+	}
 
 	setLimpMode(limp)
 
 	writePartitionSize(originators)
-	if quorum {
+	if quorum && !coldStart {
 		// Tourguide duty means briefly hopping off the data channel this
 		// node already just fought to defend — pointless (and disruptive)
 		// on a cycle where quorum already forced a retreat to lobby.
+		// Likewise skipped while coldStart is fast-retrying (above): its
+		// own radio is already sitting at the lobby waiting for a vote,
+		// and dwelling there via tourguide too doesn't make that vote
+		// arrive any sooner — it would just risk yanking this node's
+		// *other*, already-working band to the lobby every ~15s while
+		// that band's gossip link is exactly what the cold-starting band
+		// is waiting on.
 		//
 		// Must run before reconcileLimpMode: tourguide's return-to-data
 		// hop unconditionally clears that radio's bitrate limit (it
