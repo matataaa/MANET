@@ -58,7 +58,7 @@ DOCS_TABS.overview = [
 '<tr><td><strong>Dashboard</strong></td><td>Topology visualization (D3.js force-directed graph), node list with TQ, hop count, last seen. Auto-refreshes every 15s.</td></tr>',
 '<tr><td><strong>Nodes</strong></td><td>Full table of all mesh nodes — hostname, IP, DNS (.mesh), TQ, hops, battery, uptime, last seen. Sortable columns.</td></tr>',
 '<tr><td><strong>Config</strong></td><td>View and edit node configuration. Hostname, SSID, keys, network, regulatory domain, EUD mode, services.</td></tr>',
-'<tr><td><strong>Hardware</strong></td><td>Radio interfaces (driver, channel, TX power, MCS), network interfaces, GPS status/coordinates, system info.</td></tr>',
+'<tr><td><strong>Hardware</strong></td><td>Radio interfaces (driver, channel, TX power, MCS, card temperature), network interfaces, GPS status/coordinates, system info.</td></tr>',
 '<tr><td><strong>Voice</strong></td><td>Multi-channel voice PTT. 21 channels with independent TX/RX selection. Web client (browser mic via WebSocket) and hardware PTT (OpenVLM HID). Per-channel activity indicators. Multicast listeners only run on subscribed RX channels.</td></tr>',
 '<tr><td><strong>Perf</strong></td><td>Performance testing — iperf3 throughput, ping latency, streaming results.</td></tr>',
 '<tr><td><strong>Services</strong></td><td>All systemd services grouped by category. Start/stop/restart controls.</td></tr>',

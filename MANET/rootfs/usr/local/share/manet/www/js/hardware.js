@@ -98,6 +98,10 @@ function hwRenderRadios() {
     }
     if (r.tx_mcs) rows += hwRow('TX MCS', r.tx_mcs);
     if (r.rx_mcs) rows += hwRow('RX MCS', r.rx_mcs);
+    if (typeof r.temp_c === 'number') {
+      var tColor = r.temp_c >= 90 ? 'var(--bad)' : r.temp_c >= 75 ? 'var(--warn)' : 'var(--ok)';
+      rows += hwRow('Card Temp', '<span style="color:' + tColor + '">' + r.temp_c.toFixed(1) + ' °C</span>');
+    }
     if (isHalow && r.halow_source) rows += hwRow('Data Source', r.halow_source === 'morse' ? 'morse_cli (live)' : 'wpa_supplicant config');
     if (r.addrs && r.addrs.length) rows += hwRow('Addresses', r.addrs.map(escHtml).join('<br>'));
     if (r.faults && r.faults.length) rows += hwRow('Faults', '<span style="color:var(--bad)">' + r.faults.map(escHtml).join(', ') + '</span>');

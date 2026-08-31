@@ -112,6 +112,7 @@ type Iface struct {
 	TxMCS         string   `json:"tx_mcs,omitempty"`
 	RxMCS         string   `json:"rx_mcs,omitempty"`
 	Driver        string   `json:"driver,omitempty"`
+	TempC         *float64 `json:"temp_c,omitempty"`
 }
 
 type EUD struct {
