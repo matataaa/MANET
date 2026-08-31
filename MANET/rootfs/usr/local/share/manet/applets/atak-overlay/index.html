@@ -51,7 +51,13 @@ button,a.btn{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;c
     // set one, hence fetch + blob download rather than a simple <a href>.
     fetch(base + '/proxy/atak-package.zip', {
       headers: {'X-Overlay-Host': location.host}
-    }).then(function(r){ return r.blob(); }).then(function(blob) {
+    }).then(function(r){
+      // Without this the backend's error body (502 when core is
+      // unreachable, or the proxy's own error when the applet is not
+      // running) gets saved as a .zip the user cannot open.
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + r.statusText);
+      return r.blob();
+    }).then(function(blob) {
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url;
@@ -59,7 +65,10 @@ button,a.btn{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;c
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      // Revoking synchronously here races the browser's read of the blob
+      // and lands a 0-byte file on disk. Defer it so the download holds a
+      // reference first.
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
     }).catch(function(err) {
       alert('Download failed: ' + err);
     });
