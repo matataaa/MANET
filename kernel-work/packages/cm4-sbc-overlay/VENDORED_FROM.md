@@ -7,9 +7,9 @@ depends on for CM4 WiFi + HaLow, none of which ship in stock Raspberry
 Pi OS.
 
 - Source: https://www.colorado-governor.com/manet/cm4-install.tar.gz
-- Bundled version (from ./etc/manet_version.txt inside that tarball): 0.539 (08/2026)
-- HTTP Last-Modified: Sat, 22 Aug 2026 14:17:11 GMT
-- Vendored: 2026-08-24 18:38 UTC
+- Bundled version (from ./etc/manet_version.txt inside that tarball): 0.542 08/2026 
+- HTTP Last-Modified: Mon, 31 Aug 2026 05:27:56 GMT
+- Vendored: 2026-08-31 12:16 UTC
 
 ## Re-checking for updates
 
