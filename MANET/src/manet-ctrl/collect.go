@@ -991,11 +991,20 @@ func parseIWDev() map[string]iwDev {
 		return devs
 	}
 	var current string
+	var curPhy string
 	for _, line := range strings.Split(out, "\n") {
 		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "phy#") {
+			// Global `iw dev` groups interfaces under a "phy#N" header and
+			// emits no per-interface "wiphy N" line, so this header is the
+			// only place the phy index appears. Carry it onto the
+			// interfaces that follow — the radio temp lookup keys on it.
+			curPhy = strings.TrimPrefix(trimmed, "phy#")
+			continue
+		}
 		if strings.HasPrefix(trimmed, "Interface ") {
 			current = strings.TrimPrefix(trimmed, "Interface ")
-			devs[current] = iwDev{Name: current}
+			devs[current] = iwDev{Name: current, Wiphy: curPhy}
 		} else if current != "" {
 			d := devs[current]
 			switch {
