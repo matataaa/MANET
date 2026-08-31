@@ -193,6 +193,13 @@ done
 # ---------------------------------------------------------------------------
 if [ -n "${SBC_OVERLAY_DIR:-}" ]; then
     [ -d "$SBC_OVERLAY_DIR" ] || { echo "Missing SBC overlay: $SBC_OVERLAY_DIR" >&2; exit 1; }
+    # An overlay directory that exists but has no modules tree contributes
+    # nothing — fail loudly instead of packing a driver-less tarball.
+    [ -d "$SBC_OVERLAY_DIR/usr/lib/modules" ] || {
+        echo "SBC overlay has no usr/lib/modules: $SBC_OVERLAY_DIR" >&2
+        echo "Refusing to build a tarball with no kernel layer." >&2
+        exit 1
+    }
     install_tree "$SBC_OVERLAY_DIR" "$STAGE"
 fi
 
@@ -231,6 +238,9 @@ find "$STAGE" -name '._*' -delete 2>/dev/null || true
 find "$STAGE" -type d -name __pycache__ -prune -exec rm -rf {} +
 
 find "$STAGE" -type d -exec chmod go-w {} +
-( cd "$STAGE" && find . -mindepth 1 -maxdepth 1 -printf './%P\0' \
+# find -printf is GNU-only; BSD/macOS find lacks it. Emit the same
+# NUL-separated './<name>' list portably so this packs on macOS too.
+( cd "$STAGE" && find . -mindepth 1 -maxdepth 1 \
+    -exec sh -c 'for p; do printf "./%s\0" "${p#./}"; done' sh {} + \
     | tar --owner=0 --group=0 --numeric-owner --null -T - -czf "$OUT_ABS" )
 echo "Built: $OUT  ($(du -sh "$OUT" | cut -f1))"

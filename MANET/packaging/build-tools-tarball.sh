@@ -140,6 +140,9 @@ find "$STAGE" -name '._*' -delete 2>/dev/null || true
 find "$STAGE" -type d -name __pycache__ -prune -exec rm -rf {} +
 
 find "$STAGE" -type d -exec chmod go-w {} +
-( cd "$STAGE" && find . -mindepth 1 -maxdepth 1 -printf './%P\0' \
+# find -printf is GNU-only; BSD/macOS find lacks it. Emit the same
+# NUL-separated './<name>' list portably so this packs on macOS too.
+( cd "$STAGE" && find . -mindepth 1 -maxdepth 1 \
+    -exec sh -c 'for p; do printf "./%s\0" "${p#./}"; done' sh {} + \
     | tar --owner=0 --group=0 --numeric-owner --null -T - -czf "$OUT_ABS" )
 echo "Built: $OUT  ($(du -sh "$OUT" | cut -f1))"
