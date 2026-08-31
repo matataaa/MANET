@@ -1270,6 +1270,20 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		applied["gps_applied"] = true
 	}
 
+	// Apply battery_monitor: like voice/gps, battery-reader only re-reads its
+	// enable flag at startup, so a live battery_monitor=n edit otherwise
+	// leaves the running daemon retrying an absent HAT every 30s until the
+	// next reboot. Stop (and disable, so it stays off across reboots) on
+	// disable; enable + start on re-enable.
+	if updates["battery_monitor"] != "" {
+		if conf["battery_monitor"] == "n" {
+			runCmd(5*time.Second, "systemctl", "disable", "--now", "battery-reader")
+		} else {
+			runCmd(5*time.Second, "systemctl", "enable", "--now", "battery-reader")
+		}
+		applied["battery_monitor_applied"] = true
+	}
+
 	// Apply CoT identity changes (callsign/type/team/role/icon) — cot-emitter
 	// reads these once at startup, so a live edit needs a restart to take
 	// effect. configSave() always submits every field on the Config page,
