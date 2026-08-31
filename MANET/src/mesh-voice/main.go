@@ -276,6 +276,13 @@ func run(ctx context.Context, cfg Config) error {
 	var playbackDevicePtr *malgo.Device
 	var canCapture bool
 
+	// For OpenVLM, the mic/speaker is the USB audio half of the VLM dongle,
+	// so audio only ever works while the VLM is plugged in. Track its
+	// connection state and never touch ALSA until it appears — otherwise a
+	// VLM-less node retries the (absent) capture device every few seconds,
+	// which spins pulseaudio and floods the log with "no capture device".
+	var vlmConnected atomic.Bool
+
 	ensureCapture := func() {
 		audioMu.Lock()
 		defer audioMu.Unlock()
@@ -605,8 +612,12 @@ func run(ctx context.Context, cfg Config) error {
 		log.Println("audio: devices torn down")
 	}
 
-	// Initial audio attempt (may fail if no USB audio yet)
-	initAudioDevices()
+	// Initial audio attempt. For OpenVLM, hold off until the VLM hot-plug
+	// handler below reports the dongle is present — a blind attempt here on a
+	// VLM-less node just fails against the non-existent capture device.
+	if cfg.PTTSource != "openvlm" {
+		initAudioDevices()
+	}
 
 	if !canCapture && !alwaysOn {
 		log.Println("audio: no devices available — waiting for hot-plug")
@@ -620,6 +631,7 @@ func run(ctx context.Context, cfg Config) error {
 			for {
 				select {
 				case connected := <-vlmCh:
+					vlmConnected.Store(connected)
 					if connected {
 						time.Sleep(500 * time.Millisecond)
 						initAudioDevices()
@@ -644,6 +656,12 @@ func run(ctx context.Context, cfg Config) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				// Skip the retry for OpenVLM until its dongle is present —
+				// otherwise this hammers the absent capture device (and
+				// pulseaudio) every tick on a VLM-less node.
+				if cfg.PTTSource == "openvlm" && !vlmConnected.Load() {
+					continue
+				}
 				audioMu.Lock()
 				hasDevices := captureDevicePtr != nil
 				audioMu.Unlock()
