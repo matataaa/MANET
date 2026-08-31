@@ -64,7 +64,7 @@ halow_regulatory_domain_for_wifi_domain() {
 # Ground-truth legal HaLow channel list per regulatory domain + bandwidth,
 # kept byte-consistent with radio-setup.sh's halow_channel_valid() (see
 # MANET/rootfs/usr/local/bin/radio-setup.sh). Prints nothing (empty) for
-# any domain/bw not covered here -- that includes EU + anything but 1MHz,
+# any domain/bw not covered here — that includes EU + anything but 1MHz,
 # and every domain other than US/EU (those are out of scope for this
 # feature and get no channel validation at all).
 halow_channels_for_domain_bw() {
@@ -341,7 +341,7 @@ ask_questions() {
             fi
         done
     else
-        # Out-of-scope domain (not US or EU) -- no ground-truth channel
+        # Out-of-scope domain (not US or EU) — no ground-truth channel
         # table exists, so accept whatever's typed (or empty for Auto)
         # without validation.
         read -p "Enter HaLow channel [or press Enter for Auto]: " HALOW_CHANNEL
@@ -604,7 +604,13 @@ fi
 WRAPPER_HEAD
     echo "$firstrun_body" | tail -n +2 >> "$boot_mount/firstrun.sh"
 
-    # Build and embed the tools tarball so firstrun.sh doesn't need internet.
+    # Embed the tools tarball so firstrun.sh doesn't need internet on first
+    # boot. The prebuilt copy in install_packages/ is authoritative and is
+    # NEVER overwritten here — rebuilding it in place used to silently
+    # replace a full tarball with a tools-only one on any machine lacking the
+    # SBC overlay, producing an image that boots to stock Raspberry Pi OS with
+    # no radio drivers. windows.ps1 has always required a prebuilt copy; this
+    # matches that. Set REBUILD_TARBALL=1 to deliberately rebuild.
     local tarball_name="" build_script=""
     case "$HARDWARE_MODEL" in
         cm4|rpi4) tarball_name="cm4-tools.tar.gz"; build_script="build-cm4-tarball.sh" ;;
@@ -614,21 +620,66 @@ WRAPPER_HEAD
     repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     local tarball_path="${repo_root}/install_packages/${tarball_name}"
     local packaging_dir="${repo_root}/packaging"
-    if [ -n "$build_script" ] && [ -f "${packaging_dir}/${build_script}" ]; then
-        echo "Rebuilding ${tarball_name}..."
-        mkdir -p "${repo_root}/install_packages"
-        bash "${packaging_dir}/${build_script}" "$tarball_path"
-        echo "Tarball rebuilt: $(du -h "$tarball_path" | cut -f1)"
+
+    if [ -z "$tarball_name" ]; then
+        echo "ERROR: No tools tarball defined for hardware '$HARDWARE_MODEL'."
+        diskutil unmount "$boot_mount" 2>/dev/null || true
+        exit 1
     fi
-    if [ -n "$tarball_name" ] && [ -f "$tarball_path" ]; then
-        cp "$tarball_path" "$boot_mount/mesh-tools.tar.gz"
-        echo "Embedded tools tarball: $tarball_name ($(du -h "$tarball_path" | cut -f1))"
+
+    if [ ! -f "$tarball_path" ] || [ "${REBUILD_TARBALL:-0}" = "1" ]; then
+        if [ ! -f "${packaging_dir}/${build_script}" ]; then
+            echo "ERROR: ${tarball_path} not found and ${build_script} is missing."
+            diskutil unmount "$boot_mount" 2>/dev/null || true
+            exit 1
+        fi
+        echo "Building ${tarball_name}..."
+        mkdir -p "${repo_root}/install_packages"
+        if ! bash "${packaging_dir}/${build_script}" "$tarball_path"; then
+            echo "ERROR: ${build_script} failed."
+            diskutil unmount "$boot_mount" 2>/dev/null || true
+            exit 1
+        fi
+        echo "Tarball built: $(du -h "$tarball_path" | cut -f1)"
     else
+        echo "Using prebuilt tarball: $tarball_path ($(du -h "$tarball_path" | cut -f1))"
+    fi
+
+    if [ ! -f "$tarball_path" ]; then
         echo "ERROR: Tools tarball not found at $tarball_path"
         echo "First boot has no download fallback — the node cannot provision without it."
         diskutil unmount "$boot_mount" 2>/dev/null || true
         exit 1
     fi
+
+    # CM4/rpi4 need the kernel layer (kernel8.img, DTBs, mt7915e/morse/dot11ah
+    # modules, HaLow firmware) — none of it ships in stock Raspberry Pi OS, and
+    # a tarball without it yields a node with no mesh radios at all. Catch that
+    # here rather than after a ten-minute provision on hardware.
+    case "$HARDWARE_MODEL" in
+        cm4|rpi4)
+            if ! tar -tzf "$tarball_path" 2>/dev/null \
+                 | grep -qE '(^|/)usr/lib/modules/|kernel8\.img'; then
+                echo ""
+                echo "ERROR: $tarball_name contains no kernel/driver layer."
+                echo "It has the MANET userspace but no kernel8.img, DTBs or"
+                echo "mt7915e/morse/dot11ah modules, so the node would boot to"
+                echo "stock Raspberry Pi OS with no mesh radios."
+                echo ""
+                echo "Fix: vendor the CM4 SBC overlay, then rebuild:"
+                echo "  MANET/packaging/fetch-cm4-overlay.sh <path-to-cm4-install.tar.gz>"
+                echo "  REBUILD_TARBALL=1 ./mac.sh"
+                echo ""
+                echo "A known-good cm4-tools.tar.gz copied into install_packages/"
+                echo "from another machine works too."
+                diskutil unmount "$boot_mount" 2>/dev/null || true
+                exit 1
+            fi
+            ;;
+    esac
+
+    cp "$tarball_path" "$boot_mount/mesh-tools.tar.gz"
+    echo "Embedded tools tarball: $tarball_name ($(du -h "$tarball_path" | cut -f1))"
 
     # Modify cmdline.txt to run firstrun.sh on first boot
     if [ -f "$boot_mount/cmdline.txt" ]; then

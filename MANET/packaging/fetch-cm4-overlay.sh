@@ -8,8 +8,12 @@
 #  build-cm4-tarball.sh's SBC_OVERLAY_DIR auto-detection has anything to
 #  find.
 #
-#  Usage: ./fetch-cm4-overlay.sh [path-to-cm4-install.tar.gz]
-#  With no argument, downloads fresh from the URL below.
+#  Usage: ./fetch-cm4-overlay.sh <path-to-cm4-install.tar.gz>
+#         ./fetch-cm4-overlay.sh --from-url
+#
+#  A local tarball is the normal route — copy install_packages/ or a
+#  cm4-install.tar.gz from a machine that already has one. Reaching the
+#  external host is opt-in via --from-url and never happens by default.
 #
 set -euo pipefail
 
@@ -39,11 +43,30 @@ INCLUDE_PATHS=(
 cleanup=()
 trap 'for f in "${cleanup[@]:-}"; do [ -n "$f" ] && rm -rf "$f"; done' EXIT
 
-if [ -z "$TARBALL" ]; then
+FROM_URL=0
+if [ "$TARBALL" = "--from-url" ]; then
+    FROM_URL=1
+    TARBALL=""
+fi
+
+if [ "$FROM_URL" = "1" ]; then
     echo "Downloading $SOURCE_URL ..."
     TARBALL="$(mktemp /tmp/cm4-install.XXXXXX.tar.gz)"
     cleanup+=("$TARBALL")
     curl -fSL "$SOURCE_URL" -o "$TARBALL"
+elif [ -z "$TARBALL" ]; then
+    echo "ERROR: no source tarball given." >&2
+    echo "" >&2
+    echo "Usage: $0 <path-to-cm4-install.tar.gz>" >&2
+    echo "       $0 --from-url    # opt in to $SOURCE_URL" >&2
+    echo "" >&2
+    echo "Copy a known-good cm4-install.tar.gz (or install_packages/" >&2
+    echo "cm4-tools.tar.gz) from a machine that already has one and pass" >&2
+    echo "its path. This build step does not reach the network by default." >&2
+    exit 1
+elif [ ! -f "$TARBALL" ]; then
+    echo "ERROR: no such file: $TARBALL" >&2
+    exit 1
 else
     echo "Using local tarball: $TARBALL"
 fi
@@ -65,7 +88,12 @@ mv "$WORKDIR/usr/lib/firmware/morse" "$OVERLAY_DIR/usr/lib/firmware/morse"
 
 BUNDLED_VERSION="$(tr '\n' ' ' < "$WORKDIR/etc/manet_version.txt" 2>/dev/null | sed -E 's/^(\S+)\s+(\S+)\s*$/\1 (\2)/' || echo "unknown")"
 [ -z "$BUNDLED_VERSION" ] && BUNDLED_VERSION="unknown"
-LAST_MODIFIED="$(curl -sI --max-time 10 "$SOURCE_URL" 2>/dev/null | grep -i '^last-modified:' | cut -d' ' -f2- | tr -d '\r' || echo "unknown")"
+# Only probe the external host when we actually came from it.
+if [ "$FROM_URL" = "1" ]; then
+    LAST_MODIFIED="$(curl -sI --max-time 10 "$SOURCE_URL" 2>/dev/null | grep -i '^last-modified:' | cut -d' ' -f2- | tr -d '\r' || echo "unknown")"
+else
+    LAST_MODIFIED="n/a (vendored from local file $(basename "$TARBALL"))"
+fi
 
 cat > "$OVERLAY_DIR/VENDORED_FROM.md" << EOF
 # Vendored SBC overlay — CM4

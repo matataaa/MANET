@@ -65,6 +65,18 @@ func main() {
 	}
 	log.Printf("board: %s", board)
 
+	// Publish the locally known versions before the startup delay. Both
+	// reads are local file lookups needing no uplink, and the status file
+	// lives on tmpfs, so a node that reboots more often than startupDelay
+	// would otherwise never publish a version at all and the Hardware tab
+	// would render "v--" for the whole of every boot.
+	writeStatus(updateStatus{
+		Software:   channelStatus{Local: readLocalReleaseVersion()},
+		Overlay:    channelStatus{Local: readLocalOverlayVersion()},
+		UplinkType: "unknown",
+		Phase:      "idle",
+	})
+
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGUSR1)
 

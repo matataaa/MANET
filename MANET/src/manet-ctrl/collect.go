@@ -612,6 +612,42 @@ func getRunningServices() map[string]bool {
 	return result
 }
 
+// getRadioTemps maps a wiphy index (e.g. "1" for phy1) to the radio's die
+// temperature in °C. The mt7915e driver registers a hwmon device named
+// mt7915_phy<N> exposing temp1_input (milli-°C); HaLow (morse) and onboard
+// brcmfmac expose no such sensor, so those phys are simply absent from the
+// map. Returns an empty map if /sys/class/hwmon can't be read.
+func getRadioTemps() map[string]float64 {
+	temps := map[string]float64{}
+	entries, err := os.ReadDir("/sys/class/hwmon")
+	if err != nil {
+		return temps
+	}
+	// Match the trailing phy index in names like "mt7915_phy1".
+	phyRe := regexp.MustCompile(`phy(\d+)$`)
+	for _, e := range entries {
+		base := "/sys/class/hwmon/" + e.Name()
+		name, err := os.ReadFile(base + "/name")
+		if err != nil {
+			continue
+		}
+		m := phyRe.FindStringSubmatch(strings.TrimSpace(string(name)))
+		if m == nil {
+			continue
+		}
+		data, err := os.ReadFile(base + "/temp1_input")
+		if err != nil {
+			continue
+		}
+		milli, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+		if err != nil {
+			continue
+		}
+		temps[m[1]] = float64(milli) / 1000.0
+	}
+	return temps
+}
+
 // --- Network interfaces ---
 
 type iwDev struct {
@@ -631,11 +667,11 @@ func getInterfaces() []Iface {
 
 	// ip -j addr
 	type ipAddr struct {
-		IfName   string `json:"ifname"`
+		IfName    string `json:"ifname"`
 		OperState string `json:"operstate"`
-		AddrInfo []struct {
-			Local      string `json:"local"`
-			PrefixLen  int    `json:"prefixlen"`
+		AddrInfo  []struct {
+			Local     string `json:"local"`
+			PrefixLen int    `json:"prefixlen"`
 		} `json:"addr_info"`
 	}
 	var ipAddrs []ipAddr
@@ -683,6 +719,8 @@ func getInterfaces() []Iface {
 		}
 	}
 
+	radioTemps := getRadioTemps()
+
 	var ifaces []Iface
 
 	for _, ip := range ipAddrs {
@@ -711,6 +749,9 @@ func getInterfaces() []Iface {
 			iface.FreqMHz = iw.Freq
 			iface.TxPowerDBM = iw.TxPower
 			iface.WidthMHz = iw.Width
+			if t, ok := radioTemps[iw.Wiphy]; ok {
+				iface.TempC = &t
+			}
 		}
 
 		// Classify role — AP check must precede batSlaves so no_mesh_if wins
@@ -950,11 +991,20 @@ func parseIWDev() map[string]iwDev {
 		return devs
 	}
 	var current string
+	var curPhy string
 	for _, line := range strings.Split(out, "\n") {
 		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "phy#") {
+			// Global `iw dev` groups interfaces under a "phy#N" header and
+			// emits no per-interface "wiphy N" line, so this header is the
+			// only place the phy index appears. Carry it onto the
+			// interfaces that follow — the radio temp lookup keys on it.
+			curPhy = strings.TrimPrefix(trimmed, "phy#")
+			continue
+		}
 		if strings.HasPrefix(trimmed, "Interface ") {
 			current = strings.TrimPrefix(trimmed, "Interface ")
-			devs[current] = iwDev{Name: current}
+			devs[current] = iwDev{Name: current, Wiphy: curPhy}
 		} else if current != "" {
 			d := devs[current]
 			switch {

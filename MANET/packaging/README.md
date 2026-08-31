@@ -68,10 +68,25 @@ can't be derived from git history.
 target.** Keep this in mind when deciding how much time to spend keeping the
 RPi5 section below current.
 
-**CM4**: the overlay is vendored from `https://www.colorado-governor.com/manet/cm4-install.tar.gz`
-— an externally-hosted tarball not published in the very-srs/MANET GitHub
-repo. Run `packaging/fetch-cm4-overlay.sh` (optionally pointing it at a local
-copy of that tarball). It writes a `Bundled version` line into the generated
+**CM4**: the overlay supplies the kernel, DTBs, mt7915e/morse/dot11ah modules
+and HaLow firmware — none of which ship in stock Raspberry Pi OS. Without it a
+CM4 node boots to plain Raspberry Pi OS with no mesh radios, so the build now
+refuses to produce a tarball that lacks it (override with `ALLOW_TOOLS_ONLY=1`
+only when the base image already carries the kernel layer).
+
+Vendor it from a **local** tarball — copy `cm4-install.tar.gz`, or an
+`install_packages/cm4-tools.tar.gz` known to contain `usr/lib/modules`, from a
+machine that already has one:
+
+```
+packaging/fetch-cm4-overlay.sh <path-to-cm4-install.tar.gz>
+```
+
+The original upstream source is
+`https://www.colorado-governor.com/manet/cm4-install.tar.gz` — an externally
+hosted tarball not published in the very-srs/MANET GitHub repo. Fetching from
+it is opt-in via `packaging/fetch-cm4-overlay.sh --from-url`; the script never
+reaches the network unless you ask it to. It writes a `Bundled version` line into the generated
 `kernel-work/packages/cm4-sbc-overlay/VENDORED_FROM.md`. Copy that value
 verbatim into `MANET/rootfs/etc/manet_version.txt`, then rebuild the tools
 tarball. That file has no lightweight version endpoint of its own (the

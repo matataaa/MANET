@@ -29,10 +29,12 @@ MANET/src/gps-reader/gps-reader
 MANET/src/halow-mcs-summary/halow-mcs-summary
 MANET/src/manet-ctrl/manet-ctrl
 MANET/src/mesh-chat/mesh-chat
+MANET/src/mesh-hook/mesh-hook
 MANET/src/mesh-manager/mesh-manager
 MANET/src/mesh-radio-state/mesh-radio-state
 MANET/src/mesh-registry/mesh-registry
 MANET/src/node-manager/node-manager
+MANET/src/node-update/node-update
 
 # Local dev builds (host-native, never shipped)
 MANET/src/manet-ctrl/manet-term
@@ -43,6 +45,8 @@ MANET/src/gateway-manager/bin/
 # Android build artifacts
 MANET/src/mesh-ctrl-android/.gradle/
 MANET/src/mesh-ctrl-android/app/build/
+# build-apk.sh scratch copy; tracked artifact lives in rootfs www/assets/
+MANET/src/mesh-ctrl-android/mesh-ctrl.apk
 
 # Provisioning scratch
 MANET/provisioning/.image-cache/
