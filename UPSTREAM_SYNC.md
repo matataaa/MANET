@@ -55,32 +55,96 @@ git fetch upstream
 
 ## Last reviewed
 
-Upstream commit reviewed up to: `695ca46` (2026-08-20) — "Back off pipeline
-restarts and stop logging the same error for ever"
+Upstream commit reviewed up to: `515a3b1` (2026-08-31) — "Bump to 0.544"
 
-2026-08-21 pass found one actionable, mechanically-portable fix not yet in
-the fork: `70dc3c6` "Fix mesh time sync and wire GPS in as a time source"
-fixed real bugs also present in the fork's `provision-mesh.sh` /
-`ethernet-autodetect.sh` / `one-shot-time-sync.sh` / `radio-setup.sh` —
-invalid `offline` directive in chrony-default.conf, chrony-default.conf
-written to the wrong path (`/etc/chrony-default.conf` vs
-`/etc/chrony/chrony-default.conf`), `one-shot-time-sync.service` never
-actually enabled, and `one-shot-time-sync.sh` bursting a source chronyd was
-never told about. Ported (same day, this pass). Deliberately NOT ported: the
-upstream commit's GPS-as-explicit-NTP-source marker
-(`/var/run/mesh-ntp-gps.state`, set from `node_tools/node-manager.sh`) —
-the fork's registry publisher (`src/mesh-registry/main.go`,
-`serviceActive("chrony")`) works on a different principle than upstream's
-state-file marker, so a GPS marker wouldn't plug in the same way; making a
-GPS-disciplined node a preferred/discoverable mesh time source needs its own
-design pass, not a port. See the corrected comment above `radio-setup.sh`'s
-GPS/chrony section for the current, accurate state.
+### 2026-08-21 pass (up to `695ca46`)
 
-Everything else in the reviewed range (the voice PTT/Lyra feature set —
-fork has its own separate Go `mesh-voice`, not upstream's Python one;
-journald persistence — already fixed
-independently in the fork's own `journald.conf.d/manet.conf`) needs no
-action.
+Found one actionable, mechanically-portable fix not yet in the fork:
+`70dc3c6` "Fix mesh time sync and wire GPS in as a time source" fixed real
+bugs also present in the fork's `provision-mesh.sh` / `ethernet-autodetect.sh`
+/ `one-shot-time-sync.sh` / `radio-setup.sh` — invalid `offline` directive in
+chrony-default.conf, chrony-default.conf written to the wrong path
+(`/etc/chrony-default.conf` vs `/etc/chrony/chrony-default.conf`),
+`one-shot-time-sync.service` never actually enabled, and
+`one-shot-time-sync.sh` bursting a source chronyd was never told about.
+Ported (same day, this pass). Deliberately NOT ported: the upstream commit's
+GPS-as-explicit-NTP-source marker (`/var/run/mesh-ntp-gps.state`, set from
+`node_tools/node-manager.sh`) — the fork's registry publisher
+(`src/mesh-registry/main.go`, `serviceActive("chrony")`) works on a
+different principle than upstream's state-file marker, so a GPS marker
+wouldn't plug in the same way; making a GPS-disciplined node a
+preferred/discoverable mesh time source needs its own design pass, not a
+port. See the corrected comment above `radio-setup.sh`'s GPS/chrony section
+for the current, accurate state.
+
+Everything else in that range (the voice PTT/Lyra feature set — fork has its
+own separate Go `mesh-voice`, not upstream's Python one; journald
+persistence — already fixed independently in the fork's own
+`journald.conf.d/manet.conf`) needed no action.
+
+### 2026-09-01 pass (covers `695ca46..515a3b1`, ~50 commits, plus a
+re-check of everything reviewed before)
+
+Found one **live bug in the fork itself**, same class as upstream's
+`b0ad1a3` "Fix the auto_update gate that no node has ever satisfied":
+`auto_update` is written as `y`/`n` everywhere (`admin.go`, all three
+flash-time provisioning scripts, `firstrun.sh.template`), and the Go
+`node-update` service's own gate (`isAffirmative`) correctly treats `y` as
+on. But three other places still test the dead condition
+`grep -qi '^auto_update=1' /etc/mesh.conf`, which no writer has ever
+produced:
+- `MANET/rootfs/etc/networkd-dispatcher/carrier:24`
+- `MANET/packaging/build-rpi5-tarball.sh:144`
+- `MANET/packaging/build-x86-tarball.sh:163`
+
+Effect: the carrier-triggered "update immediately when ethernet/internet
+comes up" path has never fired on any node. Not a total auto-update
+failure (the routine timer-based check still runs `node-update` normally),
+just this fast-path trigger. **Fixed 2026-09-01** on branch
+`fix/auto-update-carrier-hook-gate` — all three files now use
+`grep -qiE '^auto_update=(y|yes|1|true)[[:space:]]*$'`.
+
+Everything else checked in this range turned out to already be independently
+covered by the fork's own Go rewrite or prior ports, not because it was
+mechanically applied from these specific commits:
+- `f755e26` web UI localhost/DHCP firewall — already in via the fork's own
+  `e5f4442`.
+- `403c968` unauthenticated radio endpoints — N/A, `mesh-status.py` doesn't
+  exist here; `manet-ctrl`'s `/api/control/*` routes are already behind
+  `requireAuth`.
+- `9824519` EU cfg80211 regdom / fatal `sae_anti_clogging_threshold` —
+  `radio-setup.sh` already has the fixed logic.
+- ACS election/scan-data/solo-node fixes (`fda4e21`, `0d1a31a`, `4080ac0`) —
+  the Go `node-manager` already hard-errors on empty/absent scan data and
+  handles solo-isolation quorum.
+- `batctl o` mean-throughput column-shift parsing (`67ee2dc`, `d234974`) —
+  `mesh-registry/main.go`'s `getTQAverage` already parses it correctly.
+- Gateway detection on ICMP-filtered uplinks + stale route cleanup
+  (`3b467f4`) — `gateway-manager` already tolerates ICMP-only flapping and
+  withdraws stale default routes.
+- HaLow USB recovery udev rule (`6a483c8`) — byte-identical rule and
+  companion script already present.
+
+**Needs a closer look, not cleared either way:** the ~15-commit voice
+PTT/Lyra block (`b81dc2a`..`9a3e2bc`). The fork's `mesh-voice` is an
+independent Go implementation, but it has zero references to "Lyra" —
+codec choice differs or the codec swap was never carried over. Whether
+talker-mixing / muted-presence-beacon behavior matches wasn't verified.
+Do a feature-by-feature comparison if voice quality/behavior becomes a
+priority.
+
+**Structural, not directly portable** (old `node_tools/` python/bash surface
+now Go — architecture differs enough that these need a manual read-and-port
+if a matching symptom shows up, not a blind cherry-pick): alfred
+identity/telemetry payload split (`c601555`), the `/manage`-prefixed
+config apply/ACK/rollback pipeline (`323b922`, `3f80ed0`, `2f2fb2f`),
+provisioning-completion tracking (`809b658`, `9fea978`), OTA-reverts-
+ACS-node-to-static protection (`3355b40`, `c1d35a2`), USB-WiFi-as-uplink
+prep (`ec5346c`, not reviewed in depth).
+
+**Skipped as low value:** Windows/rpi-imager fixes, the removed RPi5
+release workflow (RPi5 is a later-stage target per project priorities),
+decorative UI tweaks, and ~12 version-bump-only commits.
 
 Update this line after each review pass so `git log upstream/main --oneline
 <last-reviewed-sha>..upstream/main` shows only what's new.
