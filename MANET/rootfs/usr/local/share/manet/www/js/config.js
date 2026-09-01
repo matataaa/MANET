@@ -474,7 +474,7 @@ function configRenderEdit(panel, cfg) {
     { label: 'HaLow Bandwidth', key: 'halow_bw', type: 'select', options: [
       {v:'1MHz',l:'1 MHz'},{v:'2MHz',l:'2 MHz'},{v:'4MHz',l:'4 MHz'},{v:'8MHz',l:'8 MHz'}
     ], hint: 'Primary channel width for 802.11ah mesh. EU supports 1MHz only. Narrower = longer range.' },
-    { label: 'HaLow Channel', key: 'halow_channel', type: 'select', options: [{v:'',l:'Auto'}],
+    { label: 'HaLow Channel', key: 'halow_channel', type: 'channel-halow',
       hint: 'Explicit HaLow channel for the current regulatory domain/bandwidth. Auto (default) picks the standard channel for that combination.' },
     { label: '5GHz Mesh Channel Mode', key: 'acs', type: 'select', options: [
       {v:'n',l:'Static (pinned channel)'},{v:'y',l:'Automatic (ACS)'}
@@ -482,7 +482,7 @@ function configRenderEdit(panel, cfg) {
     { label: '5GHz Mesh Width', key: 'mesh_5ghz_bw', type: 'select', options: [
       {v:'20',l:'20 MHz (default)'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
     ], hint: 'Fleet-wide — never mix widths across nodes. 40MHz requires the patched wpa_supplicant and silently falls back to 20MHz without it. 80MHz without the patch can mismatch primary channel between peers.' },
-    { label: '5GHz Pinned Channel', key: 'mesh_5ghz_channel', type: 'select', options: [{v:'',l:'Auto'}],
+    { label: '5GHz Pinned Channel', key: 'mesh_5ghz_channel', type: 'channel-5ghz',
       hint: 'Only used when 5GHz Mesh Channel Mode above is Static. Ignored under Automatic (ACS), which elects its own channel. Legal channels depend on Regulatory Domain — narrowed via /api/mesh5ghz/channels, same as HaLow Channel above.',
       showIf: [{key:'acs', equals:'n'}] },
     { label: 'Multicast Mode', key: 'multicast_mode', type: 'select', options: [
@@ -591,6 +591,16 @@ function configRenderEdit(panel, cfg) {
         html += '<option value="' + val + '"' + sel + '>' + label + '</option>';
       });
       html += '</select>';
+    } else if (f.type === 'channel-halow' || f.type === 'channel-5ghz') {
+      // Pre-seeded with a single option holding the real current value
+      // (selected) before the actual channel list loads asynchronously
+      // (see configRefreshHalowChannels/configRefreshMesh5GHzChannels
+      // below) -- mirrors fleet.js's fleetRenderField fix for the same
+      // race: without this, the select only ever contains a placeholder
+      // 'Auto' option at render time, curVal never matches it, and the
+      // real saved channel is silently lost in favor of Auto.
+      html += '<select class="cfg-input" id="cfg-f-' + f.key + '"><option value="' + escHtml(curVal) + '" selected>' +
+        escHtml(curVal || 'Auto') + '</option></select>';
     } else if (f.type === 'range') {
       var rangeVal = curVal || '80';
       html += '<div class="cfg-range-wrap"><input class="cfg-input cfg-range" type="range"' +
