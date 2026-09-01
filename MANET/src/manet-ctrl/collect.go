@@ -942,13 +942,26 @@ func acsDivergenceFault(iface string) string {
 
 // acsHoldFault reads node-manager's persistent-hold marker for iface
 // (acs_selfheal.go's acsTrackHold, /var/run/mesh_acs_divergence_<iface>
-// _hold) — a distinct condition from acsDivergenceFault above (no scan data
-// at election time, vs. a live-vs-elected frequency mismatch after a
+// _hold) — a distinct condition from acsDivergenceFault above (a sustained
+// election hold, vs. a live-vs-elected frequency mismatch after a
 // restart), so a separate marker file, checked independently.
+//
+// REASON distinguishes two causes acsTrackHold's marker can report — kept
+// in sync by convention/naming with acs_selfheal.go's holdReason values,
+// same as every other field in this marker. Reported as separate messages
+// rather than one generic "no scan data" line: a live incident
+// (2026-09-01, EUD3/EUD4) showed operators reading the old single wording
+// as a scan/data bug when the actual cause was isolation (no peer votes,
+// scan data present) — a gossip/quorum problem with a different fix path
+// than an actual data outage.
 func acsHoldFault(iface string) string {
 	kv := loadKVFile("/var/run/mesh_acs_divergence_" + iface + "_hold")
-	if kv["REASON"] == "" {
+	reason := kv["REASON"]
+	if reason == "" {
 		return ""
+	}
+	if reason == "persistent-hold-no-votes" {
+		return fmt.Sprintf("ACS: no peer votes for %s consecutive cycles, holding %s MHz (isolated or gossip lag — scan data is fine)", kv["CONSEC_HOLD"], kv["HELD_FREQ"])
 	}
 	return fmt.Sprintf("ACS: no scan data for %s consecutive cycles, holding %s MHz", kv["CONSEC_HOLD"], kv["HELD_FREQ"])
 }

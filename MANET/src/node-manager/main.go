@@ -199,6 +199,7 @@ func rewriteFrequencyLine(confPath, targetFreq, label string) bool {
 	log.Printf("setting %s to channel %s (was %s)", label, targetFreq, freq)
 	data, err := os.ReadFile(confPath)
 	if err != nil {
+		log.Printf("rewrite %s frequency: read %s: %v", label, confPath, err)
 		return false
 	}
 	var out strings.Builder
@@ -212,6 +213,7 @@ func rewriteFrequencyLine(confPath, targetFreq, label string) bool {
 	}
 	result := strings.TrimRight(out.String(), "\n") + "\n"
 	if err := os.WriteFile(confPath, []byte(result), 0644); err != nil {
+		log.Printf("rewrite %s frequency: write %s: %v", label, confPath, err)
 		return false
 	}
 	return true
@@ -731,11 +733,27 @@ func runACSTick() {
 
 	limp := false
 	coldStart := false
+	var result24, result5 electionResult
+	haveIface24, haveIface5 := iface24 != "", iface5 != ""
 
-	if iface24 != "" {
+	// Read once per tick, not once per band, so both bands' bias lookups
+	// see the same on-disk snapshot — see acsBiasFreq/updateACSLastChannels
+	// (acs_last_channels.go) and docs/ACS.md's persisted incumbent-bias
+	// design for why this exists: without it, a mesh-wide simultaneous
+	// cold start (every node's conf reset to the lobby frequency by
+	// mesh-boot-lobby.service) leaves peerChannelVotes permanently unable
+	// to count any vote — the lobby frequency is deliberately excluded
+	// from both candidate lists — so totalVotes never leaves 0 and
+	// electBand held forever, confirmed live 2026-09-01 (EUD3+EUD4).
+	lastChannels := readACSLastChannels()
+
+	applied24, applied5 := false, false
+
+	if haveIface24 {
 		cur := getConfFreq(wpaConfPath(iface24))
-		result := electBand(reports, registry, band24Channels, cur, lobbyFreq24, "2.4GHz")
-		freq := result.freq
+		biasFreq := acsBiasFreq(cur, lastChannels.freq24, band24Channels)
+		result24 = electBand(reports, registry, band24Channels, cur, biasFreq, lobbyFreq24, "2.4GHz")
+		freq := result24.freq
 		if !quorum {
 			freq = lobbyFreq24
 		}
@@ -748,14 +766,22 @@ func runACSTick() {
 		// validated design, point 2.
 		configChanged := setIfaceFrequency(iface24, wpaConfPath(iface24), freq, "2.4 GHz (ACS)")
 		acsVerifyAfterApply(iface24, freq, "2.4GHz", configChanged)
-		acsTrackHold(iface24, result, "2.4GHz")
-		limp = limp || result.limp
-		coldStart = coldStart || result.coldStart
+		acsTrackHold(iface24, result24, "2.4GHz")
+		limp = limp || result24.limp
+		coldStart = coldStart || result24.coldStart
+		// setIfaceFrequency's bool return conflates "already matched" with
+		// "write/restart failed" (rewriteFrequencyLine returns false for
+		// both) — re-read the conf to get an actual success signal, per
+		// docs/ACS.md's invariant that the persisted file must mean "the
+		// frequency this node last actually ran," not "the frequency
+		// electBand most recently computed."
+		applied24 = getConfFreq(wpaConfPath(iface24)) == freq
 	}
-	if iface5 != "" {
+	if haveIface5 {
 		cur := getConfFreq(wpaConfPath(iface5))
-		result := electBand(reports, registry, candidates5, cur, lobbyFreq5, "5GHz")
-		freq := result.freq
+		biasFreq := acsBiasFreq(cur, lastChannels.freq5, candidates5)
+		result5 = electBand(reports, registry, candidates5, cur, biasFreq, lobbyFreq5, "5GHz")
+		freq := result5.freq
 		if !quorum {
 			freq = lobbyFreq5
 		}
@@ -763,10 +789,19 @@ func runACSTick() {
 		// immediately after this setIfaceFrequency call.
 		configChanged := setIfaceFrequency(iface5, wpaConfPath(iface5), freq, "5 GHz (ACS)")
 		acsVerifyAfterApply(iface5, freq, "5GHz", configChanged)
-		acsTrackHold(iface5, result, "5GHz")
-		limp = limp || result.limp
-		coldStart = coldStart || result.coldStart
+		acsTrackHold(iface5, result5, "5GHz")
+		limp = limp || result5.limp
+		coldStart = coldStart || result5.coldStart
+		applied5 = getConfFreq(wpaConfPath(iface5)) == freq
 	}
+
+	// Placed after both bands' election+apply blocks and before
+	// maybeRunTourguide below, per docs/ACS.md point 3: tourguide's own
+	// frequency hops (hopFrequency/applyPartitionMerge) never go through
+	// electBand and so can never produce an electionResult, keeping this
+	// write structurally insulated from tourguide activity rather than
+	// just incidentally so.
+	updateACSLastChannels(lastChannels, quorum, result24, result5, haveIface24 && applied24, haveIface5 && applied5)
 
 	if coldStart {
 		// At least one band came back with no peer votes yet. The
