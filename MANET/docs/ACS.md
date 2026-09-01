@@ -1978,6 +1978,29 @@ code (ahead of `release-v0.1.3`, not yet cut as an official release) —
 worth a proper release once this is considered final rather than leaving
 it as a live-patched state.
 
+## 2026-09-01 — `activeBand5Channels` phy-capability filter now fails open
+
+Flagged by an independent third-party MANET fork reviewer on 2026-08-30
+(see `acs_review_followups_2026-08-30` memory) and by a same-day
+comparison against upstream (`very-srs/MANET`)'s equivalent
+`phy_usable_freqs` in `node-manager-acs.sh`, which fails open by explicit
+design ("filtering to an empty set is far worse than not filtering — it
+would take a whole band off the air on every node at once"). Our
+`activeBand5Channels` (`scan.go:265`) previously failed *closed* on a
+transient `iw phy info` error — returning zero candidates for the cycle,
+which excludes the entire 5GHz band from that tick's election on every
+node hitting the same transient failure simultaneously. Fixed to match
+upstream's fail-open behavior: on error, return the full unfiltered
+`band5Channels` superset instead of `nil`. Downstream safety is unchanged
+— `freqAvailableOnPhy` (`acs_selfheal.go`) still independently guards
+against firing a corrective restart toward an actually-illegal frequency,
+and `electBand`'s noise/vote scoring still disqualifies a genuinely bad
+channel — this filter was only ever a fast-path optimization, not the
+sole safety net. Build-verified (`go build`/`go vet` clean); no test
+suite exists for this package to run. Not yet hardware-verified — the
+failure mode this guards is a transient `iw` error, which is hard to
+reproduce on demand.
+
 ## Related docs and memory
 
 - [`wpa-supplicant-mesh-noscan.md`](wpa-supplicant-mesh-noscan.md) — the
