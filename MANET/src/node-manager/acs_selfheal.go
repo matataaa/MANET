@@ -366,14 +366,31 @@ func acsTrackHold(iface string, result electionResult, band string) {
 		return
 	}
 
-	log.Printf("[acs] %s: no scan data for any candidate for %d consecutive cycles — still holding %s MHz, this is now a persistent data outage, not a one-off",
-		band, streak, result.freq)
+	// result.hadAnyData tells apart two genuinely different conditions that
+	// both surface as a sustained hold: no scan data at all (a real data
+	// outage) vs. scan data exists but no peer vote does (isolation or a
+	// gossip/quorum problem, not a data problem) — most commonly an
+	// already-converged node whose peers are temporarily out of the vote
+	// tally. Before this distinction existed, this line always claimed
+	// "data outage" even when the actual cause was "no peer votes," which
+	// is what made a live isolation incident (2026-09-01, EUD3/EUD4) read
+	// like a scan/data bug during triage.
+	reason := "persistent data outage"
+	if result.hadAnyData {
+		reason = "persistent isolation (no peer votes, scan data is fine)"
+	}
+	log.Printf("[acs] %s: hold sustained for %d consecutive cycles — still holding %s MHz, this is now %s, not a one-off",
+		band, streak, result.freq, reason)
 	if iface == "" {
 		return
 	}
+	holdReason := "persistent-hold-no-data"
+	if result.hadAnyData {
+		holdReason = "persistent-hold-no-votes"
+	}
 	content := "IFACE=" + iface + "\n" +
 		"BAND=" + band + "\n" +
-		"REASON=persistent-hold\n" +
+		"REASON=" + holdReason + "\n" +
 		"HELD_FREQ=" + result.freq + "\n" +
 		"TIMESTAMP=" + strconv.FormatInt(time.Now().Unix(), 10) + "\n" +
 		"CONSEC_HOLD=" + strconv.Itoa(streak) + "\n"

@@ -140,12 +140,13 @@ func peerChannelVotes(registry map[string]map[string]string, candidates []int, b
 }
 
 type electionResult struct {
-	freq      string
-	limp      bool
-	hold      bool
-	coldStart bool
-	winnerCh  int
-	score     float64
+	freq       string
+	limp       bool
+	hold       bool
+	coldStart  bool
+	winnerCh   int
+	score      float64
+	hadAnyData bool
 }
 
 // electBand runs the deterministic, decentralized election for one band:
@@ -161,36 +162,47 @@ type electionResult struct {
 // split still lets each node's own incumbent bias break the tie in its own
 // favor, so two nodes can independently "agree to disagree" forever. A
 // comparator with zero per-node state once real peer data exists is what
-// actually guarantees convergence.
+// actually guarantees convergence. biasFreq (see acsBiasFreq, main.go) is
+// never consulted anywhere in this totalVotes > 0 path.
 //
-// When nobody has voted for anything yet (totalVotes == 0 — a lone or
-// freshly-booting node with no gossiped peer channel data), this doesn't
-// run an election at all: it holds the current channel and waits. This
-// removes the cold-start race outright rather than biasing it toward a
-// remembered value (the previous approach, see git history's
-// mesh_acs_last_channels/acs_channel_persist.go): a truly isolated node
-// has no mesh to optimize for yet, and a simultaneous mesh-wide power loss
-// still converges without any persisted state, because
+// When nobody has voted for anything yet (totalVotes == 0), this used to
+// hold the current channel and wait, on the theory that a simultaneous
+// mesh-wide power loss still converges without persisted state because
 // mesh-boot-lobby.service puts every node's conf back on the lobby
-// frequency before wpa_supplicant even starts — a simultaneous cold start
-// means every node meshes at the lobby, gossips, gets votes, and elects
-// together on the next tick. The tradeoff: a node that is and stays
-// genuinely alone (no peer ever) now parks on the lobby frequency
-// indefinitely instead of self-optimizing to the quietest channel it can
-// see — acceptable since there's no mesh to serve by moving.
+// frequency before wpa_supplicant even starts — every node meshes at the
+// lobby, gossips, and elects together on the next tick. That theory had a
+// gap, confirmed live 2026-09-01 (EUD3+EUD4, 30+ min continuous hold):
+// peerChannelVotes only counts a peer's vote for a channel that's actually
+// in candidates, which deliberately excludes the lobby frequency — so
+// while every node is still sitting at lobby, every peer's "vote" is for a
+// channel that can never be counted, totalVotes stays 0 forever, and the
+// old code returned before ever running an election at all. Nobody could
+// ever cast the first real vote.
 //
-// "The next tick" only converges quickly because of a companion fix in
-// runACSTick (main.go): a hardware test (2026-08-30, EUD3+EUD4 reboot)
-// found that without it, this hold's own acsCycleInterval throttle turns
-// "wait for a peer vote" into "wait up to 180s for one", reproducing the
-// exact 3.5-4 minute outage this fix lineage exists to eliminate.
+// Fix (docs/ACS.md, approved by manet-architect 2026-08-27/28): when
+// totalVotes == 0, still score every candidate from self+peer scan report
+// data exactly as the totalVotes > 0 path does below, and pick a winner —
+// just with the sort's primary key swapped from "votes desc" (structurally
+// always a 0-0 tie here) to "matches biasFreq" as a tiebreak, so nodes that
+// share the same prior elected channel (e.g. every node persisted the same
+// pre-outage frequency) converge on it together instead of each
+// independently picking whatever scores best locally. biasFreq itself is
+// resolved by the caller (acsBiasFreq, main.go): the live conf value when
+// it's already a real candidate, else the persisted last-known-good value
+// — never fed into this function's return value directly, only into the
+// comparator, so a stale or cross-regulatory-domain bias just fails to
+// match anything and this degrades to the old undirected local-noise pick.
+// A band with no scan data at all yet (hadAnyData false) still holds, same
+// as before — there is nothing to score.
+//
 // electionResult.coldStart (set here only when currentFreq is still the
-// lobby frequency — never on an already-converged node with a momentary
-// vote gap) tells the caller to retry on the very next 15s loop tick
-// instead of waiting out the full interval. Still NOT field-verified for
-// the true-first-boot and EU-regulatory-domain cases the superseded
-// persisted-bias fix also left untested (see docs/ACS.md).
-func electBand(reports map[string]ChannelReport, registry map[string]map[string]string, candidates []int, currentFreq, lobbyFreq, band string) electionResult {
+// lobby frequency and no election happened this cycle — never on an
+// already-converged node with a momentary vote gap) tells the caller
+// (runACSTick, main.go) to retry on the very next 15s loop tick instead of
+// waiting out the full acsCycleInterval — hardware-verified 2026-08-30
+// (EUD3+EUD4 reboot) that without this, the hold's own throttle turns
+// "wait for a peer vote" into "wait up to 180s for one".
+func electBand(reports map[string]ChannelReport, registry map[string]map[string]string, candidates []int, currentFreq, biasFreq, lobbyFreq, band string) electionResult {
 	currentCh, _ := strconv.Atoi(currentFreq)
 	votes := peerChannelVotes(registry, candidates, band)
 	totalVotes := 0
@@ -198,8 +210,37 @@ func electBand(reports map[string]ChannelReport, registry map[string]map[string]
 		totalVotes += v
 	}
 
+	scored, hadAnyData := scoreCandidates(reports, votes, candidates, band)
+
 	if totalVotes == 0 {
-		log.Printf("[acs] %s: no peer votes yet (cold start or isolated) — holding current channel", band)
+		// electColdStart only runs when this node has nothing real elected
+		// yet (still on the lobby frequency) — never on an already-converged
+		// node whose peer just temporarily dropped out of gossip. Without
+		// this gate, a converged node that loses its own current channel
+		// from this cycle's scored set (no survey entry, or disqualified by
+		// a single peer's noise reading) would unilaterally hop to whatever
+		// scores best now and restart wpa_supplicant on zero peer votes —
+		// exactly the disruption the original hold existed to prevent, and
+		// the opposite of what a rebooting peer needs from a stable
+		// rendezvous point. It also only runs when there's actually
+		// something to score — hadAnyData false means no candidate had any
+		// reading this cycle at all, nothing for the bias comparator to
+		// rank between.
+		if currentFreq == lobbyFreq && hadAnyData {
+			return electColdStart(scored, biasFreq, currentFreq, lobbyFreq, band)
+		}
+		if hadAnyData {
+			log.Printf("[acs] %s: no peer votes yet (cold start or isolated) — holding current channel", band)
+		} else {
+			// Distinct from the case above: acsTrackHold (acs_selfheal.go)
+			// escalates a sustained hold into a loud "persistent data
+			// outage" log line and marker file, worded for exactly this
+			// case — not for an isolated-but-scanning node, which is a
+			// gossip/quorum problem, not a data problem. hadAnyData carried
+			// on electionResult is what lets it tell the two apart instead
+			// of mislabeling every sustained hold as a data outage.
+			log.Printf("[acs] %s: no peer votes and no scan data yet (cold start or isolated) — holding current channel", band)
+		}
 		// coldStart only when we haven't elected anything real yet (still
 		// on the lobby frequency) — never on an already-converged node
 		// whose peer just temporarily dropped out of gossip. The caller
@@ -208,29 +249,7 @@ func electBand(reports map[string]ChannelReport, registry map[string]map[string]
 		// make its tourguide start yanking an already-working data-channel
 		// radio to the lobby every retry for no benefit, right when a
 		// rebooting peer needs it to stay put as a stable rendezvous point.
-		return electionResult{freq: currentFreq, winnerCh: currentCh, hold: true, coldStart: currentFreq == lobbyFreq}
-	}
-
-	type candidate struct {
-		votes    int
-		rawScore float64
-		ch       int
-	}
-	var scored []candidate
-	hadAnyData := false
-
-	for _, ch := range candidates {
-		stats, ok := aggregateChannelReports(reports, ch)
-		if !ok {
-			continue
-		}
-		hadAnyData = true
-		if stats.maxNoise > noiseDisqualifyDBM {
-			log.Printf("[acs] %s: channel %d disqualified (max_noise %ddBm)", band, ch, stats.maxNoise)
-			continue
-		}
-		rawScore := stats.avgNoise + float64(stats.totalBSS)*0.1
-		scored = append(scored, candidate{votes: votes[ch], rawScore: rawScore, ch: ch})
+		return electionResult{freq: currentFreq, winnerCh: currentCh, hold: true, coldStart: currentFreq == lobbyFreq, hadAnyData: hadAnyData}
 	}
 
 	if len(scored) == 0 {
@@ -248,10 +267,10 @@ func electBand(reports map[string]ChannelReport, registry map[string]map[string]
 			// which includes lobbyFreq5's 5180). Hold the current channel
 			// instead and let the next cycle try again.
 			log.Printf("[acs] %s: no scan data for any candidate — holding current channel", band)
-			return electionResult{freq: currentFreq, winnerCh: currentCh, hold: true}
+			return electionResult{freq: currentFreq, winnerCh: currentCh, hold: true, hadAnyData: false}
 		}
 		log.Printf("[acs] %s: all channels disqualified, falling back to lobby", band)
-		return electionResult{freq: lobbyFreq, limp: true}
+		return electionResult{freq: lobbyFreq, limp: true, hadAnyData: true}
 	}
 
 	sort.Slice(scored, func(i, j int) bool {
@@ -267,9 +286,91 @@ func electBand(reports map[string]ChannelReport, registry map[string]map[string]
 
 	if winner.rawScore > limpModeScoreThreshold {
 		log.Printf("[acs] %s: best channel %d still poor (score %.2f), falling back to lobby", band, winner.ch, winner.rawScore)
-		return electionResult{freq: lobbyFreq, limp: true}
+		return electionResult{freq: lobbyFreq, limp: true, hadAnyData: true}
 	}
 
 	log.Printf("[acs] %s: elected channel %d (score %.2f, votes %d)", band, winner.ch, winner.rawScore, winner.votes)
-	return electionResult{freq: strconv.Itoa(winner.ch), winnerCh: winner.ch, score: winner.rawScore}
+	return electionResult{freq: strconv.Itoa(winner.ch), winnerCh: winner.ch, score: winner.rawScore, hadAnyData: true}
+}
+
+// incumbentBiasDB nudges electColdStart's comparator toward biasFreq by
+// this many dB of effective score, rather than making a bias match win
+// outright regardless of how much worse it scores. Bounded on purpose: the
+// design's split-risk analysis (docs/ACS.md) reasons about this in terms of
+// a small, fixed nudge that a sufficiently large real noise/BSS gap can
+// still override — an absolute "bias always wins" rule would let two nodes
+// with divergent stale persisted values reject a clearly-better, actually
+// shared-RF-correlated channel, which is strictly worse than the case the
+// design accepted as a bounded, rare risk.
+const incumbentBiasDB = 4.0
+
+type scoredCandidate struct {
+	votes    int
+	rawScore float64
+	ch       int
+}
+
+// scoreCandidates aggregates self+peer scan reports into a per-candidate
+// noise/BSS score, disqualifying anything too noisy. Shared by electBand's
+// normal (totalVotes > 0) path and electColdStart's totalVotes == 0 path
+// so both work from identical scan data — only the ranking differs.
+func scoreCandidates(reports map[string]ChannelReport, votes map[int]int, candidates []int, band string) (scored []scoredCandidate, hadAnyData bool) {
+	for _, ch := range candidates {
+		stats, ok := aggregateChannelReports(reports, ch)
+		if !ok {
+			continue
+		}
+		hadAnyData = true
+		if stats.maxNoise > noiseDisqualifyDBM {
+			log.Printf("[acs] %s: channel %d disqualified (max_noise %ddBm)", band, ch, stats.maxNoise)
+			continue
+		}
+		rawScore := stats.avgNoise + float64(stats.totalBSS)*0.1
+		scored = append(scored, scoredCandidate{votes: votes[ch], rawScore: rawScore, ch: ch})
+	}
+	return scored, hadAnyData
+}
+
+// electColdStart is electBand's totalVotes == 0, still-at-lobby,
+// hadAnyData-true branch (see electBand's doc comment for the full
+// rationale) — the caller has already established there's real scan data
+// to rank. scored is electBand's own scoreCandidates result, passed in
+// rather than recomputed so the disqualification log lines fire exactly
+// once per cycle regardless of which branch runs. Always produces a real
+// decision: either a genuine election, ranked by incumbentBiasDB-adjusted
+// score then channel number (never by votes, which are structurally all
+// zero here), or the same all-disqualified lobby/limp fallback the normal
+// path uses — with coldStart and hadAnyData still set on that fallback so
+// the caller keeps retrying every 15s instead of waiting out
+// acsCycleInterval, and acsTrackHold's escalation log stays accurate.
+func electColdStart(scored []scoredCandidate, biasFreq, currentFreq, lobbyFreq, band string) electionResult {
+	coldStart := currentFreq == lobbyFreq
+	if len(scored) == 0 {
+		log.Printf("[acs] %s: all channels disqualified, falling back to lobby", band)
+		return electionResult{freq: lobbyFreq, limp: true, coldStart: coldStart, hadAnyData: true}
+	}
+
+	biasCh, _ := strconv.Atoi(biasFreq)
+	effScore := func(c scoredCandidate) float64 {
+		if c.ch == biasCh {
+			return c.rawScore - incumbentBiasDB
+		}
+		return c.rawScore
+	}
+	sort.Slice(scored, func(i, j int) bool {
+		si, sj := effScore(scored[i]), effScore(scored[j])
+		if si != sj {
+			return si < sj
+		}
+		return scored[i].ch < scored[j].ch
+	})
+	winner := scored[0]
+
+	if winner.rawScore > limpModeScoreThreshold {
+		log.Printf("[acs] %s: best channel %d still poor (score %.2f), falling back to lobby", band, winner.ch, winner.rawScore)
+		return electionResult{freq: lobbyFreq, limp: true, coldStart: coldStart, hadAnyData: true}
+	}
+
+	log.Printf("[acs] %s: no peer votes yet — electing channel %d from local/peer scan data (score %.2f, bias %s)", band, winner.ch, winner.rawScore, biasFreq)
+	return electionResult{freq: strconv.Itoa(winner.ch), winnerCh: winner.ch, score: winner.rawScore, hadAnyData: true}
 }

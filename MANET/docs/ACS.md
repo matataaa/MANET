@@ -1541,6 +1541,98 @@ same pre-existing errcheck findings as before this change
 untouched lines) and zero findings in the two changed/new files. Not yet
 hardware-verified — added to "What needs testing" below.
 
+### Re-implementation — 2026-09-01: the 2026-08-30 supersession was wrong
+
+The checklist item below marked this fix **SUPERSEDED** on the argument
+that `mesh-boot-lobby.service` resetting every node to the lobby frequency
+means a simultaneous mesh-wide cold start still converges on its own —
+"everyone meshes at the lobby, gossips, gets votes, and elects together on
+the next tick" — making persisted state unnecessary. That argument only
+holds for the *sequential*-reboot case the 2026-08-30 hardware test
+actually exercised (EUD3 reboots while EUD4 is already up and already has
+a real elected vote to gossip back in). It does not hold for a genuine
+*simultaneous* cold start, and the code makes this a certainty, not a risk:
+`peerChannelVotes` (`channel_election.go`) only counts a peer's vote for a
+channel that's actually in `candidates`, which deliberately excludes the
+lobby frequency (`band24Channels`/`band5Channels` vs `lobbyFreq24`/
+`lobbyFreq5`, `scan.go`). While every node in the mesh is still sitting at
+lobby, every peer's "vote" is for a channel that structurally can never be
+counted — `totalVotes` cannot leave 0 by gossip alone, no matter how long
+everyone waits or how fast `coldStart`'s retry polls. There is no tick at
+which "everyone meshes, gossips, gets votes" actually produces a non-zero
+vote, because nobody can ever cast the first one. The fast-retry fix
+(`5d9a5ec`) makes the *sequential*-reboot case fast; it does nothing for
+this case, since polling faster doesn't help when the value being polled
+for is definitionally never going to arrive.
+
+**Confirmed live, not simulated, 2026-09-01:** EUD4 held continuously for
+30+ minutes (118 consecutive `acsTrackHold` cycles) and EUD3 for its whole
+reachable uptime window, both logging "no peer votes yet (cold start or
+isolated)" every cycle for *both* bands. Registry dumps on both nodes
+agreed: all reporting nodes' `DATA_CHANNEL_2_4`/`DATA_CHANNEL_5_0` were
+`1`/`36` — the lobby channel numbers — confirming the whole reachable mesh
+was parked at lobby simultaneously with no path out. Diagnosed via
+`manet-node-debug` (batman-adv, alfred, and mesh-registry all confirmed
+healthy — the break was purely in `electBand`'s vote-counting logic, not
+the gossip layer underneath it), not via code inspection alone.
+
+Re-implemented substantially as originally designed above, plus fixes
+found by `manet-reviewer` against a first re-implementation pass that
+also needed correcting to actually match this design:
+
+- New file `acs_last_channels.go` (renamed from the deleted
+  `acs_channel_persist.go`): `acsLastChannelsFile`, `readACSLastChannels`,
+  `acsBiasFreq`, `updateACSLastChannels` — same shape and invariants as
+  `selectBiasFreq`/`maybeWriteLastElectedFreq`/`readLastElectedFreq`
+  above, renamed. `readACSLastChannels` logs a non-missing-file read error
+  and drops (with a log line) any value that doesn't parse as an int,
+  rather than passing garbage through silently.
+- **The comparator is now an additive nudge, not an absolute override.**
+  A first re-implementation pass made `ch == biasCh` the primary sort key
+  in `electColdStart`'s comparator — i.e. any bias match wins regardless
+  of how much worse it scores. That's a materially different mechanism
+  from what this design record actually approved and reasoned about: the
+  split-risk analysis above (the "4.0dB" paragraphs) explicitly depends on
+  the bias being a *bounded* nudge that a large enough real noise/BSS gap
+  can still override, not an unconditional trump card. Fixed: restored
+  `incumbentBiasDB = 4.0` (the same constant name/value the original,
+  pre-`7ce1df7` incumbent-bias design used, scoped here only inside
+  `electColdStart`) as a subtracted adjustment to `rawScore` before
+  comparing, never a primary sort key.
+- **`electColdStart` only runs when the node itself is still at the lobby
+  frequency** (`currentFreq == lobbyFreq`, checked in `electBand` before
+  calling it). The first pass ran it for every `totalVotes == 0` case,
+  which also fires for an already-converged node whose peer's vote merely
+  aged out or temporarily doesn't map into this node's candidate set — a
+  case `electBand`'s own doc comment already called out as needing to stay
+  a quiet hold, not a scored re-election, specifically so a rebooting
+  peer still finds this node parked at its expected rendezvous frequency.
+- `electColdStart`'s two "all disqualified"/"still poor" lobby-fallback
+  returns now carry `coldStart: currentFreq == lobbyFreq` through, same as
+  the plain hold return — a first pass left `coldStart` unset on these,
+  which would have silently reintroduced the exact 180s-stall bug the
+  `5d9a5ec` fast-retry fix (below) exists to prevent, just reached from a
+  different branch.
+- `main.go`'s `runACSTick` re-reads each band's conf file after
+  `setIfaceFrequency` and only marks that band eligible for
+  `updateACSLastChannels` if it reads back as the elected frequency —
+  `setIfaceFrequency`'s bool return can't be used for this since it
+  conflates "already matched" with "write/restart failed"
+  (`rewriteFrequencyLine` returns `false` for both). Matches this
+  section's own invariant: the persisted file must mean "the frequency
+  this node last actually ran," not "the frequency `electBand` most
+  recently computed." `rewriteFrequencyLine`'s two previously-silent
+  `os.ReadFile`/`os.WriteFile` error returns now log.
+
+**Verification status:** `go build`/`go vet`/`gofmt -l` clean. Reviewed by
+`manet-reviewer` (two critical findings above, both fixed in this pass;
+three warnings below also addressed — read-error logging, the
+already-read snapshot now threaded into `updateACSLastChannels` instead of
+re-read, and the type rename `candidate` → `scoredCandidate` to stop
+colliding with this file's existing `candidates []int` naming). Not yet
+hardware-verified — added to "What needs testing" below, alongside the
+still-open items from the 2026-08-28 pass this supersedes.
+
 ## What needs testing
 
 **Before any code is written:**
@@ -1590,9 +1682,36 @@ hardware-verified — added to "What needs testing" below.
       especially since `eud=wired` was re-tested on EUD3 this session and
       the hostapd-disable fix held across reboot (partial re-verification,
       not the full 5-value round trip).
-- [x] **Cold-boot bias fix (`mesh_acs_last_channels`)** — **SUPERSEDED,
-      re-broken then re-fixed, hardware-verification pending re-run.** An
-      external review of this doc (a different MANET fork's maintainer)
+- [ ] **Cold-boot bias fix (`mesh_acs_last_channels`)** — **RE-OPENED
+      2026-09-01: the "SUPERSEDED" verdict below was wrong for the
+      simultaneous-cold-start case, confirmed live on EUD3+EUD4 (30+ min
+      continuous deadlock, not simulated). See "Re-implementation —
+      2026-09-01" above for the corrected implementation and why the
+      argument below doesn't cover that case. Needs the full hardware
+      test pass below, plus these new cases this re-implementation pass
+      specifically targets:**
+      - Simultaneous power-cycle of the whole reachable mesh (not
+        sequential) — the actual untested scenario. Confirm every node
+        converges on the *same* channel within one or two cycles instead
+        of each independently picking its own local-noise-best channel.
+      - A converged 2-node mesh where one node reboots: confirm the
+        *other*, still-up node never routes into `electColdStart` (it's
+        not at the lobby frequency) even during the cycles where the
+        rebooting peer's vote has aged out of its registry.
+      - A bias-eligible channel that scores clearly worse (>4dB) than an
+        alternative real candidate: confirm the alternative still wins —
+        i.e. the nudge is bounded, not an override.
+      - Kill/corrupt `/var/lib/mesh_acs_last_channels` (truncate mid-line,
+        write non-numeric garbage) and confirm a log line appears and
+        behavior degrades cleanly to the undirected local-noise pick.
+      - Force `rewriteFrequencyLine`'s conf write to fail (e.g. make the
+        conf path read-only) on a cycle that would otherwise persist, and
+        confirm the last-known-good file is *not* updated with a
+        frequency the radio never actually reached.
+      Historical context on the deletion/re-supersession this re-opens:
+- [x] **Cold-boot bias fix (`mesh_acs_last_channels`), 2026-08-28 through
+      2026-08-30 history** — **an external review of this doc (a
+      different MANET fork's maintainer)**
       argued that persisting a last-known-good channel bias was fixing the
       symptom rather than the race: `electBand` now holds outright when
       `totalVotes == 0` instead of running any election
