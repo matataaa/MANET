@@ -297,16 +297,16 @@ var loggedMesh5GHzChannelFallback bool
 // freqForBand5ChannelNum translates a 5GHz WiFi channel *number* to its
 // MHz frequency, validated only against band5Channels (the full known
 // 5GHz candidate superset) plus lobbyFreq5's own channel number — not
-// against activeBand5Channels. activeBand5Channels fails closed on any
-// transient `iw` error and is derived far more often here than in ACS
-// mode (ensureStaticChannels runs every 15s tick, not gated to the 180s
-// ACS cycle) — validating against it would turn a transient iw hiccup
-// into a self-inflicted route-flapping generator: target flips to lobby,
-// setIfaceFrequency rewrites the conf and restarts wpa_supplicant, then
-// the next tick flips back. Phy-legality is already independently
-// guarded downstream, at the right layer: ensureStaticIfaceChannel calls
-// acsVerifyAfterApply, which consults freqAvailableOnPhy before ever
-// firing a corrective restart.
+// against activeBand5Channels. activeBand5Channels is derived far more
+// often here than in ACS mode (ensureStaticChannels runs every 15s tick,
+// not gated to the 180s ACS cycle), and even though it now fails open on
+// a transient `iw` error rather than closed, it can still legitimately
+// return a phy-filtered subset — validating against that narrower set
+// here would reject an operator-picked static channel the phy actually
+// supports just because this tick's live filter happened to exclude it.
+// Phy-legality is already independently guarded downstream, at the right
+// layer: ensureStaticIfaceChannel calls acsVerifyAfterApply, which
+// consults freqAvailableOnPhy before ever firing a corrective restart.
 //
 // Deliberately 5GHz-only, not tourguide.go's wifiChannelFreq — that
 // checks band24Channels first and could misresolve a 5GHz-only channel

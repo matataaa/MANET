@@ -245,14 +245,17 @@ func freqAvailableOnPhy(iface string, freqMHz int) (bool, error) {
 // electing on this band, so an empty candidate list here is never reached
 // on such a node anyway. On any error resolving the phy or its usable
 // frequencies (iw missing, interface mid-teardown, a phy-info parse
-// failure, etc.), this fails closed — returns no candidates for this
-// cycle — rather than falling back to the unfiltered superset, since a
-// transient iw failure should never risk offering a possibly-illegal
-// channel as an election candidate. A caller seeing an empty result must
-// not treat that the same as "every candidate is too noisy" — electBand
-// (channel_election.go) holds the current channel rather than escalating
-// to lobby+limp mode specifically to keep a transient failure here from
-// becoming a mesh-wide disruption.
+// failure, etc.), this fails OPEN — returns the full unfiltered
+// band5Channels superset for this cycle — rather than excluding every
+// candidate: an empty candidate list here takes the whole band off the
+// air on every node simultaneously on a transient read failure, which is
+// worse than briefly scanning a candidate this filter couldn't confirm is
+// illegal. Matches upstream (very-srs/MANET)'s node-manager-acs.sh
+// phy_usable_freqs, which fails open for the same stated reason. This is
+// a fast-path optimization, not the only safety net: a real
+// regulatory-domain restriction is still caught downstream by
+// freqAvailableOnPhy (acs_selfheal.go) before any corrective restart, and
+// disqualified by noise/vote scoring in electBand if it's actually unusable.
 //
 // Note: every node in the mesh now derives its own candidate set from its
 // own live phy/regulatory domain. That's correct for a mesh where every
@@ -270,8 +273,10 @@ func activeBand5Channels(iface5 string) []int {
 	defer cancel()
 	usable, err := phyUsableFreqsForIface(ctx, iface5)
 	if err != nil {
-		log.Printf("[acs] 5GHz candidates: %v — excluding all candidates this cycle", err)
-		return nil
+		log.Printf("[acs] 5GHz candidates: %v — failing open, offering unfiltered candidate list this cycle", err)
+		out := make([]int, len(band5Channels))
+		copy(out, band5Channels)
+		return out
 	}
 	out := make([]int, 0, len(band5Channels))
 	for _, f := range band5Channels {
