@@ -189,6 +189,13 @@ function fleetRender() {
   // appears, depending on poll timing. This was reported live: the
   // Activate-fleet-config confirmation disappeared before it could be read.
   if (!fleetData || fleetEditing || document.querySelector('.fleet-confirm-bar')) return;
+  // Same problem as the confirm-bar guard above, one level down: the node
+  // update table's checkboxes live inside the HTML this function replaces
+  // wholesale every poll tick, so a selection made between two 5s ticks
+  // would otherwise silently vanish before the operator gets to click
+  // "Update Selected". Captured before the rebuild, reapplied after.
+  var checkedUpdIPs = Array.from(document.querySelectorAll('.fleet-upd-select:checked'))
+    .map(function(cb) { return cb.getAttribute('data-ip'); });
   var panel = document.getElementById('tab-fleet');
   var d = fleetData;
   var prefs = d.preferences || {};
@@ -263,8 +270,14 @@ function fleetRender() {
 
   // Node table
   html += fleetRenderNodes(d.nodes, pending);
+  html += fleetRenderNodeUpdateTable();
 
   panel.innerHTML = html;
+  if (checkedUpdIPs.length) {
+    document.querySelectorAll('.fleet-upd-select').forEach(function(cb) {
+      if (checkedUpdIPs.indexOf(cb.getAttribute('data-ip')) !== -1) cb.checked = true;
+    });
+  }
   var editBtn = document.getElementById('fleet-edit-btn');
   if (editBtn) editBtn.addEventListener('click', fleetStartEdit);
   var activateBtn = document.getElementById('fleet-activate-btn');
@@ -277,6 +290,10 @@ function fleetRender() {
   if (forceUpdateSwBtn) forceUpdateSwBtn.addEventListener('click', function() { fleetForceUpdate('software', forceUpdateSwBtn); });
   var forceUpdateOvBtn = document.getElementById('fleet-force-update-ov-btn');
   if (forceUpdateOvBtn) forceUpdateOvBtn.addEventListener('click', function() { fleetForceUpdate('overlay', forceUpdateOvBtn); });
+  var updateSelSwBtn = document.getElementById('fleet-update-selected-sw-btn');
+  if (updateSelSwBtn) updateSelSwBtn.addEventListener('click', function() { fleetUpdateSelected('software', updateSelSwBtn); });
+  var updateSelOvBtn = document.getElementById('fleet-update-selected-ov-btn');
+  if (updateSelOvBtn) updateSelOvBtn.addEventListener('click', function() { fleetUpdateSelected('overlay', updateSelOvBtn); });
 }
 
 // Renders a sticky "N of M nodes have an update available" banner, same
@@ -339,6 +356,107 @@ function fleetRenderUpdateBanner() {
   }
   html += '</div></div>';
   return html;
+}
+
+// Per-node version table + selective update -- fleetRenderUpdateBanner above
+// only shows fleet-wide aggregate counts with all-or-nothing "Force Update"
+// buttons. This renders each reachable node's actual local/remote version
+// per channel with a selection checkbox, so an operator can see who's on
+// what before deciding, and update only specific node(s) rather than the
+// whole fleet at once. Reuses the existing per-node /api/admin/update-now
+// endpoint (already used by config.js's single-node "Update Now") instead
+// of a new fleet-wide broadcast trigger -- one fetch per selected node via
+// the same /api/peer/<ip> proxy the rest of the UI uses to reach a specific
+// remote node.
+function fleetVersionCell(node, chan) {
+  if (!node.reached) return '<span style="color:var(--muted)">unreachable</span>';
+  if (!chan || !chan.local) return '<span style="color:var(--muted)">—</span>';
+  if (chan.available) return escHtml(chan.local) + ' → ' + escHtml(chan.remote);
+  return escHtml(chan.local) + ' <span style="color:var(--muted)">(up to date)</span>';
+}
+
+function fleetRenderNodeUpdateTable() {
+  if (!fleetUpdateSummaryData || !fleetUpdateSummaryData.nodes || !fleetUpdateSummaryData.nodes.length) return '';
+  var nodes = fleetUpdateSummaryData.nodes;
+  var html = '<div class="fleet-card" style="margin-top:20px">';
+  html += '<div class="fleet-card-title">Node Versions <span style="font-size:10px;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0">(select nodes, then update just those)</span></div>';
+  html += '<table class="fleet-nodes-table"><tr><th></th><th>Node</th><th>MANET</th><th>Kernel/Drivers</th></tr>';
+  nodes.forEach(function(n) {
+    var s = n.status || {};
+    var phase = s.phase && s.phase !== 'idle' ? s.phase : null;
+    html += '<tr>';
+    html += '<td>';
+    if (n.reached && n.ip) {
+      html += '<input type="checkbox" class="fleet-upd-select" data-ip="' + escHtml(n.ip) + '"' + (phase ? ' disabled' : '') + '>';
+    }
+    html += '</td>';
+    html += '<td>' + escHtml(n.hostname || n.ip || '—') + '</td>';
+    html += '<td' + (s.software && s.software.available ? ' class="fleet-ack-yes"' : '') + '>' + fleetVersionCell(n, s.software) + '</td>';
+    html += '<td' + (s.overlay && s.overlay.available ? ' class="fleet-ack-yes"' : '') + '>' + fleetVersionCell(n, s.overlay) + '</td>';
+    html += '</tr>';
+    if (phase) {
+      html += '<tr><td></td><td colspan="3" style="color:var(--muted);font-size:11px">' + escHtml(configPhaseLabel(s)) + '</td></tr>';
+    }
+  });
+  html += '</table>';
+  html += '<div class="fleet-actions" style="margin-top:10px">';
+  html += '<button class="fleet-btn fleet-btn-primary" id="fleet-update-selected-sw-btn">Update Selected — MANET</button>';
+  html += '<button class="fleet-btn fleet-btn-danger" id="fleet-update-selected-ov-btn">Update Selected — Kernel/Drivers</button>';
+  html += '</div></div>';
+  return html;
+}
+
+// Targets only the checked node(s), and only the ones that actually have
+// `channel`'s update available -- a node checked for its MANET update
+// shouldn't also get an overlay trigger just because both buttons live in
+// the same selection set. Each request goes straight to that node's own
+// /api/admin/update-now, proxied via /api/peer/<ip> for every node except
+// the local one (mirrors configBaseUrl()'s local-vs-peer routing).
+function fleetUpdateSelected(channel, btn) {
+  var channelLabel = channel === 'overlay' ? 'Kernel/Drivers' : 'MANET';
+  var checkedIPs = Array.from(document.querySelectorAll('.fleet-upd-select:checked'))
+    .map(function(cb) { return cb.getAttribute('data-ip'); });
+  var nodes = (fleetUpdateSummaryData.nodes || []).filter(function(n) {
+    return checkedIPs.indexOf(n.ip) !== -1 && n.status && n.status[channel] && n.status[channel].available;
+  });
+  if (!nodes.length) {
+    fleetToast('No selected node has a ' + channelLabel + ' update available', 'error');
+    return;
+  }
+
+  var below = nodes.filter(function(n) {
+    var s = n.status;
+    return s.uplink_type && s.uplink_type !== 'wired' && (s.uplink_mbps || 0) < 10;
+  }).length;
+
+  var msg = 'Update ' + channelLabel + ' on ' + nodes.length + ' selected node' + (nodes.length !== 1 ? 's' : '') + ' now?';
+  if (channel === 'overlay') {
+    msg += ' The Kernel/Drivers channel updates kernel/firmware — there is no rollback if it fails to boot.';
+  }
+  if (below > 0) {
+    msg = '⚠ ' + below + ' of ' + nodes.length + ' selected node' + (nodes.length !== 1 ? 's are' : ' is') +
+      ' below the recommended bandwidth and may take a long time to update, disrupting mesh connectivity. ' + msg;
+  }
+
+  fleetConfirm(msg, { label: 'Update ' + channelLabel, danger: below > 0 || channel === 'overlay' }, async function() {
+    btn.disabled = true;
+    var results = await Promise.all(nodes.map(function(n) {
+      var base = (LOCAL_DATA && n.ip === LOCAL_DATA.ip) ? '' : '/api/peer/' + n.ip;
+      return fetch(base + '/api/admin/update-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: channel })
+      }).then(function(r) { return r.ok; }).catch(function() { return false; });
+    }));
+    var okCount = results.filter(Boolean).length;
+    if (okCount === nodes.length) {
+      fleetToast(channelLabel + ' update triggered on ' + okCount + ' node' + (okCount !== 1 ? 's' : ''), 'success');
+    } else {
+      btn.disabled = false;
+      fleetToast(channelLabel + ' update triggered on ' + okCount + '/' + nodes.length + ' node' + (nodes.length !== 1 ? 's' : '') + ' — some failed', 'error');
+    }
+    fleetFetchUpdateSummary();
+  });
 }
 
 // channel is explicit ('software' or 'overlay') — separate buttons rather
