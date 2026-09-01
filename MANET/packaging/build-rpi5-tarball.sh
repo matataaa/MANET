@@ -141,7 +141,7 @@ set -euo pipefail
 
 /usr/local/bin/manet-uplink-dispatch.sh carrier "${IFACE:-}"
 
-if grep -qi '^auto_update=1' /etc/mesh.conf 2>/dev/null && ping -c 1 -W 2 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
+if grep -qiE '^auto_update=(y|yes|1|true)[[:space:]]*$' /etc/mesh.conf 2>/dev/null && ping -c 1 -W 2 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
     systemctl reload node-update 2>/dev/null || true
 fi
 EOF
