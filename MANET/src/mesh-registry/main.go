@@ -29,6 +29,14 @@ const (
 	appletsDir   = "/usr/local/share/manet/applets"
 	meshIfFile   = "/var/lib/mesh_if"
 	interval     = 15 * time.Second
+
+	// myChunkFile is mesh-manager's own record of the IPv4 chunk it has
+	// actually claimed (main.go's myChunkFile const there) — the single
+	// source of truth for "what chunk did this node claim". It holds just
+	// the bare chunk number, and is removed entirely when this node holds no
+	// chunk (e.g. after losing a chunk tie-break), so a missing/unreadable
+	// file correctly yields "" here rather than a stale value.
+	myChunkFile = "/var/run/my_ipv4_chunk"
 )
 
 type NodeInfo struct {
@@ -126,6 +134,7 @@ func collectLocal() NodeInfo {
 		MAC:                    mac,
 		MACAddresses:           allMACs,
 		IPv4:                   ip,
+		IPv4Chunk:              getIPv4Chunk(),
 		Uptime:                 uptime,
 		Battery:                battery,
 		CPULoad:                cpu,
@@ -497,6 +506,18 @@ func getIPv4() string {
 		}
 	}
 	return ""
+}
+
+// getIPv4Chunk reports the IPv4 chunk this node has actually claimed, per
+// mesh-manager's own persisted record (see myChunkFile above). Returns ""
+// if this node currently holds no chunk (file absent) or the file can't be
+// read.
+func getIPv4Chunk() string {
+	data, err := os.ReadFile(myChunkFile)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func getUptimeSeconds() string {
