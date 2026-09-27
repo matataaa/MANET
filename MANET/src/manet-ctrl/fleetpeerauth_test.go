@@ -33,7 +33,7 @@ import (
 // exercises the real minting function directly, not a mock.
 func TestFleetPeerTokenGatedOnRequireAuth(t *testing.T) {
 	withTempMeshConf(t, "admin_password=fleet-secret\nmesh_ssid=fleet-mesh\nrequire_auth=n\n")
-	if got := mintFleetPeerToken("some-target.local"); got != "" {
+	if got := mintFleetPeerToken("some-target.local", FleetPeerAuthDomainTerminal); got != "" {
 		t.Fatalf("expected empty token when require_auth=n, got %q -- this is the open-relay bug", got)
 	}
 }
@@ -43,7 +43,7 @@ func TestFleetPeerTokenGatedOnRequireAuth(t *testing.T) {
 // isAuthed's own default-open behavior).
 func TestFleetPeerTokenGatedOnRequireAuthUnset(t *testing.T) {
 	withTempMeshConf(t, "admin_password=fleet-secret\nmesh_ssid=fleet-mesh\n")
-	if got := mintFleetPeerToken("some-target.local"); got != "" {
+	if got := mintFleetPeerToken("some-target.local", FleetPeerAuthDomainTerminal); got != "" {
 		t.Fatalf("expected empty token when require_auth is unset, got %q", got)
 	}
 }
@@ -54,7 +54,7 @@ func TestFleetPeerTokenGatedOnRequireAuthUnset(t *testing.T) {
 // empty-string comparison, even with require_auth=y.
 func TestFleetPeerTokenEmptyPasswordYieldsEmptyToken(t *testing.T) {
 	withTempMeshConf(t, "mesh_ssid=some-ssid\nrequire_auth=y\n")
-	if got := mintFleetPeerToken("some-target.local"); got != "" {
+	if got := mintFleetPeerToken("some-target.local", FleetPeerAuthDomainTerminal); got != "" {
 		t.Fatalf("expected empty token when admin_password is unset, got %q", got)
 	}
 }
@@ -101,11 +101,11 @@ func TestFleetPeerTokenKeyDerivesFromHardenedFleetKey(t *testing.T) {
 func TestMintAndVerifyFleetPeerTokenRoundTrip(t *testing.T) {
 	withTempMeshConf(t, "admin_password=fleet-secret\nmesh_ssid=fleet-mesh\nrequire_auth=y\n")
 
-	token := mintFleetPeerToken("eud2.local:8443")
+	token := mintFleetPeerToken("eud2.local:8443", FleetPeerAuthDomainTerminal)
 	if token == "" {
 		t.Fatalf("expected a non-empty token when eligible")
 	}
-	if !verifyFleetPeerToken(token, "eud2.local:8443") {
+	if !verifyFleetPeerToken(token, "eud2.local:8443", FleetPeerAuthDomainTerminal) {
 		t.Fatalf("expected a freshly minted token to verify against its own target")
 	}
 }
@@ -117,11 +117,11 @@ func TestMintAndVerifyFleetPeerTokenRoundTrip(t *testing.T) {
 func TestVerifyFleetPeerTokenRejectsDifferentTarget(t *testing.T) {
 	withTempMeshConf(t, "admin_password=fleet-secret\nmesh_ssid=fleet-mesh\nrequire_auth=y\n")
 
-	token := mintFleetPeerToken("eud2.local:8443")
+	token := mintFleetPeerToken("eud2.local:8443", FleetPeerAuthDomainTerminal)
 	if token == "" {
 		t.Fatalf("expected a non-empty token when eligible")
 	}
-	if verifyFleetPeerToken(token, "eud3.local:8443") {
+	if verifyFleetPeerToken(token, "eud3.local:8443", FleetPeerAuthDomainTerminal) {
 		t.Fatalf("token minted for eud2 must not verify against eud3")
 	}
 }
@@ -132,13 +132,13 @@ func TestVerifyFleetPeerTokenRejectsDifferentTarget(t *testing.T) {
 // a constant any node can forge.
 func TestVerifyFleetPeerTokenRejectsWrongKey(t *testing.T) {
 	withTempMeshConf(t, "admin_password=fleet-secret\nmesh_ssid=fleet-mesh\nrequire_auth=y\n")
-	token := mintFleetPeerToken("eud2.local:8443")
+	token := mintFleetPeerToken("eud2.local:8443", FleetPeerAuthDomainTerminal)
 	if token == "" {
 		t.Fatalf("expected a non-empty token when eligible")
 	}
 
 	withTempMeshConf(t, "admin_password=different-secret\nmesh_ssid=fleet-mesh\nrequire_auth=y\n")
-	if verifyFleetPeerToken(token, "eud2.local:8443") {
+	if verifyFleetPeerToken(token, "eud2.local:8443", FleetPeerAuthDomainTerminal) {
 		t.Fatalf("token minted under one admin_password must not verify under a different one")
 	}
 }
@@ -152,17 +152,17 @@ func TestVerifyFleetPeerTokenRejectsExpiredTimestamp(t *testing.T) {
 	withTempMeshConf(t, "admin_password=fleet-secret\nmesh_ssid=fleet-mesh\nrequire_auth=y\n")
 
 	staleTS := time.Now().Add(-2 * fleetPeerTokenMaxSkew).Unix()
-	token := mintFleetPeerTokenAt(staleTS, "eud2.local:8443")
+	token := mintFleetPeerTokenAt(staleTS, "eud2.local:8443", FleetPeerAuthDomainTerminal)
 	if token == "" {
 		t.Fatalf("expected a non-empty token when eligible")
 	}
-	if verifyFleetPeerToken(token, "eud2.local:8443") {
+	if verifyFleetPeerToken(token, "eud2.local:8443", FleetPeerAuthDomainTerminal) {
 		t.Fatalf("expected a token stale by 2x the max skew to be rejected")
 	}
 
 	freshTS := time.Now().Unix()
-	freshToken := mintFleetPeerTokenAt(freshTS, "eud2.local:8443")
-	if !verifyFleetPeerToken(freshToken, "eud2.local:8443") {
+	freshToken := mintFleetPeerTokenAt(freshTS, "eud2.local:8443", FleetPeerAuthDomainTerminal)
+	if !verifyFleetPeerToken(freshToken, "eud2.local:8443", FleetPeerAuthDomainTerminal) {
 		t.Fatalf("expected a freshly-timestamped token to verify (sanity check on the skew comparison itself)")
 	}
 }
@@ -178,11 +178,11 @@ func TestVerifyFleetPeerTokenRejectsExpiredTimestamp(t *testing.T) {
 func TestVerifyFleetPeerTokenRejectsOverflowEdgeTimestamp(t *testing.T) {
 	withTempMeshConf(t, "admin_password=fleet-secret\nmesh_ssid=fleet-mesh\nrequire_auth=y\n")
 
-	token := mintFleetPeerTokenAt(math.MinInt64, "eud2.local:8443")
+	token := mintFleetPeerTokenAt(math.MinInt64, "eud2.local:8443", FleetPeerAuthDomainTerminal)
 	if token == "" {
 		t.Fatalf("expected a non-empty token when eligible")
 	}
-	if verifyFleetPeerToken(token, "eud2.local:8443") {
+	if verifyFleetPeerToken(token, "eud2.local:8443", FleetPeerAuthDomainTerminal) {
 		t.Fatalf("expected the math.MinInt64 timestamp edge case to be rejected, not accepted via overflow")
 	}
 }
@@ -194,7 +194,7 @@ func TestVerifyFleetPeerTokenRejectsMalformedInput(t *testing.T) {
 	withTempMeshConf(t, "admin_password=fleet-secret\nmesh_ssid=fleet-mesh\nrequire_auth=y\n")
 
 	for _, bad := range []string{"", "no-separator-at-all", "not-a-number|deadbeef", "123|not-hex-zz"} {
-		if verifyFleetPeerToken(bad, "eud2.local:8443") {
+		if verifyFleetPeerToken(bad, "eud2.local:8443", FleetPeerAuthDomainTerminal) {
 			t.Fatalf("expected malformed token %q to be rejected", bad)
 		}
 	}
@@ -240,14 +240,14 @@ func TestRequireAuthOrPeerTokenAcceptsValidPeerHeader(t *testing.T) {
 	withTempMeshConf(t, "admin_password=fleet-secret\nmesh_ssid=fleet-mesh\nrequire_auth=y\n")
 
 	called := false
-	handler := requireAuthOrPeerToken(func(w http.ResponseWriter, r *http.Request) {
+	handler := requireAuthOrPeerToken(FleetPeerAuthDomainTerminal)(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/ws/terminal?target=eud2", nil)
 	req.Host = "127.0.0.1:8443"
-	req.Header.Set(FleetPeerAuthHeader, mintFleetPeerToken("127.0.0.1:8443"))
+	req.Header.Set(FleetPeerAuthHeader, mintFleetPeerToken("127.0.0.1:8443", FleetPeerAuthDomainTerminal))
 	rr := httptest.NewRecorder()
 
 	handler(rr, req)
@@ -270,13 +270,13 @@ func TestRequireAuthOrPeerTokenRejectsInvalidOrMissing(t *testing.T) {
 	withTempMeshConf(t, "admin_password=fleet-secret\nmesh_ssid=fleet-mesh\nrequire_auth=y\n")
 
 	const localHost = "127.0.0.1:8443"
-	staleToken := mintFleetPeerTokenAt(time.Now().Add(-2*fleetPeerTokenMaxSkew).Unix(), localHost)
-	wrongTargetToken := mintFleetPeerToken("127.0.0.1:9999")
+	staleToken := mintFleetPeerTokenAt(time.Now().Add(-2*fleetPeerTokenMaxSkew).Unix(), localHost, FleetPeerAuthDomainTerminal)
+	wrongTargetToken := mintFleetPeerToken("127.0.0.1:9999", FleetPeerAuthDomainTerminal)
 	// A token correctly signed for a non-local Host: proves that even a
 	// perfectly valid signature is rejected if r.Host doesn't actually name
 	// one of this node's own addresses (the sender's Host header is
 	// otherwise self-reported and unverified).
-	spoofedHostToken := mintFleetPeerToken("attacker.example.com")
+	spoofedHostToken := mintFleetPeerToken("attacker.example.com", FleetPeerAuthDomainTerminal)
 
 	cases := []struct {
 		name      string
@@ -295,7 +295,7 @@ func TestRequireAuthOrPeerTokenRejectsInvalidOrMissing(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			called := false
-			handler := requireAuthOrPeerToken(func(w http.ResponseWriter, r *http.Request) {
+			handler := requireAuthOrPeerToken(FleetPeerAuthDomainTerminal)(func(w http.ResponseWriter, r *http.Request) {
 				called = true
 				w.WriteHeader(http.StatusOK)
 			})
@@ -326,7 +326,7 @@ func TestRequireAuthOrPeerTokenStillAcceptsValidCookie(t *testing.T) {
 	withTempMeshConf(t, "admin_password=fleet-secret\nmesh_ssid=fleet-mesh\nrequire_auth=y\n")
 
 	called := false
-	handler := requireAuthOrPeerToken(func(w http.ResponseWriter, r *http.Request) {
+	handler := requireAuthOrPeerToken(FleetPeerAuthDomainTerminal)(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -350,7 +350,7 @@ func TestRequireAuthOrPeerTokenStillAcceptsValidCookie(t *testing.T) {
 func TestRequireAuthOrPeerTokenOnOpenNodeStillRequiresCookie(t *testing.T) {
 	withTempMeshConf(t, "admin_password=fleet-secret\nmesh_ssid=fleet-mesh\nrequire_auth=n\n")
 
-	if got := mintFleetPeerToken("locked-node.local"); got != "" {
+	if got := mintFleetPeerToken("locked-node.local", FleetPeerAuthDomainTerminal); got != "" {
 		t.Fatalf("an open node (require_auth=n) must never mint a usable peer token, got %q", got)
 	}
 }

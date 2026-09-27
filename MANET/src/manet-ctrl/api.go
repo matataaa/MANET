@@ -2062,12 +2062,17 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 // requireAuthOrPeerToken gates a route on EITHER a valid session cookie
 // (same as requireAuth) OR a valid, freshly-minted, target-bound
-// X-Manet-Fleet-Peer-Auth header (see verifyFleetPeerToken). It exists
-// solely for /ws/terminal's server-to-server proxy hop (handleTerminalProxy
-// dials a target node's own /ws/terminal without a browser session) and
-// must not be used to gate any other route -- it does not set a cookie or
-// otherwise widen session state, it only accepts an alternative credential
-// for this one handler.
+// X-Manet-Fleet-Peer-Auth header (see verifyFleetPeerToken). It is a small
+// factory: each caller passes its own domain string (see
+// FleetPeerAuthDomainTerminal / FleetPeerAuthDomainLogs in config.go), so a
+// token minted for one route (e.g. /ws/terminal's server-to-server proxy
+// hop) cannot be replayed to authenticate a different route (e.g.
+// /ws/logs's) even though both derive from the same underlying fleet key.
+// It exists solely for server-to-server proxy hops (a node dialing a
+// target's own websocket route without a browser session) and must not be
+// used to gate any route that isn't itself such a proxy target -- it does
+// not set a cookie or otherwise widen session state, it only accepts an
+// alternative credential for the one handler it wraps.
 //
 // r.Host is sender-controlled (it's just the Host header the dialing node
 // chose to send) and by itself proves nothing -- so before trusting it as
@@ -2075,18 +2080,20 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 // actually names one of THIS node's own addresses via net.InterfaceAddrs().
 // Only once that's confirmed does verifyFleetPeerToken's signature check
 // against r.Host mean anything.
-func requireAuthOrPeerToken(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if token := r.Header.Get(FleetPeerAuthHeader); token != "" {
-			if hostMatchesLocalAddr(r.Host) && verifyFleetPeerToken(token, r.Host) {
-				next(w, r)
+func requireAuthOrPeerToken(domain string) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if token := r.Header.Get(FleetPeerAuthHeader); token != "" {
+				if hostMatchesLocalAddr(r.Host) && verifyFleetPeerToken(token, r.Host, domain) {
+					next(w, r)
+					return
+				}
+			}
+			if !checkAuth(w, r) {
 				return
 			}
+			next(w, r)
 		}
-		if !checkAuth(w, r) {
-			return
-		}
-		next(w, r)
 	}
 }
 
