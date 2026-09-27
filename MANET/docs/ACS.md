@@ -78,33 +78,233 @@ For each candidate channel with a fresh aggregated report:
   old any-single-reporter rule, which let one bad radio/connector/driver on
   any one node disqualify a channel mesh-wide. A solo/isolated node
   (`reporters == 1`) still needs only 1 bad vote — it must still be able to
-  reject a jammed channel with nobody else to corroborate.
-- **Score** survivors: `rawScore = medianNoise + meanBSS*0.1` (lower is
-  better — quieter and less contended wins). `medianNoise` is the median
-  (not max) noise reading across that channel's reporters, and `meanBSS` is
-  the mean (not sum) BSS count per reporter — summing BSS count meant a
-  channel visible to more nodes carried a bigger contention penalty purely
-  because more nodes could see it, not because it was actually busier.
-  Median and quorum-based disqualification are deliberately paired: both
-  keep a single outlier reporter from distorting the outcome. `median` sorts
-  a fresh copy of the input explicitly rather than trusting caller order —
-  this election runs independently on every mesh node from the same
-  gossiped data with no coordinator, so map iteration order (randomized per
-  Go process) must never be allowed to produce a different median, and
-  therefore a different winner, on different nodes.
+  reject a jammed channel with nobody else to corroborate. A reporter also
+  casts a bad vote if its own measured occupancy is at or above
+  `occupancyDisqualifyPct` (85%, see occupancy below) — same quorum
+  mechanism, not a second disqualification path. **A single reporter can
+  cast AT MOST ONE bad vote per channel, total** — bad noise and high
+  occupancy on the same reading do not add up to two votes (a real bug
+  found in review, fixed before live testing: see "Review follow-ups on
+  `feat/acs-occupancy-scoring-offchannel`" below).
+- **Score** survivors: `rawScore = medianNoise + meanBSS*0.1`, plus
+  `medianBusy` added on top **only when at least one reporter had a real
+  off-channel occupancy reading for that channel** (lower is better —
+  quieter, less contended, and less occupied wins). `medianNoise` is the
+  median (not max) noise reading across that channel's reporters, and
+  `meanBSS` is the mean (not sum) BSS count per reporter — summing BSS
+  count meant a channel visible to more nodes carried a bigger contention
+  penalty purely because more nodes could see it, not because it was
+  actually busier. Median and quorum-based disqualification are
+  deliberately paired: both keep a single outlier reporter from distorting
+  the outcome. `median` sorts a fresh copy of the input explicitly rather
+  than trusting caller order — this election runs independently on every
+  mesh node from the same gossiped data with no coordinator, so map
+  iteration order (randomized per Go process) must never be allowed to
+  produce a different median, and therefore a different winner, on
+  different nodes.
+- **Occupancy** (`feat/acs-occupancy-scoring-offchannel`, ported from
+  upstream `very-srs/MANET`'s `cff714e`, channel-busy-time via `iw dev
+  <iface> survey dump`'s active/busy/transmit-time counters — see
+  `scan.go`'s `busyPctForFreq`/`parseSurveyBlocks`) is scored for
+  **off-channel candidates only**. A design review flagged a serious risk
+  in porting upstream's occupancy term as-is: for the channel a radio is
+  CURRENTLY operating on, "busy" time includes the node's own mesh TX/RX
+  traffic — scoring the incumbent channel's occupancy the same way as
+  candidates would make every node's current channel look artificially bad
+  from its own traffic, causing the whole mesh to flap channels in sync
+  (every node computes the same self-inflicted bias from the same
+  self-generated load, and moves together). A node's scan of its own
+  current channel always reports `BusyPct: nil` for that channel — not
+  trusted enough to score at all, excluded outright rather than reported
+  as a "corrected" number.
+  `ChannelScanResult.BusyPct` is a `*float64` specifically so "no reading"
+  (nil) is distinguishable from "measured 0% busy" (pointer to 0.0) — this
+  matters a lot mid-rollout, when some gossiped reports simply have no
+  `busy_pct` field at all (old node-manager code).
+  **This does not require any explicit cross-node "is this the incumbent"
+  bookkeeping** — a peer reporting on a channel doesn't know whether IT was
+  the reporter's incumbent at scan time versus now, so the include/exclude
+  decision is derived purely from the gossiped reports themselves:
+  `aggregateChannelReports` computes `haveBusy`/`medianBusy` from whichever
+  reports actually carry a non-nil `BusyPct` for that channel, nothing
+  else. A channel a node is currently sitting on simply never gets a
+  reading *from that node* — it still gets scored normally from any other
+  fresh reporter for whom that channel is one of their own off-channel scan
+  candidates (**but see the "known structural gap" note below — this
+  stops holding once the whole mesh has converged onto one channel**).
+  Every node computes the identical `haveBusy`/`medianBusy` from the
+  identical gossiped data, so there's no risk of two nodes disagreeing
+  about which channels get an occupancy term. When `haveBusy` is false for
+  a channel (the steady-state incumbent case, or a mesh with no occupancy
+  data yet at all), scoring is identical to the pre-occupancy formula —
+  mid-rollout mesh nodes on old and new node-manager code degrade cleanly
+  rather than splitting into two incomparable score families.
+  **Incumbent detection (`scanIface`, `scan.go`) checks BOTH the configured
+  frequency (`getConfFreq`/`wpaConfPath`) AND the live frequency
+  (`readIfaceFreq`, `acs_selfheal.go`)** — a reviewer-found gap, fixed
+  before live testing: the two can genuinely differ (a failed
+  `systemctl restart` inside `setIfaceFrequency` is only logged, not
+  handled; and the open 5GHz primary-channel-mismatch issue below documents
+  wpa_supplicant's own beacon-avoidance reselect moving the radio off the
+  elected channel on its own). Checking only the configured value would let
+  the radio's REAL operating channel get scored as an ordinary off-channel
+  candidate (contaminated occupancy) while the configured-but-not-actually-
+  current channel wrongly lost a legitimate off-channel reading. A
+  candidate is incumbent if it matches EITHER value.
+
+  **Live-hardware finding, design changed as a result (2026-09-27):** this
+  fleet's mt7915e driver does NOT accumulate `iw dev <iface> survey dump`'s
+  active/busy/transmit-time counters cumulatively since interface-up, as
+  originally assumed and as the design above was originally built around —
+  it resets/re-seeds them on each channel visit instead. Confirmed live: 5
+  scans spanning wall-clock gaps from ~0.15s to 4 minutes all showed
+  `channel active time` flat at 71-85ms for the same frequency; a true
+  cumulative counter would have grown into the seconds over a 244-second
+  session, and did not. This phy also advertises no nl80211 `SCAN_DWELL`
+  capability, so lengthening the dwell to get a better single-sample
+  reading isn't an option either. The original delta-based design
+  (`(Δbusy-Δtx)/Δactive` between this tick's counters and a stored
+  "previous tick" baseline, `lastSurvey` map) is simply wrong for this
+  hardware — current-minus-a-stale-prior-visit's counters compares two
+  unrelated, already-reset snapshots, not a meaningful delta at all.
+  **Replaced (architect-designed, "Design P") with a per-visit absolute
+  sample ring**: each visit's ABSOLUTE counters (not a delta) become one
+  sample in a bounded ring (`occState.samples`, capped at `occMaxSamples`
+  = 5) keyed per (iface, frequency) in the new `occ` map (replaces
+  `lastSurvey`). Once the ring's SUMMED `activeMs` crosses
+  `minSurveyActiveDeltaMs` (kept at 50ms — see below for why that value is
+  still correct under the new math), `(Σbusy-Σtx)/Σactive` is computed,
+  clamped to [0,100], and held as `lastPct`/`lastPctAt` — recomputed on
+  every valid new sample so the value stays a smoothed reflection of the
+  last few visits. Samples are deliberately NOT cleared after each
+  computation (kept accumulating, ring-bounded) rather than
+  clear-and-restart — on this hardware's observed ~70-85ms per-visit
+  magnitude, the ring crosses the floor after just 1 sample almost every
+  time regardless, so both approaches behave nearly identically in
+  practice; accumulating was chosen as the simpler invariant (no separate
+  "just crossed the floor" branch). A held value is returned for up to
+  `occHoldMax` (60 minutes) after its last computation even on a tick with
+  no fresh sample (e.g. a failed scan) — so a channel's score doesn't
+  visibly jump only on cycles where fresh data happens to compute, which
+  could flip an election.
+  **`minSurveyActiveDeltaMs` (50ms) is unchanged and still correct** for a
+  different reason than originally: at a several-ms-style delta (the
+  original design's expected magnitude), `iw`'s whole-millisecond rounding
+  made the ratio nearly worthless (could only land on a handful of coarse
+  percentages); this hardware's real ~70-85ms per-visit absolute readings
+  comfortably clear the same floor on their own, giving reasonable
+  resolution for a different reason than the constant was first chosen for.
+  **`scanIface` now threads a `scanOK bool`** (the `iw dev <iface> scan
+  freq ...` call's own exit status, previously discarded) into
+  `busyPctForFreq` — a failed/rejected scan leaves the PREVIOUS visit's
+  stale counters still sitting in the survey dump; without `scanOK`, those
+  stale counters would be misread as a brand-new visit and double-counted
+  into the sample ring.
+  **`busyPctForFreq` DELETES the entire `occState` (ring AND
+  `lastPct`/`lastPctAt` together) while a frequency is incumbent**, rather
+  than only clearing the ring — a reviewer follow-up on top of the
+  original incumbent-exclusion fix below: without also clearing the held
+  value, a `lastPct` computed before a node moved onto a channel could
+  incorrectly reappear as a "fresh-looking" reading once the node leaves
+  that channel again, even though no real off-channel sample had been
+  taken since. Deleting the whole state also still fixes the original
+  concern this replaced: `scanIface` runs before `setIfaceFrequency` in
+  `runACSTick`, so the very tick a node elects to leave a channel, that
+  channel is still scanned as incumbent one more time — if any state had
+  survived, the first post-departure tick would risk building on a
+  self-contaminated "just vacated" sample, on every node that just moved,
+  simultaneously.
+
+  **Known structural gap, flagged by architect review, NOT fixed in this
+  branch (a future pass):** occupancy can only ever penalize OTHER
+  candidate channels — it can never make the mesh's own currently-elected
+  channel look bad, no matter how busy that channel actually gets. Once
+  every (or nearly every) node in the mesh has converged onto the same
+  winning channel, NO fresh reporter has that channel as an off-channel
+  scan candidate anymore (everyone's incumbent is the same channel), so
+  `haveBusy` for it simply stops becoming true — not just from one node's
+  own measurement, from the whole mesh's. This directly qualifies the
+  "gets scored normally from any other fresh reporter" claim earlier in
+  this bullet: that only holds while at least one fresh reporter is
+  actually NOT on this channel, which is exactly the condition that stops
+  holding once the mesh reaches the steady state this scoring is meant to
+  operate in most of the time. Net effect: occupancy can reshuffle which
+  ALTERNATIVE channel looks best whenever a real election runs (quorum
+  loss, noise disqualification, etc.), but can never itself be the reason
+  the mesh decides to leave a channel it's already sitting on. **This is
+  not merely a failure to act — it's an active, asymmetric bias IN FAVOR
+  of the incumbent:** `scoreCandidates`' `rawScore` adds `+medianBusy` for
+  every measured (`haveBusy=true`) candidate, but the unmeasured incumbent
+  contributes exactly 0 for that term, structurally, every time. A
+  busy-but-unmeasured incumbent is scored as if it had zero occupancy while
+  every measured alternative is penalized for whatever occupancy it
+  actually has — the incumbent doesn't just fail to lose ground, it
+  systematically looks better than reality relative to any channel that
+  DOES get measured. Harmless until now because occupancy was always nil
+  before this branch's sample ring existed — now that it actually computes
+  real values (see the live hardware finding above), this is a real, if
+  not urgent, design gap. See `aggregateChannelReports`'s doc comment in
+  `channel_election.go` for the same note in code.
+
+  **Known limitation, width-dependent, documented only (not fixed):** on a
+  40/80MHz-wide 5GHz mesh, incumbent exclusion only marks the PRIMARY
+  channel as incumbent — but at 80MHz, several off-channel "candidates"
+  (e.g. 5200/5220/5240) actually sit inside the incumbent's own bonded
+  80MHz span and pick up real mesh traffic, inflating their measured
+  occupancy and risking a false bad-vote against a channel that isn't
+  actually a distinct, independently-usable channel from the incumbent's
+  perspective at all. **Not currently live-relevant on this fleet**: per
+  this same doc's "Decision: 20MHz-only 5GHz mesh" section and the
+  `mesh_5ghz_bw` toggle's implementation (`disable_ht40=1`+`disable_vht=1`
+  when not explicitly set to `80`), the shipped/provisioned default is
+  `20`, and going wider requires an explicit, deliberate, fleet-wide
+  config change (`mesh_5ghz_bw=80`, flagged `dangerous: true` in the
+  fleet/node UI) — this repo has no evidence any node currently overrides
+  that default. If a fleet is ever run at `mesh_5ghz_bw=80` (or a future
+  `40` value), this limitation becomes live, not hypothetical, and would
+  need addressing before occupancy scoring can be trusted at that width.
 - **Vote** (`peerChannelVotes`) — for each *other* active, fresh (within
   `staleNodeThreshold`) peer in the registry, read its self-reported
   `DATA_CHANNEL_2_4`/`DATA_CHANNEL_5_0` field and count it as a vote for
   that channel. Self is excluded from its own vote count.
 - **Rank**: if any votes exist at all (`totalVotes > 0`), sort by vote
   count first, score as tiebreak. If literally nobody has voted yet
-  (cold start), sort by score alone, with a small `incumbentBiasDB` (4.0)
-  nudge toward whatever channel is already current — just enough to damp
-  scan-to-scan noise jitter (~2-4dB observed), deliberately far too small
-  to ever outweigh a real peer vote once one exists.
-- If the winning channel's score is still worse than
+  (cold start), sort by score alone, with a small `incumbentBiasScore`
+  (2.0) nudge toward whatever channel is already current — just enough to
+  damp scan-to-scan noise jitter, deliberately far too small to ever
+  outweigh a real peer vote once one exists. **Renamed from
+  `incumbentBiasDB`** (was a dB quantity when `rawScore` was pure
+  noise+BSS) now that `rawScore` can also include an up-to-100-point
+  occupancy term — it's no longer meaningfully "dB." The value was halved
+  (4.0 → 2.0) as a conservative starting point for the new, wider score
+  range, and is explicitly flagged in code as needing field calibration,
+  not a derived number — see the incident right below for why getting this
+  number wrong is dangerous.
+- If the winning channel's `baseScore` is still worse than
   `limpModeScoreThreshold` (-60.0), give up on the band entirely and fall
-  back to the lobby frequency, flagging limp mode.
+  back to the lobby frequency, flagging limp mode. **Compared against
+  `baseScore`, NOT `rawScore`** — a reviewer-confirmed live-safety bug,
+  fixed before live testing: `scoredCandidate.baseScore` is the exact
+  pre-occupancy formula (`medianNoise + meanBSS*0.1`), computed alongside
+  `rawScore` but never including the occupancy term. Comparing the
+  occupancy-inclusive `rawScore` against a threshold only ever validated
+  against the pre-occupancy range triggered limp mode under perfectly
+  ordinary 2.4GHz conditions — during cold start, `band24Channels`'s two
+  candidates (2437/2462) are off-channel for every node (the lobby
+  frequency is excluded from candidates), so both get a real occupancy
+  reading the moment any scan runs; reviewer confirmed two reporters at
+  -95dBm noise with 40-45% busy produced a winning `rawScore` of -54.80,
+  over threshold, when anything above ~35% busy on 2.4GHz (common, not an
+  edge case) would trigger permanent limp mode fleet-wide. Occupancy still
+  fully participates in ranking (which channel wins, via `rawScore`) and
+  disqualification (`badVotes`) — it just doesn't feed the limp-mode
+  judgment call. **`limpModeScoreThreshold`'s actual number is still
+  unchanged and still only validated for the pre-occupancy range** — this
+  fix restores the pre-occupancy-branch limp-mode behavior exactly as
+  already validated, it does not newly calibrate a policy for how
+  occupancy *should* someday factor into the limp-mode decision (a
+  separate, deliberately deferred question). See the code comment on
+  `limpModeScoreThreshold` in `channel_election.go`.
 
 **Review follow-ups on `fix/acs-disqualify-quorum-median`, applied before
 live testing (2026-09-27):**
@@ -117,13 +317,21 @@ live testing (2026-09-27):**
   mesh-registry gossip has no message authentication yet — a malformed or
   malicious payload) would inflate both `reporters` and `badVotes` together
   and could still disqualify a channel mesh-wide from one real node, exactly
-  the failure mode this whole fix was meant to close.
+  the failure mode this whole fix was meant to close. The occupancy
+  addition above (`feat/acs-occupancy-scoring-offchannel`) reuses this exact
+  same deduped/validated loop for `busys`/the occupancy bad-vote, rather
+  than a second pass over reports — a separate pass would reintroduce the
+  same duplicate-counting risk this fix closed, just for the occupancy vote
+  specifically.
 - Peer-supplied `NoiseFloor`/`BSSCount` are range-validated
   (`validScanResult`: noise `-120..0` dBm, BSS count `0..1000`) and dropped
   entirely — not clamped — if out of range, since they arrive over the same
   unauthenticated gossip path. An unvalidated implausible value (e.g. a
   large negative BSS count) could otherwise dominate the mean/median or
-  overflow the BSS sum and win the election outright.
+  overflow the BSS sum and win the election outright. `BusyPct` gets the
+  same treatment (`0..100`), but is validated separately and more leniently:
+  an out-of-range occupancy reading only drops the occupancy contribution
+  for that reporter, not its (still possibly valid) noise/BSS reading.
 - `rawScore := stats.medianNoise + float64(stats.meanBSS*0.1)` uses an
   explicit conversion on the multiply specifically to block the compiler
   from fusing it into a single FMA instruction — arm64 and amd64 can
@@ -131,7 +339,125 @@ live testing (2026-09-27):**
   this exact multiply-add shape, and `build-x86-tarball.sh` ships this same
   binary for x86 nodes, so a mixed-architecture mesh must never see two
   different scores (and therefore two different election winners) from the
-  same reports.
+  same reports. The occupancy term added on top (`rawScore += medianBusy`)
+  is a plain addition, not a multiply-add, so it carries no equivalent
+  FMA-fusion risk.
+
+**Review follow-ups on `feat/acs-occupancy-scoring-offchannel`, applied
+before live testing (2026-09-27):**
+
+- **(Critical, fixed) A single reporter could cast TWO bad votes** — noise
+  and occupancy each independently did `badVotes++` in
+  `aggregateChannelReports`, so one reporter bad on BOTH axes alone could
+  reach `requiredDisqualifyVotes`' quorum (e.g. quorum of 2, satisfied by
+  one reporter's two votes), reintroducing the exact "one node vetoes a
+  channel mesh-wide" failure the quorum mechanism exists to close — just
+  via the occupancy path instead of noise, and since peer gossip is
+  unauthenticated, triggerable on purpose. Fixed: one `bad bool` per
+  reporter, set by either condition, `badVotes++` at most once. Regression
+  test: `TestSingleReporterBadOnBothNoiseAndOccupancyCastsOneVote`
+  (`channel_election_test.go`).
+- **(Critical, fixed) `limpModeScoreThreshold` was comparing against the
+  occupancy-inclusive `rawScore`**, which could trigger permanent
+  fleet-wide limp mode under ordinary 2.4GHz conditions — see the
+  `limpModeScoreThreshold` bullet above for the full mechanism and the
+  reviewer's confirmed numbers. Fixed via the new `baseScore` field.
+  Regression tests: `TestBaseScoreExcludesOccupancy`,
+  `TestLimpModeUsesBaseScoreNotRawScore`.
+- **(Warning, fixed) Incumbent exclusion had two leaks** — see the
+  occupancy bullet above (incumbent now checked against both configured
+  AND live frequency; baseline/held-value state deleted, not stored, while
+  incumbent). Regression tests: `TestBusyPctForFreqIncumbentExcluded`,
+  `TestBusyPctForFreqIncumbentClearsHeldValueOnDeparture` (`scan_test.go`
+  — renamed/reworked from the earlier delta-based design's equivalent test
+  when the sample-ring rework below landed).
+- **(Cheap, fixed) `TestInvalidPeerBusyPctIgnored`'s original value
+  (`BusyPct: -9000`) never exercised the disqualify-vote side of the
+  range check** — it would have been correctly excluded from `medianBusy`
+  even without the fix, but wouldn't have crossed
+  `occupancyDisqualifyPct` either way, so it didn't prove an invalid value
+  can't cast a bad vote. Added
+  `TestInvalidPeerBusyPctNeverCastsBadVote` with an out-of-range value
+  (500) that WOULD trip the disqualify vote if the range check were
+  missing, across enough reporters to meet quorum.
+- **(Cheap, fixed) `occupancyDisqualifyPct` had no calibration warning** —
+  unlike `incumbentBiasScore` and `limpModeScoreThreshold`, both clearly
+  flagged as placeholders. Added a "CALIBRATION WARNING" comment in the
+  same style, plus a note on the implicit weighting this creates:
+  `rawScore` adds `medianBusy` directly, so 1 percentage point of
+  occupancy counts the same as 1dBm of noise — never a deliberate
+  cross-unit calibration decision, just the simplest additive formula
+  upstream's `cff714e` used. Both the threshold and the weighting need
+  revisiting once real occupancy data exists.
+- **(Live-hardware finding, reworked) The delta-based `lastSurvey`
+  design was replaced with the per-visit absolute sample ring
+  (`occ`/`occState`) described in the occupancy bullet above** — this
+  fleet's mt7915e driver resets `iw survey dump`'s counters per channel
+  visit instead of accumulating them cumulatively, confirmed live, which
+  made the original tick-to-tick delta meaningless on this hardware.
+  Architect-designed replacement ("Design P"). Also added the
+  `scanOK`-propagation fix (a failed `iw scan` call must not let stale
+  leftover counters be double-counted as a new visit) and the known
+  structural gap note (occupancy can never penalize the mesh's own
+  incumbent channel once the whole mesh has converged onto it) — see both
+  in the occupancy bullet above and in `channel_election.go`'s
+  `aggregateChannelReports` doc comment. New/updated regression tests in
+  `scan_test.go`: `TestBusyPctForFreqSingleVisitOverFloor`,
+  `TestBusyPctForFreqAccumulatesAcrossVisits`,
+  `TestBusyPctForFreqFailedScanContributesNoSample`,
+  `TestBusyPctForFreqHeldValueReturnedBetweenComputations`,
+  `TestBusyPctForFreqHeldValueExpiresAfterHoldMax`,
+  `TestBusyPctForFreqRejectsImplausibleActiveMs`.
+
+**Second review pass on "Design P" (the sample-ring rework), applied
+before live re-test (2026-09-27):**
+
+- **(Fixed) `scanOK` didn't detect a scan the kernel aborted mid-way.** A
+  nonzero exit code alone is not sufficient: `iw` exits 0 even when the
+  KERNEL aborts the scan partway through (confirmed against upstream iw's
+  `scan.c`: `handle_scan_combined()` prints `"scan aborted!"` and returns 0
+  on `NL80211_CMD_SCAN_ABORTED`). When that happens, every candidate
+  frequency after the abort point still holds its previous visit's stale
+  counters despite the clean exit status — silently defeating the entire
+  reason `scanOK` exists. Fixed by also checking the scan command's
+  captured output for that exact string, factored into a small standalone
+  `scanSucceeded(out []byte, err error) bool` helper (`scan.go`) so the
+  string-matching logic has a unit test independent of actually invoking
+  `iw`. Regression test: `TestScanSucceededDetectsKernelAbortedScan`.
+- **(Fixed) Ring samples never aged out by time, so `occHoldMax` didn't
+  actually bound how old the DATA feeding a computation was.** `surveyEntry`
+  had no per-sample timestamp — only the aggregate `lastPct`/`lastPctAt`
+  was time-bounded. After a long gap (a candidate temporarily dropped by
+  regulatory filtering, or scans failing for over an hour), the next
+  single valid visit would get averaged together with up to
+  `occMaxSamples`-1 arbitrarily old samples still sitting in the ring.
+  Reviewer's scratch test: 5 stale 100%-busy samples backdated 10 hours
+  plus one fresh 0%-busy visit reported ~80% busy, when the truth was 0%.
+  Fixed: `surveyEntry` gained an `at time.Time` field (each sample's own
+  capture time), and `busyPctForFreq` now evicts any sample older than
+  `occHoldMax` from the ring before summing for a new computation — the
+  same constant doing double duty (bounding both the held value's age and
+  each individual sample's age) deliberately, rather than a second
+  unrelated knob. Regression test:
+  `TestBusyPctForFreqStaleSamplesEvictedBeforeSumming` (reproduces the
+  reviewer's exact scratch scenario).
+- **(Documented only, not fixed — see the width-dependent known-limitation
+  note above)** incumbent exclusion only marks the primary channel at
+  40/80MHz, letting bonded-span "candidates" pick up real incumbent
+  traffic — not live-relevant given this fleet's `mesh_5ghz_bw=20` default,
+  flagged as a documented limitation for any future wider-channel
+  deployment rather than a code fix.
+- **(Added, S1)** `TestBusyPctForFreqRingCapDropsOldestByCount` — a
+  dedicated regression test for the ring's count-based eviction (append
+  well past `occMaxSamples`, confirm length stays capped AND the computed
+  value reflects that the oldest samples were actually dropped, not just
+  that new ones stopped being accepted).
+- **(Tightened, S2)** the "KNOWN STRUCTURAL GAP" comment in
+  `channel_election.go` (and the matching doc paragraph above) now states
+  explicitly that this isn't just a failure to penalize a busy incumbent —
+  it's an active, asymmetric bias IN FAVOR of the incumbent, since every
+  measured alternative pays `+medianBusy` while the unmeasured incumbent
+  structurally pays 0.
 
 **Two behavior changes worth knowing before designing the live test, both
 intentional/expected, neither a bug:**
@@ -146,7 +472,9 @@ intentional/expected, neither a bug:**
   recalibrated for the new formula's range and is tracked as a known,
   separate follow-up — don't assume today's limp-mode field behavior
   still matches this doc's older incident history without re-checking it
-  against the new formula.
+  against the new formula. The occupancy addition on top widens this gap
+  further still (see the occupancy bullet's calibration warning above) —
+  both are the same open follow-up, not two separate ones.
 - **Channels with only 2 reporters see no quorum benefit at all** —
   `requiredDisqualifyVotes(2) == 1`, identical to the old any-single-
   reporter rule. The quorum only starts changing behavior at 3+ reporters,
@@ -154,14 +482,21 @@ intentional/expected, neither a bug:**
   (`requiredDisqualifyVotes(3) == 2`, not 1). Since not every node has a
   5GHz radio, most 5GHz channels in a small mesh may only ever have 2
   reporters — **design the live test around a channel with 4+ active
-  reporters**, or it won't demonstrate this fix's effect at all.
+  reporters**, or it won't demonstrate this fix's effect at all. The same
+  caveat applies to the occupancy disqualify vote, which shares this exact
+  quorum mechanism.
 
 This vote-first design is deliberate and was itself a fix
 (`fix/acs-channel-election-convergence`, see "Incident history" below): an
 earlier version's 10dB incumbent bias was swamping the ~1.4dB real
 noise-score gaps between candidate channels, which meant nodes independently
 "agreed" on paper but never actually converged onto the same channel in
-practice.
+practice. `incumbentBiasScore`'s 2.0 starting value (renamed/recalibrated
+by the occupancy-scoring branch above) was chosen with this incident
+directly in mind — the same failure mode (a bias too large relative to the
+real gaps between candidates) applies just as much to the new, occupancy-
+inclusive score range, so the value was moved down, not up, when the range
+widened.
 
 **Where the vote data actually comes from — important, and non-obvious:**
 `DATA_CHANNEL_2_4`/`DATA_CHANNEL_5_0` are NOT the node's *elected/intended*
