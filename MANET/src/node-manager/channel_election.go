@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"math"
 	"sort"
 	"strconv"
 	"time"
@@ -12,8 +13,30 @@ const (
 	// Ignore scan reports older than this (scans run every ACS tick, but a
 	// peer's registry entry can lag behind its actual publish cadence).
 	reportStaleAfter = 240 * time.Second
-	// Disqualify a channel if ANY reporting node saw noise worse than this.
+	// A reporter "votes bad" on a channel if its own noise reading is worse
+	// than this. A channel is only disqualified once at least
+	// requiredDisqualifyVotes(reporters) of that channel's own reporters
+	// have voted bad — see disqualifyQuorum below. This intentionally no
+	// longer disqualifies mesh-wide on a single reporter's reading: one bad
+	// radio, connector, or driver shouldn't be able to veto a channel for
+	// every other node.
 	noiseDisqualifyDBM = -70
+	// Fraction of a channel's own reporters that must independently vote a
+	// channel bad (see noiseDisqualifyDBM) before it's disqualified.
+	// ~1/3 of reporters must agree; matches upstream very-srs/MANET's
+	// cff714e fix, calibrated for our own 2-3-candidate-channel EU
+	// regulatory domain case (fewer candidates = worse impact from a
+	// single-reporter false disqualification).
+	disqualifyQuorum = 0.34
+	// Peer scan values arrive over alfred/mesh-registry gossip, which has no
+	// message authentication yet (separate open item) — a malformed or
+	// malicious CHANNEL_REPORT_JSON could otherwise inject an implausible
+	// reading that dominates the mean/median or overflows bssSum. Any
+	// reading outside these ranges is dropped entirely rather than clamped,
+	// so it contributes to neither reporters, badVotes, nor the score.
+	minValidNoiseDBM = -120
+	maxValidNoiseDBM = 0
+	maxValidBSSCount = 1000
 	// If even the best surviving channel scores worse than this, the RF
 	// environment itself is the problem, not the choice of channel —
 	// fall back to the lobby frequency and raise limp mode.
@@ -24,43 +47,99 @@ const (
 )
 
 type channelStats struct {
-	maxNoise int
-	avgNoise float64
-	totalBSS int
+	medianNoise float64
+	meanBSS     float64
+	badVotes    int
+	reporters   int
+}
+
+// requiredDisqualifyVotes returns how many of a channel's own reporters
+// must vote it bad (noiseDisqualifyDBM) before it's disqualified. Always at
+// least 1, so a solo/isolated node (reporters == 1) can still reject a
+// jammed channel by itself — same as before this fix.
+func requiredDisqualifyVotes(reporters int) int {
+	n := int(math.Ceil(float64(reporters) * disqualifyQuorum))
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// median returns the median of vals. It sorts a copy rather than relying on
+// input order, and callers must never rely on map iteration order to build
+// vals — this election runs independently on every mesh node from the same
+// gossiped data, so two nodes that fed the same values in different orders
+// must still compute the identical median (and therefore the identical
+// winner), or the mesh partitions.
+func median(vals []float64) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	sorted := make([]float64, len(vals))
+	copy(sorted, vals)
+	sort.Float64s(sorted)
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 0 {
+		return (sorted[mid-1] + sorted[mid]) / 2
+	}
+	return sorted[mid]
+}
+
+// validScanResult rejects implausible peer-supplied readings (see the
+// minValidNoiseDBM/maxValidNoiseDBM/maxValidBSSCount comment) — dropped
+// entirely rather than clamped, so a bad reading can't silently become a
+// boundary value that still skews the mean/median.
+func validScanResult(res ChannelScanResult) bool {
+	return res.NoiseFloor >= minValidNoiseDBM && res.NoiseFloor <= maxValidNoiseDBM &&
+		res.BSSCount >= 0 && res.BSSCount <= maxValidBSSCount
 }
 
 // aggregateChannelReports merges every fresh report (self + peers, keyed
-// arbitrarily) into a per-channel view: worst noise anyone saw, mean noise
-// across vantage points, and summed BSS count. Aggregating across nodes
-// rather than trusting only the local scan accounts for hidden-node
-// effects — a channel can look clean locally but be busy from a
-// neighbor's vantage point.
+// arbitrarily) into a per-channel view: median noise and mean BSS count
+// across vantage points, plus how many of those vantage points voted the
+// channel bad. Aggregating across nodes rather than trusting only the local
+// scan accounts for hidden-node effects — a channel can look clean locally
+// but be busy from a neighbor's vantage point. Median (not max) and mean
+// (not sum) keep a single outlier reporter, or a channel simply visible to
+// more nodes, from distorting the result — see requiredDisqualifyVotes for
+// the matching quorum-based disqualify decision.
+//
+// Takes at most one reading per (reporter, channel) pair — the first
+// Results entry matching channel in a given report, regardless of whether
+// it turns out to be valid. A report with duplicate entries for the same
+// channel (a buggy/older build, or — since alfred/mesh-registry gossip has
+// no message authentication yet — a malformed/malicious peer payload)
+// would otherwise inflate both reporters and badVotes from a single real
+// peer, letting one node's report still disqualify a channel mesh-wide
+// under the new quorum rule exactly as it could under the old any-single-
+// reporter rule.
 func aggregateChannelReports(reports map[string]ChannelReport, channel int) (channelStats, bool) {
-	var noises []int
+	var noises []float64
 	var bssSum int
+	badVotes := 0
 	for _, r := range reports {
 		for _, res := range r.Results {
 			if res.Channel != channel {
 				continue
 			}
-			noises = append(noises, res.NoiseFloor)
-			bssSum += res.BSSCount
+			if validScanResult(res) {
+				noises = append(noises, float64(res.NoiseFloor))
+				bssSum += res.BSSCount
+				if res.NoiseFloor > noiseDisqualifyDBM {
+					badVotes++
+				}
+			}
+			break
 		}
 	}
 	if len(noises) == 0 {
 		return channelStats{}, false
 	}
-	max, sum := noises[0], 0
-	for _, n := range noises {
-		if n > max {
-			max = n
-		}
-		sum += n
-	}
 	return channelStats{
-		maxNoise: max,
-		avgNoise: float64(sum) / float64(len(noises)),
-		totalBSS: bssSum,
+		medianNoise: median(noises),
+		meanBSS:     float64(bssSum) / float64(len(noises)),
+		badVotes:    badVotes,
+		reporters:   len(noises),
 	}, true
 }
 
@@ -217,8 +296,9 @@ func electBand(reports map[string]ChannelReport, registry map[string]map[string]
 		// yet (still on the lobby frequency) — never on an already-converged
 		// node whose peer just temporarily dropped out of gossip. Without
 		// this gate, a converged node that loses its own current channel
-		// from this cycle's scored set (no survey entry, or disqualified by
-		// a single peer's noise reading) would unilaterally hop to whatever
+		// from this cycle's scored set (no survey entry, or disqualified
+		// because enough of its own reporters' noise votes crossed the
+		// requiredDisqualifyVotes quorum) would unilaterally hop to whatever
 		// scores best now and restart wpa_supplicant on zero peer votes —
 		// exactly the disruption the original hold existed to prevent, and
 		// the opposite of what a rebooting peer needs from a stable
@@ -321,11 +401,19 @@ func scoreCandidates(reports map[string]ChannelReport, votes map[int]int, candid
 			continue
 		}
 		hadAnyData = true
-		if stats.maxNoise > noiseDisqualifyDBM {
-			log.Printf("[acs] %s: channel %d disqualified (max_noise %ddBm)", band, ch, stats.maxNoise)
+		if required := requiredDisqualifyVotes(stats.reporters); stats.badVotes >= required {
+			log.Printf("[acs] %s: channel %d disqualified (%d/%d reporters over %ddBm noise, quorum %d)", band, ch, stats.badVotes, stats.reporters, noiseDisqualifyDBM, required)
 			continue
 		}
-		rawScore := stats.avgNoise + float64(stats.totalBSS)*0.1
+		// Explicit float64(...) conversion on the multiply forces IEEE-754
+		// rounding before the addition, preventing the compiler from fusing
+		// this into a single FMA instruction. Without it, arm64 (fuses) and
+		// amd64 (doesn't) can compute a different rawScore from identical
+		// input — this election runs coordinator-free with no shared state,
+		// and build-x86-tarball.sh ships this same binary for x86 nodes, so
+		// a mixed-architecture mesh must never see two different scores (or
+		// therefore two different winners) for the same reports.
+		rawScore := stats.medianNoise + float64(stats.meanBSS*0.1)
 		scored = append(scored, scoredCandidate{votes: votes[ch], rawScore: rawScore, ch: ch})
 	}
 	return scored, hadAnyData

@@ -67,10 +67,31 @@ Each tick does, in order:
 
 For each candidate channel with a fresh aggregated report:
 
-- **Disqualify** if any reporting node (self or peer) saw noise worse than
-  `noiseDisqualifyDBM` (-70dBm).
-- **Score** survivors: `rawScore = avgNoise + totalBSS*0.1` (lower is
-  better — quieter and less contended wins).
+- **Disqualify by quorum, not by any single reporter** (`fix/acs-disqualify-quorum-median`,
+  2026-09-27). Each reporter (self or peer) that saw noise worse than
+  `noiseDisqualifyDBM` (-70dBm) on that channel casts one "bad" vote. A
+  channel is only disqualified once `badVotes >= requiredDisqualifyVotes(reporters)`,
+  where `reporters` is that *channel's own* reporter count (not the whole
+  mesh's) and `requiredDisqualifyVotes` is `ceil(reporters * disqualifyQuorum)`
+  clamped to at least 1 (`disqualifyQuorum = 0.34`, ~1/3 of reporters,
+  matching upstream `very-srs/MANET`'s `cff714e` fix). This replaces the
+  old any-single-reporter rule, which let one bad radio/connector/driver on
+  any one node disqualify a channel mesh-wide. A solo/isolated node
+  (`reporters == 1`) still needs only 1 bad vote — it must still be able to
+  reject a jammed channel with nobody else to corroborate.
+- **Score** survivors: `rawScore = medianNoise + meanBSS*0.1` (lower is
+  better — quieter and less contended wins). `medianNoise` is the median
+  (not max) noise reading across that channel's reporters, and `meanBSS` is
+  the mean (not sum) BSS count per reporter — summing BSS count meant a
+  channel visible to more nodes carried a bigger contention penalty purely
+  because more nodes could see it, not because it was actually busier.
+  Median and quorum-based disqualification are deliberately paired: both
+  keep a single outlier reporter from distorting the outcome. `median` sorts
+  a fresh copy of the input explicitly rather than trusting caller order —
+  this election runs independently on every mesh node from the same
+  gossiped data with no coordinator, so map iteration order (randomized per
+  Go process) must never be allowed to produce a different median, and
+  therefore a different winner, on different nodes.
 - **Vote** (`peerChannelVotes`) — for each *other* active, fresh (within
   `staleNodeThreshold`) peer in the registry, read its self-reported
   `DATA_CHANNEL_2_4`/`DATA_CHANNEL_5_0` field and count it as a vote for
@@ -84,6 +105,56 @@ For each candidate channel with a fresh aggregated report:
 - If the winning channel's score is still worse than
   `limpModeScoreThreshold` (-60.0), give up on the band entirely and fall
   back to the lobby frequency, flagging limp mode.
+
+**Review follow-ups on `fix/acs-disqualify-quorum-median`, applied before
+live testing (2026-09-27):**
+
+- `aggregateChannelReports` takes **at most one reading per (reporter,
+  channel) pair** — the first `Results` entry matching the candidate
+  channel in a given report, dropping any later duplicates for that same
+  channel in the same report. Without this, a single peer sending duplicate
+  entries for one channel (a buggy/older build, or — since alfred/
+  mesh-registry gossip has no message authentication yet — a malformed or
+  malicious payload) would inflate both `reporters` and `badVotes` together
+  and could still disqualify a channel mesh-wide from one real node, exactly
+  the failure mode this whole fix was meant to close.
+- Peer-supplied `NoiseFloor`/`BSSCount` are range-validated
+  (`validScanResult`: noise `-120..0` dBm, BSS count `0..1000`) and dropped
+  entirely — not clamped — if out of range, since they arrive over the same
+  unauthenticated gossip path. An unvalidated implausible value (e.g. a
+  large negative BSS count) could otherwise dominate the mean/median or
+  overflow the BSS sum and win the election outright.
+- `rawScore := stats.medianNoise + float64(stats.meanBSS*0.1)` uses an
+  explicit conversion on the multiply specifically to block the compiler
+  from fusing it into a single FMA instruction — arm64 and amd64 can
+  otherwise compute a different rounded result from identical input for
+  this exact multiply-add shape, and `build-x86-tarball.sh` ships this same
+  binary for x86 nodes, so a mixed-architecture mesh must never see two
+  different scores (and therefore two different election winners) from the
+  same reports.
+
+**Two behavior changes worth knowing before designing the live test, both
+intentional/expected, neither a bug:**
+
+- **Limp mode is now much harder to trigger via the score threshold.**
+  Surviving (non-disqualified) channels are noise `<= -70dBm` by
+  construction, and `meanBSS` is a per-reporter average rather than a
+  mesh-wide sum — so reaching `limpModeScoreThreshold` (-60.0) via the BSS
+  term now needs roughly 100x the *average* contention the old
+  summed-BSS score needed. `limpModeScoreThreshold`'s original calibration
+  assumed the old max-noise+summed-BSS score's range; it has not been
+  recalibrated for the new formula's range and is tracked as a known,
+  separate follow-up — don't assume today's limp-mode field behavior
+  still matches this doc's older incident history without re-checking it
+  against the new formula.
+- **Channels with only 2 reporters see no quorum benefit at all** —
+  `requiredDisqualifyVotes(2) == 1`, identical to the old any-single-
+  reporter rule. The quorum only starts changing behavior at 3+ reporters,
+  and even then it's stricter than a literal 1/3 due to rounding up
+  (`requiredDisqualifyVotes(3) == 2`, not 1). Since not every node has a
+  5GHz radio, most 5GHz channels in a small mesh may only ever have 2
+  reporters — **design the live test around a channel with 4+ active
+  reporters**, or it won't demonstrate this fix's effect at all.
 
 This vote-first design is deliberate and was itself a fix
 (`fix/acs-channel-election-convergence`, see "Incident history" below): an
