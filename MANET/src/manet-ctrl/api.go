@@ -2060,6 +2060,36 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// requireAuthOrPeerToken gates a route on EITHER a valid session cookie
+// (same as requireAuth) OR a valid, freshly-minted, target-bound
+// X-Manet-Fleet-Peer-Auth header (see verifyFleetPeerToken). It exists
+// solely for /ws/terminal's server-to-server proxy hop (handleTerminalProxy
+// dials a target node's own /ws/terminal without a browser session) and
+// must not be used to gate any other route -- it does not set a cookie or
+// otherwise widen session state, it only accepts an alternative credential
+// for this one handler.
+//
+// r.Host is sender-controlled (it's just the Host header the dialing node
+// chose to send) and by itself proves nothing -- so before trusting it as
+// the bound target, hostMatchesLocalAddr independently confirms r.Host
+// actually names one of THIS node's own addresses via net.InterfaceAddrs().
+// Only once that's confirmed does verifyFleetPeerToken's signature check
+// against r.Host mean anything.
+func requireAuthOrPeerToken(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if token := r.Header.Get(FleetPeerAuthHeader); token != "" {
+			if hostMatchesLocalAddr(r.Host) && verifyFleetPeerToken(token, r.Host) {
+				next(w, r)
+				return
+			}
+		}
+		if !checkAuth(w, r) {
+			return
+		}
+		next(w, r)
+	}
+}
+
 func apiAuthStatus(w http.ResponseWriter, r *http.Request) {
 	conf := loadKVFile(MeshConfFile)
 	ra := strings.ToLower(conf["require_auth"])
