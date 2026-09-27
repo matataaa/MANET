@@ -43,15 +43,30 @@ const (
 	RefreshMS         = 15000
 	PerfAuthCookie    = "manet_perf_auth"
 	PerfAuthMaxAge    = 15552000
-	// FleetPeerAuthHeader carries a mintFleetPeerToken() value on the
-	// server-to-server terminal proxy hop (handleTerminalProxy -> target's
-	// /ws/terminal). It is checked as an alternative to a session cookie,
-	// scoped only to that one route -- see requireAuthOrPeerToken in
-	// api.go. The token itself is a short-lived, target-bound HMAC (see
+	// FleetPeerAuthHeader carries a mintFleetPeerToken() value on a
+	// server-to-server proxy hop (e.g. handleTerminalProxy -> target's
+	// /ws/terminal, handleLogsProxy -> target's /ws/logs). It is checked as
+	// an alternative to a session cookie, scoped only to the route it's
+	// wrapped on -- see requireAuthOrPeerToken in api.go. The header name is
+	// shared across routes, but each route mints/verifies against its own
+	// domain string (see FleetPeerAuthDomainTerminal / FleetPeerAuthDomainLogs
+	// below), so a token captured for one route is not usable against
+	// another even though both derive from the same underlying fleet key.
+	// The token itself is a short-lived, target-bound HMAC (see
 	// mintFleetPeerToken/verifyFleetPeerToken below), not a static secret,
 	// so intercepting one grants at most fleetPeerTokenMaxSkew of replay
-	// against the one target it was minted for.
+	// against the one target and one route it was minted for.
 	FleetPeerAuthHeader = "X-Manet-Fleet-Peer-Auth"
+
+	// FleetPeerAuthDomainTerminal / FleetPeerAuthDomainLogs are the
+	// domain-separation strings passed to mintFleetPeerToken /
+	// verifyFleetPeerToken for each proxy route. Deliberately distinct
+	// values (not just distinct call sites) -- the domain string is part of
+	// the signed message (see fleetPeerTokenMAC), so a token minted for one
+	// route's domain fails verification against another route's domain even
+	// if replayed at the same target host within the same freshness window.
+	FleetPeerAuthDomainTerminal = "fleet-peer-terminal|v1"
+	FleetPeerAuthDomainLogs     = "fleet-peer-logs|v1"
 )
 
 var (
@@ -603,48 +618,59 @@ func fleetPeerTokenKey() []byte {
 	return m.Sum(nil)
 }
 
-// fleetPeerTokenMAC computes the HMAC over a timestamp+target-bound message.
-// Binding the target host into the signed message means a token minted for
-// one target cannot be replayed against a different one.
-func fleetPeerTokenMAC(key []byte, ts int64, targetHost string) []byte {
+// fleetPeerTokenMAC computes the HMAC over a domain+timestamp+target-bound
+// message. Binding the target host into the signed message means a token
+// minted for one target cannot be replayed against a different one; binding
+// the domain string means a token minted for one route (e.g. the terminal
+// proxy) cannot be replayed against a different route (e.g. the logs proxy)
+// even against the same target and within the same freshness window --
+// callers must pass a distinct domain per route (see
+// FleetPeerAuthDomainTerminal / FleetPeerAuthDomainLogs in config.go's
+// consts).
+func fleetPeerTokenMAC(key []byte, ts int64, targetHost, domain string) []byte {
 	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(fmt.Sprintf("fleet-peer-terminal|v1|%d|%s", ts, targetHost)))
+	mac.Write([]byte(fmt.Sprintf("%s|%d|%s", domain, ts, targetHost)))
 	return mac.Sum(nil)
 }
 
 // mintFleetPeerTokenAt builds a "<unix-ts>|<hex-hmac>" token for targetHost
-// at the given timestamp, or "" if this node isn't eligible to mint one
-// (see fleetPeerTokenKey). Split out from mintFleetPeerToken so tests can
-// mint an already-expired, but otherwise validly-signed, token to exercise
-// verifyFleetPeerToken's expiry check for real.
-func mintFleetPeerTokenAt(ts int64, targetHost string) string {
+// under the given domain, at the given timestamp, or "" if this node isn't
+// eligible to mint one (see fleetPeerTokenKey). Split out from
+// mintFleetPeerToken so tests can mint an already-expired, but otherwise
+// validly-signed, token to exercise verifyFleetPeerToken's expiry check for
+// real.
+func mintFleetPeerTokenAt(ts int64, targetHost, domain string) string {
 	key := fleetPeerTokenKey()
 	if len(key) == 0 {
 		return ""
 	}
-	mac := fleetPeerTokenMAC(key, ts, targetHost)
+	mac := fleetPeerTokenMAC(key, ts, targetHost, domain)
 	return fmt.Sprintf("%d|%x", ts, mac)
 }
 
-// mintFleetPeerToken mints a fleet peer token for targetHost, timestamped
-// now. Used only to authenticate the server-to-server terminal proxy hop in
-// handleTerminalProxy -- not a general auth token.
-func mintFleetPeerToken(targetHost string) string {
-	return mintFleetPeerTokenAt(time.Now().Unix(), targetHost)
+// mintFleetPeerToken mints a fleet peer token for targetHost under domain,
+// timestamped now. Used only to authenticate a server-to-server proxy hop
+// (e.g. handleTerminalProxy, handleLogsProxy) -- not a general auth token.
+// domain must match the one the receiving end verifies against (see
+// requireAuthOrPeerToken).
+func mintFleetPeerToken(targetHost, domain string) string {
+	return mintFleetPeerTokenAt(time.Now().Unix(), targetHost, domain)
 }
 
-// verifyFleetPeerToken checks a token received on the receiving end of the
-// terminal proxy hop (requireAuthOrPeerToken) against targetHost -- which
-// must be the *receiving* node's own address as the client addressed it
-// (r.Host), since that's what the token was bound to at mint time. Note:
-// this function only checks the signature and freshness of the token
-// against the CLAIMED targetHost -- it does not itself verify that
-// targetHost is actually this node's address. That check is
+// verifyFleetPeerToken checks a token received on the receiving end of a
+// proxy hop (requireAuthOrPeerToken) against targetHost -- which must be the
+// *receiving* node's own address as the client addressed it (r.Host), since
+// that's what the token was bound to at mint time -- and against domain,
+// which must match the route's own domain string (a token minted for a
+// different route's domain will not verify here even for the same
+// targetHost). Note: this function only checks the signature and freshness
+// of the token against the CLAIMED targetHost -- it does not itself verify
+// that targetHost is actually this node's address. That check is
 // hostMatchesLocalAddr, which the caller (requireAuthOrPeerToken) must run
 // first: the Host header is sender-controlled, so without that separate
 // check, "binding" to it would be a comment claiming protection that
 // doesn't exist.
-func verifyFleetPeerToken(token, targetHost string) bool {
+func verifyFleetPeerToken(token, targetHost, domain string) bool {
 	key := fleetPeerTokenKey()
 	if len(key) == 0 || token == "" {
 		return false
@@ -666,7 +692,7 @@ func verifyFleetPeerToken(token, targetHost string) bool {
 	if err != nil {
 		return false
 	}
-	want := fleetPeerTokenMAC(key, ts, targetHost)
+	want := fleetPeerTokenMAC(key, ts, targetHost, domain)
 	return hmac.Equal(got, want)
 }
 
