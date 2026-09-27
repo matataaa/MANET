@@ -55,7 +55,22 @@ git fetch upstream
 
 ## Last reviewed
 
-Upstream commit reviewed up to: `515a3b1` (2026-08-31) — "Bump to 0.544"
+Upstream commit reviewed up to: `1d66e0b` (2026-09-24) — "Report direct LED
+neighbors and tidy project wording"
+
+**Note (2026-09-26):** upstream force-pushed `main` between the 2026-09-06
+pass and this one — `git fetch upstream` showed a *forced-update* in the
+reflog, and every SHA referenced below from before this date (`0f9280e`,
+`27b0298`, `a1c1f59`, `9824519`, etc.) is no longer an ancestor of
+`upstream/main` and won't resolve there anymore. The rewrite goes all the way
+back to a 2026-06-12 merge-base — the whole history since then was rebased,
+not just the tip. Content-wise it's a clean rebase (verified by diffing the
+old tip against the same-dated/same-message commit in the new history: only
+difference was `CLAUDE.md`/`AGENTS.md` being deleted — upstream scrubbed its
+own AI-agent-tooling files, alongside a broader doc-hygiene pass the
+2026-09-26 section below covers). Past review conclusions in this file still
+stand; just don't expect the cited SHAs to `git show` against
+`upstream/main` anymore.
 
 ### 2026-08-21 pass (up to `695ca46`)
 
@@ -145,6 +160,174 @@ prep (`ec5346c`, not reviewed in depth).
 **Skipped as low value:** Windows/rpi-imager fixes, the removed RPi5
 release workflow (RPi5 is a later-stage target per project priorities),
 decorative UI tweaks, and ~12 version-bump-only commits.
+
+### 2026-09-06 pass (covers `515a3b1..0f9280e`, ~40 commits)
+
+Found one **real hardware bug, fixed this pass**: `27b0298` "Put USB back on
+the DWC2 host controller instead of the 2711 XHCI" (later corrected for a
+section-detection bug by `a1c1f59`). The stock CM4 image runs USB off the
+2711 built-in XHCI controller (`otg_mode=1` in `[cm4]`), which upstream found
+does not provide a working USB host controller on their hardware — no root
+hub, so a USB MM81xx HaLow card never enumerates, so no mesh. The fix
+comments out `otg_mode=1` and inserts `dtoverlay=dwc2,dr_mode=host` in the
+same `[cm4]` section (section-aware, since the stock config also carries an
+identical dwc2 line under `[cm5]` that a file-wide grep would false-match).
+
+This directly applies to the fork: `firstrun.sh.template` already detects a
+USB MM81xx HaLow card via sysfs (`_halow_on_spi=0` path,
+`MANET/provisioning/firstrun.sh.template:283-300`) and skips the SPI-hat
+`config.txt` plumbing for it — but never had *any* CM4 DWC2/otg_mode
+handling, on either side of the fork's 2026-08-11 split. `27b0298` landed
+2026-08-30, inside the range the 2026-09-01 pass already covered, but wasn't
+individually caught — it fell into that pass's "Windows/rpi-imager, skipped
+as low value" bucket by association with the surrounding flasher-rewrite
+commits, when it's actually a `firstrun.sh.template` provisioning fix
+unrelated to the flasher GUI. **Ported 2026-09-06** (final, section-aware
+form) directly onto `MANET/provisioning/firstrun.sh.template`, right after
+the existing `[cm4]` `pcie-32bit-dma` block. Not yet hardware-verified on a
+CM4 + USB MM81xx board — our fleet's HaLow boards have all been SPI/Seeed-HAT
+so far (see `[[halow_spi_clock_speed_fix]]`), so this path has had no live
+coverage either upstream's way or ours.
+
+Also checked, no action needed:
+- `06e462b` "Document how a node discovers claimed IP chunks via Alfred" —
+  docs-only on upstream's old `node_tools/README.md`, describing the
+  claimed-chunk allocation invariants (random pick, 300s stale timeout,
+  persisted state overrides live registry data to avoid false-conflict
+  churn). Cross-checked against the fork's Go `mesh-manager`
+  (`MANET/src/mesh-manager/main.go`, `ipManager.run()` ~line 453-535): the Go
+  implementation already matches this invariant exactly — a valid persisted
+  chunk (`im.pValid`) is reasserted directly without consulting
+  `claimed_chunks.txt` (`usePersistent` gate at line 503). Confirms the
+  design is correct; no gap.
+- `92ae222`/`45faf87`/`bfcbb34`/`8d60d0b` (openvlm/Lyra voice pipeline
+  work, ~5 commits) — Python/GStreamer/Lyra, architecturally unrelated to
+  the fork's own Go `mesh-voice` (Opus-based). `45faf87` is a real bug
+  pattern worth knowing about even though it's not portable code: adapted
+  loss-recovery state (frames-per-packet) was being silently reset to the
+  configured default whenever the GStreamer pipeline rebuilt on a SIGHUP
+  retune, and cumulative loss counters weren't reset alongside it, producing
+  a bogus negative delta right after retune. Worth checking for an analogous
+  "adaptive state clobbered by pipeline/session rebuild" bug in the fork's
+  Go mesh-voice *if* a feature-by-feature comparison is ever prioritized
+  (still an open item from the 2026-09-01 pass, not resolved this pass
+  either).
+- `build-cm4-tarball.sh` / `build-r3a-tarball.sh` / `build-rpi5-tarball.sh` —
+  one-line `openvlm` binary packaging additions, N/A (same Lyra-voice
+  architecture boundary as above).
+
+**New idea, not implemented — needs a product decision, not a port:** the
+Windows flasher gained an "additional scripts" feature (new
+`provisioning/additional-scripts/` dir + GUI checks: syntax-check scripts
+before running them, measure real script size instead of trusting the
+directory entry, auto-correct CRLF-mangled Windows-authored scripts instead
+of rejecting them, size list columns to content). The fork has no equivalent
+— nothing under `MANET/provisioning/` runs arbitrary user-supplied setup
+scripts during provisioning today. This is a genuinely new capability
+(let an installer bundle custom node setup steps), not a bugfix, so it
+wasn't ported; flag if there's a use case for user-extensible provisioning.
+
+**Skipped as low value, consistent with prior passes:** the rest of the
+Windows GUI flasher rewrite (~30 commits: DPI scaling, rpiboot visibility,
+progress bars, quoting fixes, build-stamp display, settings-page defaults) —
+the fork's own `windows.ps1`/`linux.sh`/`mac.sh` are independent
+implementations, not upstream's rpi-imager-wrapper GUI. US-spelling and
+version-bump-only commits.
+
+### 2026-09-26 pass (24 genuinely-new commits, content-identified across the
+force-push — see note above; SHAs below are the *new* upstream hashes)
+
+**Found a real, unfixed vulnerability class in our own fork, surfaced by
+upstream's `01dea5d` "Authenticate mesh admin commands":** upstream's mesh
+config apply/ACK/rollback pipeline used to broadcast admin/config changes
+over Alfred in plaintext with no authentication — any mesh member could
+forge a config push. `01dea5d` fixes it with AES-GCM + scrypt (new
+`manet_admin.py`, `manet-admin-setup.sh` installing `python3-cryptography`),
+encrypting/authenticating control packets with the shared `admin_password`,
+and notes older versions "included the admin password in readable config
+broadcasts."
+
+Checked our Go equivalent and **the fork has the same class of hole, not yet
+fixed**: `broadcastConfigPackage` (`MANET/src/manet-ctrl/admin.go:49-58`)
+JSON-marshals the config package straight to `alfred -s 70`, no signing, no
+encryption. On the receive side, `fleetPollAlfred`
+(`MANET/src/manet-ctrl/fleet.go:286-294`) reads `alfred -r 70`, picks the
+newest-`staged_at` entry, and feeds it straight to `fleetApplyConfig`
+(`fleet.go:83-229`) with **no origin check at all**. `fleetApplyConfig` will
+happily write anything in `saveableKeys` (`api.go:904-923`) to
+`/etc/mesh.conf` — which includes `admin_password` and `require_auth`
+themselves. So today, any device that joins the batman-adv mesh (which only
+needs `mesh_ssid`/`mesh_key`, not the admin password) can broadcast a forged
+type-70 Alfred payload and rewrite the admin password / disable auth /
+change gateway or radio config on every node. `requireAuth` only gates the
+HTTP staging side (a legitimate admin's own node); it does nothing for what
+other nodes accept over the mesh. **Not fixed this pass — flagging for a
+decision**, since porting upstream's approach means picking a crypto/KDF
+scheme and a rollout story for existing fleets (all nodes need the new
+dependency before anyone can push a change, per upstream's own upgrade note).
+
+**Other new commits, categorized:**
+
+- `cff714e` "Stop electing the lobby when jammed, score on occupancy" —
+  substantial rewrite of upstream's `channel-election.sh` ACS scoring:
+  switched from a single dBm noise threshold (never actually reached in the
+  field per the commit's own comment) to `occupancy% + capped noise penalty +
+  mean BSS weight`, added a disqualification quorum (`DISQUALIFY_QUORUM`,
+  ceil of ~34% of reporters must agree — one bad radio/connector can no
+  longer take a channel away from the whole mesh), switched max→median noise
+  aggregation, and replaced a per-channel `bc` shell-out with one `jq` pass
+  (previous version died in the flock subshell on one malformed report).
+  **Worth a real look**: our Go `node-manager`'s ACS was previously confirmed
+  to hard-error on absent scan data and handle solo-isolation quorum, but
+  this occupancy/quorum-based scoring is a different, more robust algorithm
+  than what we ported before — and we have an open live issue
+  ([[eud3_eud4_5ghz_primary_channel_mismatch]]) in the same subsystem. Not
+  yet checked against our Go scoring logic.
+- `253c008` "Fix chunk zero allocation tracking" — upstream's
+  `node-manager.sh` used to always coerce an unallocated IPv4 chunk to `0`
+  (indistinguishable from a legitimate chunk-0 allocation) when publishing
+  identity; fixed to read the chunk file fresh after IP management runs and
+  omit the address entirely when unallocated. Check whether the Go
+  `mesh-manager`'s identity-publish path has the same 0-vs-unallocated
+  ambiguity.
+- `9da0b7c` "Bound IPv4 startup discovery" — new `mesh-ip-startup.py`: at
+  boot, waits for `br0` link-local IPv6 + Alfred + this node's own
+  identity/telemetry publish, then observes BATMAN peers for 10s, extending
+  to 20s total if peers are present but haven't published identity yet,
+  before allocating. A remembered chunk in `/etc/mesh_ipv4_state` is reused
+  only if no peer has since claimed it. Worth checking whether the Go
+  `ipManager.run()` has an equivalent bounded startup wait or can race a
+  chunk claim immediately on boot before peers have had a chance to publish.
+- `75fcd5d` "Fix config rollback peer detection" — 108-line rewrite of
+  `mesh-config-rollback.sh` plus a 337-line new test file; peer-detection
+  logic for the safety-net rollback timer was buggy. Same architecture
+  boundary as the `/manage` apply/ACK/rollback pipeline noted in the
+  2026-09-01 pass (structural, Python vs our Go `manet-ctrl`/`fleet.go`) —
+  needs a manual read-and-port only if a matching rollback symptom shows up
+  live; not blindly portable.
+- `93785b0` + `4de7c29` "Drive the onboard LEDs from the recorded
+  provisioning verdict" — new `manet-led-status.sh` (98 lines) + a systemd
+  unit, genuinely new and small, not tied to the Python/Go rewrite boundary
+  (it's a small bash script + unit, the same shape as our own
+  `rootfs/usr/local/bin/*` + `rootfs/etc/systemd/system/*`). Plausibly
+  portable as-is if we want boot-time LED provisioning feedback; not
+  reviewed for exact GPIO/LED assumptions against our board support yet.
+- `4db070b` "low level voice bug fixes" — 1174-line rewrite of upstream's
+  `mesh-voice.py`. Same Python/GStreamer/Lyra vs our Go Opus `mesh-voice`
+  boundary as every prior pass — not portable, no action, consistent with
+  the still-open "worth a feature-by-feature comparison someday" item from
+  the 2026-09-01/09-06 passes.
+
+**Skipped as low value, consistent with prior passes:** the rest of this
+range is the Windows/Linux flasher continuing its rewrite (renamed to
+`flash-a-radio.sh`, self-bootstrapping, cached templates, "additional
+scripts" syntax-checking) and a large documentation restructuring — `README`
+rewrites "for users," a new `docs/node-tools-internals.md` /
+`docs/provisioning-internals.md` split, "prose tells" and "conversational
+voice" removed, US spelling, and `packaging/` dropped from git tracking
+entirely as "developer tooling." None of this is fork-relevant; our
+`provisioning/`, `packaging/`, and doc layout are independent and already
+serve the same purpose.
 
 Update this line after each review pass so `git log upstream/main --oneline
 <last-reviewed-sha>..upstream/main` shows only what's new.
