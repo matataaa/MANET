@@ -208,7 +208,7 @@ if ! has_usb_morse_device; then
 fi
 if [[ -z "$EARLY_MORSE_BCF" ]] && ! has_usb_morse_device; then
     EARLY_MORSE_BCF="bcf_fgh100mhaamd.bin"
-    EARLY_MORSE_SPI_CLOCK="${EARLY_MORSE_SPI_CLOCK:-1500000}"
+    EARLY_MORSE_SPI_CLOCK="${EARLY_MORSE_SPI_CLOCK:-15000000}"
 fi
 [[ -n "$EARLY_MORSE_BCF" ]] && echo "options morse bcf=$EARLY_MORSE_BCF" >> /etc/modprobe.d/morse.conf
 [[ -n "$EARLY_MORSE_SPI_CLOCK" ]] && echo "options morse spi_clock_speed=$EARLY_MORSE_SPI_CLOCK" >> /etc/modprobe.d/morse.conf
@@ -1562,7 +1562,7 @@ echo "options morse country=$HALOW_REGULATORY_DOMAIN" >> /etc/modprobe.d/morse.c
 
 if [[ -z "$MORSE_BCF" ]] && ! has_usb_morse_device; then
     MORSE_BCF="bcf_fgh100mhaamd.bin"
-    MORSE_SPI_CLOCK="${MORSE_SPI_CLOCK:-1500000}"
+    MORSE_SPI_CLOCK="${MORSE_SPI_CLOCK:-15000000}"
 fi
 [[ -n "$MORSE_BCF" ]]       && echo "options morse bcf=$MORSE_BCF" >> /etc/modprobe.d/morse.conf
 [[ -n "$MORSE_SPI_CLOCK" ]] && echo "options morse spi_clock_speed=$MORSE_SPI_CLOCK" >> /etc/modprobe.d/morse.conf
