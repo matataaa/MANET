@@ -1,4 +1,8 @@
 // Config tab: view/edit node mesh.conf (local or remote via direct fetch)
+// CFG_SECRET_FIELD_KEYS mirrors the Go side's fleetSecretKeys (admin.go) --
+// an empty value for any of these must never be submitted as "set this
+// secret to blank," only skipped as "field left untouched." See configSave.
+const CFG_SECRET_FIELD_KEYS = ['admin_password', 'mesh_key', 'lan_ap_key'];
 let configInitialized = false;
 let configEditing = false;
 let configData = null;
@@ -51,6 +55,26 @@ function configPopulateTargets() {
     sel.appendChild(opt);
   });
   sel.value = current;
+}
+
+// configStartEditGated mirrors fleetStartEditGated (fleet.js): if auth is
+// required and the operator hasn't logged in yet, run the login flow first
+// and re-fetch fresh (unredacted) configData BEFORE ever entering edit mode
+// -- this is what stops the edit form from ever getting populated with
+// blanked-out secret fields from a pre-login /api/admin/status response. If
+// the operator cancels the login prompt, this simply never proceeds. The
+// server-side guards (dropEmptySecrets et al.) are what actually prevent
+// damage even if this gate is bypassed; this is purely about not showing
+// misleading blank fields in the first place.
+async function configStartEditGated() {
+  if (_authRequired && !_authenticated) {
+    await new Promise(function(resolve) {
+      authShowLogin(function() { resolve(); });
+    });
+    await configFetch();
+  }
+  configEditing = true;
+  configRender();
 }
 
 async function configFetch() {
@@ -212,10 +236,7 @@ function configRenderView(panel, cfg) {
   html += '</div>';
   panel.innerHTML = html;
 
-  document.getElementById('cfg-edit-btn').addEventListener('click', () => {
-    configEditing = true;
-    configRender();
-  });
+  document.getElementById('cfg-edit-btn').addEventListener('click', configStartEditGated);
   configWireUpdateButtons();
 
   qosFetch();
@@ -609,7 +630,13 @@ function configRenderEdit(panel, cfg) {
         ' oninput="document.getElementById(\'cfg-rv-' + f.key + '\').textContent=this.value+\'%\'">' +
         '<span class="cfg-range-val" id="cfg-rv-' + f.key + '">' + escHtml(rangeVal) + '%</span></div>';
     } else {
-      html += '<input class="cfg-input" type="' + f.type + '" id="cfg-f-' + f.key + '" value="' + escHtml(curVal) + '">';
+      // A blank password-type field could mean "genuinely unset" or "this
+      // came from a redacted /api/admin/status response" (see
+      // configSave's empty-secret skip below) -- show an explicit
+      // placeholder so leaving it blank clearly reads as "leave unchanged,"
+      // not "set to empty."
+      var cfgPlaceholder = f.type === 'password' && curVal === '' ? ' placeholder="(unchanged)"' : '';
+      html += '<input class="cfg-input" type="' + f.type + '" id="cfg-f-' + f.key + '" value="' + escHtml(curVal) + '"' + cfgPlaceholder + '>';
       if (f.preview) html += '<div class="cfg-hostname-preview" id="cfg-hostname-preview"></div>';
     }
     html += '</div>';
@@ -770,7 +797,13 @@ async function configSave() {
   const config = {};
   meshFields.forEach(f => {
     const el = document.getElementById('cfg-f-' + f);
-    if (el) config[f] = el.value;
+    if (!el) return;
+    // Never submit an empty secret value as "blank this out" -- almost
+    // certainly means the field was populated from a redacted (pre-login)
+    // /api/admin/status response and never actually touched. The server
+    // independently guards against this too (dropEmptySecrets, admin.go).
+    if (CFG_SECRET_FIELD_KEYS.indexOf(f) !== -1 && el.value === '') return;
+    config[f] = el.value;
   });
 
   var chVal = (document.getElementById('cfg-f-voice_channel') || {}).value || '1';
@@ -796,6 +829,9 @@ async function configSave() {
     if (meshResult.ok && voiceResult.ok) {
       configEditing = false;
       configFetch();
+      if (Array.isArray(meshResult.warnings) && meshResult.warnings.length) {
+        notify('Warning', meshResult.warnings.join(' '), {type:'warning', duration:15000});
+      }
     } else {
       const errors = [];
       if (!meshResult.ok) errors.push('Mesh: ' + (meshResult.error || 'unknown'));

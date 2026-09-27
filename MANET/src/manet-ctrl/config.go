@@ -14,28 +14,50 @@ import (
 )
 
 const (
-	RegistryFile       = "/var/run/mesh_node_registry"
-	MeshConfFile       = "/etc/mesh.conf"
-	MeshStateFile      = "/etc/mesh_ipv4_state"
-	PendingConfFile    = "/var/run/mesh_pending_config.json"
-	GPSStatusFile      = "/run/gps_status.json"
-	BatteryFile        = "/run/battery_status.json"
-	AckVersionFile     = "/var/run/mesh_config_ack_version"
-	FleetPrefsFile     = "/var/run/fleet_preferences.json"
-	NoMeshIfFile       = "/var/lib/no_mesh_if"
-	APInterfaceFile    = "/var/lib/ap_interface"
-	UpdateStatusFile   = "/var/run/manet_update_status.json"
-	UpdateTriggerFile  = "/run/manet-update-trigger"
-	FleetUpdateAckFile = "/var/run/fleet_update_ack_ts"
-	RefreshMS          = 15000
-	PerfAuthCookie     = "manet_perf_auth"
-	PerfAuthMaxAge     = 15552000
+	RegistryFile      = "/var/run/mesh_node_registry"
+	MeshStateFile     = "/etc/mesh_ipv4_state"
+	GPSStatusFile     = "/run/gps_status.json"
+	BatteryFile       = "/run/battery_status.json"
+	NoMeshIfFile      = "/var/lib/no_mesh_if"
+	APInterfaceFile   = "/var/lib/ap_interface"
+	UpdateStatusFile  = "/var/run/manet_update_status.json"
+	UpdateTriggerFile = "/run/manet-update-trigger"
+	// FleetUpdateAckFile records the last slot-71 triggered_at this node has
+	// already acted on. Moved off tmpfs (was /var/run/fleet_update_ack_ts) now
+	// that slot 71 is authenticated -- a reboot must not lose this record,
+	// or a still-gossiping (now-authenticated, so no longer discardable as
+	// obviously bogus) old trigger could replay a fleet-wide update.
+	FleetUpdateAckFile = "/var/lib/manet_fleet_update_ack_ts"
+	// AppliedConfigFile persistently records the pkg_id of every fleet config
+	// package this node has actually applied (see fleetCheckActivation /
+	// recordPkgIDApplied), independent of AckVersionFile (which only tracks
+	// the last version number this node ACKed, lives on tmpfs, and is not
+	// itself a security control). Deliberately NOT AckVersionFile's path --
+	// mesh-registry/main.go reads that literal path and it is not part of
+	// this replay-protection design.
+	AppliedConfigFile = "/var/lib/manet_config_applied"
+	RefreshMS         = 15000
+	PerfAuthCookie    = "manet_perf_auth"
+	PerfAuthMaxAge    = 15552000
 )
 
 var (
 	HalowEUChannels      = []int{863500, 864500, 865500, 866500, 867500}
 	HalowUIToS1GChannel  = map[int]int{1: 1, 2: 3, 3: 5, 4: 7, 5: 9}
 	HalowBWTxPowerCapDBM = map[string]string{"1MHz": "24", "2MHz": "24", "4MHz": "22", "8MHz": "20"}
+)
+
+// MeshConfFile, PendingConfFile, AckVersionFile, and FleetPrefsFile are vars
+// (not consts) purely so tests can point them at a throwaway temp file
+// instead of the real /etc or /var/run path — production code never
+// reassigns them, and their default values are unchanged.
+// mesh-registry/main.go reads AckVersionFile's literal path from outside
+// this package; that string value is untouched.
+var (
+	MeshConfFile    = "/etc/mesh.conf"
+	PendingConfFile = "/var/run/mesh_pending_config.json"
+	AckVersionFile  = "/var/run/mesh_config_ack_version"
+	FleetPrefsFile  = "/var/run/fleet_preferences.json"
 )
 
 // --- JSON types matching frontend expectations ---
@@ -266,6 +288,28 @@ type AdminStatus struct {
 	ActiveNodes   int               `json:"active_nodes"`
 	MyHostname    string            `json:"my_hostname"`
 	Preferences   FleetPreferences  `json:"preferences"`
+	AckStatus     *AckStatusResult  `json:"ack_status,omitempty"`
+}
+
+// AckStatusResult is the one shared acked/total/missing computation used by
+// both assembleAdminStatus (what the UI displays) and apiAdminActivate's
+// non-force gate (what the server actually enforces) — see ackStatus in
+// admin.go. Before this, the two used different logic and could disagree.
+// DangerousKeys/OfflineNodes are populated together: DangerousKeys lists
+// which of admin_password/mesh_ssid/mesh_key/ipv4_network this pending push
+// actually changes, and OfflineNodes lists which registry nodes are not
+// ACTIVE right now (both computed regardless of ack count) — a non-force
+// Activate must be blocked whenever both are non-empty, since applying one
+// of those changes while a node is offline risks silently orphaning it. See
+// dangerousKeyChanges/offlineNodeNames in admin.go and apiAdminActivate's
+// gate in api.go, which must both use this same pair.
+type AckStatusResult struct {
+	Version       string   `json:"version"`
+	Acked         int      `json:"acked"`
+	Total         int      `json:"total"`
+	Missing       []string `json:"missing,omitempty"`
+	DangerousKeys []string `json:"dangerous_keys,omitempty"`
+	OfflineNodes  []string `json:"offline_nodes,omitempty"`
 }
 
 type AdminNode struct {

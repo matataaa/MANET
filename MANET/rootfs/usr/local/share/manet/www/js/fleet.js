@@ -279,7 +279,7 @@ function fleetRender() {
     });
   }
   var editBtn = document.getElementById('fleet-edit-btn');
-  if (editBtn) editBtn.addEventListener('click', fleetStartEdit);
+  if (editBtn) editBtn.addEventListener('click', fleetStartEditGated);
   var activateBtn = document.getElementById('fleet-activate-btn');
   if (activateBtn) activateBtn.addEventListener('click', function() { fleetActivateConfig(false); });
   var forceBtn = document.getElementById('fleet-force-btn');
@@ -537,11 +537,44 @@ function fleetRenderPending(pkg, status) {
   }
 
   var nodes = status.nodes || [];
-  var acked = nodes.filter(function(n) { return n.ack === version; }).length;
-  var total = nodes.length;
+  // Prefer the server's ack_status (admin.go's ackStatus helper) when it
+  // matches this pending version — it's the exact same merged
+  // registry+local-ack+multicast, ACTIVE-node-filtered computation
+  // apiAdminActivate's non-force gate enforces server-side. Recomputing our
+  // own acked/total from `nodes` here (as before) could disagree with that
+  // gate — e.g. it never filtered out stale/dead nodes — showing an
+  // Activate button enabled that the server would then reject. Falls back
+  // to the old client-side computation only if ack_status is absent
+  // (older server) or doesn't match this version yet.
+  var ackInfo = status.ack_status;
+  var acked, total;
+  if (ackInfo && ackInfo.version === version && typeof ackInfo.total === 'number') {
+    acked = ackInfo.acked;
+    total = ackInfo.total;
+  } else {
+    acked = nodes.filter(function(n) { return n.ack === version; }).length;
+    total = nodes.length;
+  }
   var pct = total > 0 ? Math.round(acked / total * 100) : 0;
   html += '<div class="fleet-ack-bar"><div class="fleet-ack-fill" style="width:' + pct + '%"></div></div>';
   html += '<div class="fleet-ack-label">' + acked + '/' + total + ' nodes acknowledged</div>';
+
+  // Mirrors apiAdminActivate's non-force gate (api.go): a push that changes
+  // admin_password/mesh_ssid/mesh_key/ipv4_network while ANY registry node
+  // is offline risks silently orphaning it, even with full ACK from every
+  // node that IS online. dangerous_keys/offline_nodes come from the same
+  // server-side computation (ackStatus + dangerousKeyChanges/
+  // offlineNodeNames, admin.go) the server enforces, so this always agrees
+  // with what a plain Activate click would actually be rejected for.
+  var orphanRisk = !!(ackInfo && ackInfo.version === version &&
+    ackInfo.dangerous_keys && ackInfo.dangerous_keys.length &&
+    ackInfo.offline_nodes && ackInfo.offline_nodes.length);
+  if (orphanRisk) {
+    html += '<div class="fleet-dangerous">Changes ' + ackInfo.dangerous_keys.map(escHtml).join(', ') +
+      ' while offline: ' + ackInfo.offline_nodes.map(escHtml).join(', ') +
+      ' — these node(s) risk being orphaned (unable to open future fleet pushes, or to rejoin the mesh). ' +
+      'Force Activate is required to proceed.</div>';
+  }
 
   if (activateAt) {
     var remaining = activateAt - Math.floor(Date.now() / 1000);
@@ -550,10 +583,16 @@ function fleetRenderPending(pkg, status) {
 
   html += '<div class="fleet-actions">';
   if (!activateAt) {
-    var allAcked = acked === total && total > 0;
-    html += '<button class="fleet-btn ' + (allAcked ? 'fleet-btn-go' : '') + '" id="fleet-activate-btn"' +
-      (!allAcked ? ' disabled' : '') + '>Activate</button>';
-    if (acked < total) html += '<button class="fleet-btn fleet-btn-danger" id="fleet-force-btn">Force Activate</button>';
+    // Mirrors apiAdminActivate's non-force gate exactly: it only blocks on
+    // ack count when total > 0 (an empty/solo registry has nothing to wait
+    // for), so total === 0 must allow a plain Activate here too -- the old
+    // "acked === total && total > 0" form disabled BOTH buttons in that
+    // case, blocking an operation the server would have accepted.
+    var ackGateBlocks = total > 0 && acked < total;
+    var allowActivate = !ackGateBlocks && !orphanRisk;
+    html += '<button class="fleet-btn ' + (allowActivate ? 'fleet-btn-go' : '') + '" id="fleet-activate-btn"' +
+      (!allowActivate ? ' disabled' : '') + '>Activate</button>';
+    if (ackGateBlocks || orphanRisk) html += '<button class="fleet-btn fleet-btn-danger" id="fleet-force-btn">Force Activate</button>';
   }
   html += '<button class="fleet-btn fleet-btn-danger" id="fleet-cancel-btn">Cancel</button>';
   html += '</div></div>';
@@ -585,6 +624,30 @@ function fleetRenderNodes(nodes, pending) {
 }
 
 // --- Edit mode ---
+
+// fleetStartEditGated ensures the edit form is never populated from a
+// redacted (pre-login) /api/admin/status snapshot: if auth is required and
+// the operator hasn't logged in yet, it runs the login flow FIRST and
+// re-fetches fresh (now-authenticated, unredacted) fleetData before ever
+// calling fleetStartEdit. This is the actual UX fix for the incident where
+// opening the edit form pre-login, then logging in when a save/stage got a
+// 401, would resubmit the SAME already-collected (blank-secret) form state.
+// If the operator cancels the login prompt, this simply never proceeds —
+// fleetStartEdit is not called, and no half-authenticated edit state is
+// left behind. Note: the server-side guards (dropEmptySecrets et al.,
+// admin.go/fleet.go) are what actually prevent damage even if this gate is
+// ever bypassed (e.g. a stale cached page, a race) — this function is
+// purely about not showing the operator misleading blank fields in the
+// first place.
+async function fleetStartEditGated() {
+  if (_authRequired && !_authenticated) {
+    await new Promise(function(resolve) {
+      authShowLogin(function() { resolve(); });
+    });
+    await fleetFetch();
+  }
+  fleetStartEdit();
+}
 
 function fleetStartEdit() {
   fleetEditing = true;
@@ -679,8 +742,16 @@ function fleetRenderField(f, val, prefix) {
     html += '<div class="fleet-field-hint" id="fleet-f-' + prefix + f.key + '-domain-label"></div>';
   } else {
     var inputType = f.type === 'password' ? 'password' : 'text';
+    // A blank password-type field could mean "genuinely unset" OR "this
+    // came from a redacted /api/admin/status response" (see
+    // fleetCollectEditState) -- either way, a plain empty box looks like a
+    // value the operator is expected to fill in, inviting exactly the
+    // blank-it-out mistake this whole fix exists to prevent. Show an
+    // explicit placeholder instead so leaving it blank clearly reads as
+    // "leave unchanged," not "set to empty."
+    var placeholder = f.type === 'password' && val === '' ? '(unchanged)' : f.hint;
     html += '<input type="' + inputType + '" id="fleet-f-' + prefix + f.key + '" value="' + escHtml(val) + '"' +
-      (f.hint ? ' placeholder="' + escHtml(f.hint) + '"' : '') + '>';
+      (placeholder ? ' placeholder="' + escHtml(placeholder) + '"' : '') + '>';
   }
   if (f.dangerous) html += '<div class="fleet-field-hint">Changing this may disconnect nodes</div>';
   else if (f.hint) html += '<div style="font-size:10px;color:var(--muted);margin-top:2px">' + escHtml(f.hint) + '</div>';
@@ -912,7 +983,15 @@ function fleetCollectEditState() {
   var meshCfg = {};
   MESH_FIELDS.forEach(function(f) {
     var el = document.getElementById('fleet-f-mesh-' + f.key);
-    if (el) meshCfg[f.key] = el.value;
+    if (!el) return;
+    // An empty password-type field must NEVER be sent as "set this secret
+    // to blank" -- it almost certainly means the field was populated from
+    // a redacted (pre-login) /api/admin/status response and the operator
+    // never actually touched it. The server independently guards against
+    // this too (dropEmptySecrets, admin.go), but skip it client-side as
+    // well so an empty secret is never even sent.
+    if (f.type === 'password' && el.value === '') return;
+    meshCfg[f.key] = el.value;
   });
 
   var profiles = {};
@@ -925,7 +1004,9 @@ function fleetCollectEditState() {
     PROFILE_SECTIONS.forEach(function(sec) {
       sec.fields.forEach(function(f) {
         var el = document.getElementById('fleet-f-p-' + pid + '-' + f.key);
-        if (el) cfg[f.key] = el.value;
+        if (!el) return;
+        if (f.type === 'password' && el.value === '') return;
+        cfg[f.key] = el.value;
       });
     });
     profiles[pid] = { name: name, config: cfg };

@@ -320,7 +320,7 @@ WantedBy=multi-user.target
 }
 
 func apiAdminStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, assembleAdminStatus())
+	writeJSON(w, 200, assembleAdminStatus(isAuthed(r)))
 }
 
 // apiUpdateStatus returns node-update's own status file verbatim — the
@@ -471,6 +471,7 @@ func apiFleetPreferences(w http.ResponseWriter, r *http.Request) {
 			for k, v := range m {
 				prefs.MeshConfig[k] = fmt.Sprintf("%v", v)
 			}
+			dropEmptySecrets(prefs.MeshConfig)
 		}
 	}
 	if np, ok := body["node_profiles"]; ok {
@@ -493,6 +494,7 @@ func apiFleetPreferences(w http.ResponseWriter, r *http.Request) {
 							fp.Config[k] = fmt.Sprintf("%v", v)
 						}
 					}
+					dropEmptySecrets(fp.Config)
 					prefs.Profiles[pid] = fp
 				}
 			}
@@ -1014,17 +1016,27 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updates := make(map[string]string)
-	var saved []string
 	for k, v := range configMap {
 		if saveableKeys[k] {
 			updates[k] = fmt.Sprintf("%v", v)
-			saved = append(saved, k)
 		}
 	}
+	// An empty string for a secret key must never be interpreted as "set
+	// this secret to blank" -- only as "this field was left untouched,"
+	// typically because the caller's form was populated from a redacted
+	// (unauthenticated) /api/admin/status response before they logged in.
+	// See dropEmptySecrets's doc comment (admin.go) for the full incident
+	// this guards against.
+	dropEmptySecrets(updates)
 
 	if len(updates) == 0 {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "No valid keys"})
 		return
+	}
+
+	var saved []string
+	for k := range updates {
+		saved = append(saved, k)
 	}
 
 	existingConf := loadKVFile(MeshConfFile)
@@ -1091,6 +1103,19 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 
 	applied := make(map[string]interface{})
 	conf := loadKVFile(MeshConfFile)
+
+	// admin_password is now the fleet encryption key (see fleetcrypto.go) --
+	// changing it via a per-node LOCAL save (as opposed to a fleet-wide
+	// Stage + Activate push) silently splits this node onto a different key
+	// than the rest of the mesh: it will fail to seal/open any subsequent
+	// slot 70/71 package until every other node receives the identical
+	// change. Log it prominently and surface it back to the caller so the
+	// UI can warn the operator, rather than let this happen invisibly.
+	var warnings []string
+	if newPW, ok := updates["admin_password"]; ok && newPW != existingConf["admin_password"] {
+		log.Printf("admin: WARNING - admin_password changed via local /api/admin/save; this node now derives a DIFFERENT fleet crypto key than the rest of the mesh until every other node receives this exact change via a fleet-wide Stage+Activate push")
+		warnings = append(warnings, "admin_password changed locally — this node now uses a different fleet encryption key than the rest of the mesh until this same change is pushed fleet-wide via Stage + Activate")
+	}
 
 	// Apply hostname. Skip when no prefix is configured — falling back to
 	// the "node" default here is how nodes ended up renamed to node-<mac>.
@@ -1339,7 +1364,7 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		exec.Command("/usr/local/bin/mesh-hook", args...).Run()
 	}()
 
-	writeJSON(w, 200, map[string]interface{}{"ok": true, "saved": saved, "applied": applied})
+	writeJSON(w, 200, map[string]interface{}{"ok": true, "saved": saved, "applied": applied, "warnings": warnings})
 }
 
 func apiAdminStage(w http.ResponseWriter, r *http.Request) {
@@ -1354,8 +1379,32 @@ func apiAdminStage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Invalid config format"})
 		return
 	}
+	// See dropEmptySecrets's doc comment (admin.go): an empty secret value
+	// must never be interpreted as "blank this out," only as "this field
+	// was left untouched" (e.g. the staging form was populated from a
+	// redacted, pre-login /api/admin/status response).
+	dropEmptySecretsAny(configMap)
 
 	currentConf := loadKVFile(MeshConfFile)
+	if currentConf["admin_password"] == "" {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "admin_password must be set on this node before a fleet config can be securely staged"})
+		return
+	}
+
+	now := time.Now()
+	if now.Year() < 2025 {
+		// These boards have no RTC. Staging while the local clock looks
+		// unset would produce a staged_at that, once applied, becomes this
+		// node's new highestAppliedStagedAt watermark (see fleetreplay.go) —
+		// permanently poisoning it (e.g. far in the past, or worse, wildly
+		// wrong in a way that later looks like every subsequent legitimate
+		// push is a rollback). Refuse outright rather than risk creating a
+		// bad watermark that then requires SSH on every node to recover
+		// from.
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "local clock looks unset (system time is before 2025) — refusing to stage until the clock is correct"})
+		return
+	}
+
 	strConf := make(map[string]string)
 	for k, v := range configMap {
 		strConf[k] = fmt.Sprintf("%v", v)
@@ -1363,24 +1412,75 @@ func apiAdminStage(w http.ResponseWriter, r *http.Request) {
 
 	version := makeConfigVersion(strConf)
 
-	dangerous := strConf["mesh_ssid"] != currentConf["mesh_ssid"] ||
-		strConf["mesh_key"] != currentConf["mesh_key"] ||
-		strConf["ipv4_network"] != confGet(currentConf, "ipv4_network", "10.30.2.0/24")
+	// Reuses the exact same fleetDangerousKeys list AND comparison function
+	// apiAdminActivate's real safety gate (and assembleAdminStatus's
+	// ack_status) use -- previously this was a separately hardcoded 3-key
+	// check (missing admin_password), so staging an admin_password rotation
+	// could momentarily show dangerous:false in the immediate stage
+	// response before ack_status caught up a few seconds later. The actual
+	// Activate-time gate was never affected; this only fixes the stage-time
+	// UI signal to match it.
+	dangerous := len(dangerousKeyChanges(configMap, currentConf)) > 0
 
 	prefs := loadFleetPreferences()
 
+	pkgID, err := newPkgID()
+	if err != nil {
+		log.Printf("fleet: failed to generate pkg_id for stage: %v", err)
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "internal error generating package id"})
+		return
+	}
+
+	// staged_at must be strictly greater than the highest staged_at this
+	// node has ever actually applied — never merely time.Now().Unix() on
+	// its own. A clock a few seconds slow, or two stages within the same
+	// wall-clock second, would otherwise produce a staged_at at or below
+	// the watermark, and every node (including this one) would reject the
+	// freshly-staged package outright as a rollback replay (fleetProcessPackage).
+	stagedAt := now.Unix()
+	if wm := highestAppliedStagedAt(); wm >= stagedAt {
+		stagedAt = wm + 1
+	}
+
+	// NOTE: this ordering is security-load-bearing for admin_password
+	// rotation. fleetSaveAndStage() in fleet.js calls /api/admin/preferences
+	// (fleet mesh-config prefs only) and then THIS endpoint — it never calls
+	// /api/admin/save first. So the package below is always sealed
+	// (broadcastConfigPackage, admin.go) under the admin_password that is
+	// CURRENTLY on disk, and a new password travels to every other node only
+	// inside this ciphertext. If that frontend ordering ever changes (a
+	// local save of the new password before staging), a rotation would
+	// silently seal itself under the password it's trying to replace.
 	pkg := map[string]interface{}{
 		"version":       version,
 		"config":        configMap,
 		"profiles":      prefs.Profiles,
 		"node_profiles": prefs.NodeProfiles,
 		"staged_by":     getMyHostname(),
-		"staged_at":     time.Now().Unix(),
+		"staged_at":     stagedAt,
+		"pkg_id":        pkgID,
+		"sender_mac":    getMyMAC(),
+		"expires_at":    now.Add(1 * time.Hour).Unix(),
 	}
 
-	savePendingConfig(pkg)
-	os.WriteFile(AckVersionFile, []byte(version), 0644)
-	broadcastConfigPackage(pkg)
+	if !broadcastConfigPackage(pkg) {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to seal/broadcast staged config (admin_password unset, or alfred error) — check logs"})
+		return
+	}
+	// Check both writes before declaring success: if either fails, this
+	// node has already broadcast a package it can't locally track as
+	// pending/ACKed — better to surface that loudly than silently proceed
+	// as if staging fully succeeded (mirrors apiAdminActivate's pattern).
+	if err := savePendingConfig(pkg); err != nil {
+		log.Printf("admin: failed to save pending config after staging broadcast: %v", err)
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "staged config was broadcast but failed to save locally — check logs"})
+		return
+	}
+	if err := os.WriteFile(AckVersionFile, []byte(version), 0644); err != nil {
+		log.Printf("admin: failed to write local ack version after staging: %v", err)
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "staged config was broadcast but failed to record local ACK — check logs"})
+		return
+	}
 	go fleetMcastSendAck(version)
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "version": version, "dangerous": dangerous})
@@ -1399,33 +1499,63 @@ func apiAdminActivate(w http.ResponseWriter, r *http.Request) {
 	var pkg map[string]interface{}
 	json.Unmarshal(pending, &pkg)
 
+	version := jsonStr(pkg, "version", "")
+
 	if !force {
-		version := jsonStr(pkg, "version", "")
-		registry := parseRegistry()
-		var notAcked []string
-		for _, rn := range registry {
-			if rn["CONFIG_ACK_VERSION"] != version {
-				name := rn["HOSTNAME"]
-				if name == "" {
-					name = rn["IPV4_ADDRESS"]
-				}
-				notAcked = append(notAcked, name)
-			}
-		}
-		if len(notAcked) > 0 {
+		// ackStatus is the SAME merged registry+local-ack+multicast, ACTIVE-
+		// filtered computation assembleAdminStatus uses for the UI's
+		// Activate-button state — see admin.go for why using two different
+		// computations here used to let the UI show 4/4 while this gate
+		// still rejected.
+		acked, total, missing := ackStatus(version)
+		if total > 0 && acked < total {
 			writeJSON(w, 400, map[string]interface{}{
 				"ok":    false,
-				"error": fmt.Sprintf("%d nodes have not ACKed: %s", len(notAcked), strings.Join(notAcked, ", ")),
+				"error": fmt.Sprintf("%d nodes have not ACKed: %s", len(missing), strings.Join(missing, ", ")),
 			})
 			return
+		}
+
+		// Even with full ACK from every ACTIVE node, a push that changes the
+		// fleet crypto key or partitions mesh membership/addressing must not
+		// silently orphan a node that's currently OFFLINE — it can come back
+		// unable to open any future fleet package (or rejoin the mesh at
+		// all) under the new value, with no operator visibility. Use the
+		// same dangerousKeyChanges/offlineNodeNames pair assembleAdminStatus
+		// already surfaces in ack_status, so the UI and this gate agree.
+		if configRaw, ok := pkg["config"].(map[string]interface{}); ok {
+			if changedKeys := dangerousKeyChanges(configRaw, loadKVFile(MeshConfFile)); len(changedKeys) > 0 {
+				if offline := offlineNodeNames(); len(offline) > 0 {
+					writeJSON(w, 400, map[string]interface{}{
+						"ok": false,
+						"error": fmt.Sprintf("this push changes %s while %d node(s) are offline, risking orphaning them: %s — use force to proceed anyway",
+							strings.Join(changedKeys, ", "), len(offline), strings.Join(offline, ", ")),
+						"dangerous_keys": changedKeys,
+						"offline_nodes":  offline,
+					})
+					return
+				}
+			}
 		}
 	}
 
 	activateAt := time.Now().Add(60 * time.Second).Unix()
 	pkg["activate_at"] = activateAt
-	savePendingConfig(pkg)
-	broadcastConfigPackage(pkg)
-	version := jsonStr(pkg, "version", "")
+
+	// Check broadcastConfigPackage's return before persisting anything
+	// locally: it can fail (seal error, alfred error, or admin_password
+	// unset), and if it does, this node must NOT be left believing
+	// activation is in progress while the rest of the fleet never received
+	// it — mirrors apiAdminStage's already-fixed pattern.
+	if !broadcastConfigPackage(pkg) {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to seal/broadcast activation (admin_password unset, or alfred error) — check logs; this node has NOT been marked to activate"})
+		return
+	}
+	if err := savePendingConfig(pkg); err != nil {
+		log.Printf("admin: failed to save pending config after activation broadcast: %v", err)
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "activation was broadcast but failed to save locally — check logs"})
+		return
+	}
 	go fleetMcastSendActivation(version, activateAt)
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "activate_at": activateAt})
@@ -1885,7 +2015,21 @@ func apiTerminalReboot(w http.ResponseWriter, r *http.Request) {
 
 // --- Auth ---
 
-func checkAuth(w http.ResponseWriter, r *http.Request) bool {
+// isAuthed reports whether the request would pass checkAuth's gate, without
+// writing a response on failure. Used by read paths (like the admin status
+// endpoint) that need to redact secrets for an unauthenticated caller rather
+// than reject the whole request outright.
+//
+// DEPLOYMENT PREREQUISITE (flagged repeatedly across review passes — must
+// not get lost before cutover): MANET/provisioning/firstrun.sh.template
+// provisions require_auth=n by default. With require_auth=n, this function
+// returns true for EVERY caller unconditionally — nothing in this file gets
+// redacted and every /api/admin/* + /api/control/* endpoint is wide open to
+// anyone who can reach this node's HTTP port. require_auth=y (with a real
+// admin_password set) must be part of the cutover to this fleet-crypto
+// scheme on every node; it is a fleet configuration precondition, not
+// something this code can enforce itself.
+func isAuthed(r *http.Request) bool {
 	conf := loadKVFile(MeshConfFile)
 	ra := strings.ToLower(conf["require_auth"])
 	if ra != "y" && ra != "yes" && ra != "1" {
@@ -1896,11 +2040,15 @@ func checkAuth(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	cookie, err := r.Cookie(PerfAuthCookie)
-	if err != nil || cookie.Value != getPerfAuthToken() {
-		writeJSON(w, 401, map[string]interface{}{"ok": false, "error": "Authentication required"})
-		return false
+	return err == nil && cookie.Value == getPerfAuthToken()
+}
+
+func checkAuth(w http.ResponseWriter, r *http.Request) bool {
+	if isAuthed(r) {
+		return true
 	}
-	return true
+	writeJSON(w, 401, map[string]interface{}{"ok": false, "error": "Authentication required"})
+	return false
 }
 
 func requireAuth(next http.HandlerFunc) http.HandlerFunc {
