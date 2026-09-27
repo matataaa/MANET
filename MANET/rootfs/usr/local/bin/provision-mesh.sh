@@ -270,7 +270,7 @@ EOF
 # This will be re-written by radio-setup and become specific to the chosen region
 cat << EOF > /etc/modprobe.d/morse.conf
 options morse country=US
-options morse spi_clock_speed=1500000
+options morse spi_clock_speed=15000000
 options morse bcf=bcf_fgh100mhaamd.bin
 options morse enable_mcast_whitelist=0 enable_mcast_rate_control=1
 EOF
