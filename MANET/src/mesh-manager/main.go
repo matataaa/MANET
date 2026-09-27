@@ -24,7 +24,6 @@ import (
 const (
 	controlIface     = "br0"
 	registryFile     = "/var/run/mesh_node_registry"
-	claimedChunksFile = "/tmp/claimed_chunks.txt"
 	persistentState  = "/etc/mesh_ipv4_state"
 	meshConfFile     = "/etc/mesh.conf"
 	forceConfFile    = "/etc/manet/mesh-ip-force.conf"
@@ -170,19 +169,33 @@ func prefixLen(network string) string {
 
 // --- System helpers ---
 
+// myMAC must match mesh-registry's getMyMAC() exactly: bat0 first, falling
+// back to br0 only if bat0 is absent. This is the MAC_ADDRESS every peer
+// publishes and the value the tie-breaker compares against — bat0's MAC is
+// explicitly set (batman-if-setup.sh) while br0's is machine-id-derived by
+// systemd-networkd, so the two interfaces do NOT share a MAC on real
+// hardware. Comparing this node's br0 MAC against a peer's published bat0
+// MAC made the tie-break a coin flip instead of deterministic. Normalized to
+// lowercase so every comparison downstream is case-consistent.
 func myMAC() string {
-	data, _ := os.ReadFile("/sys/class/net/" + controlIface + "/address")
-	return strings.TrimSpace(string(data))
+	for _, ifc := range []string{"bat0", controlIface} {
+		data, err := os.ReadFile("/sys/class/net/" + ifc + "/address")
+		if m := strings.ToLower(strings.TrimSpace(string(data))); err == nil && m != "" {
+			return m
+		}
+	}
+	return ""
 }
 
 func macIsLocal(mac string) bool {
 	if mac == "" {
 		return false
 	}
+	mac = strings.ToLower(mac)
 	matches, _ := filepath.Glob("/sys/class/net/*/address")
 	for _, path := range matches {
 		data, err := os.ReadFile(path)
-		if err == nil && strings.TrimSpace(string(data)) == mac {
+		if err == nil && strings.ToLower(strings.TrimSpace(string(data))) == mac {
 			return true
 		}
 	}
@@ -205,9 +218,12 @@ func br0IPs() []string {
 // --- Registry parsing ---
 
 type registryNode struct {
-	Hostname string
-	IP       string
-	MACs     string
+	Hostname  string
+	IP        string
+	MAC       string // MAC_ADDRESS: the node's single primary identity (bat0/br0)
+	MACs      string // MAC_ADDRESSES: comma list of all of the node's interface MACs
+	IPv4Chunk string
+	NodeState string
 }
 
 var regRE = regexp.MustCompile(`NODE_([A-Fa-f0-9]+)_([A-Z0-9_]+)='([^']*)'`)
@@ -226,8 +242,14 @@ func parseRegistry() map[string]registryNode {
 			n.Hostname = val
 		case "IPV4_ADDRESS":
 			n.IP = val
+		case "MAC_ADDRESS":
+			n.MAC = val
 		case "MAC_ADDRESSES":
 			n.MACs = val
+		case "IPV4_CHUNK":
+			n.IPv4Chunk = val
+		case "NODE_STATE":
+			n.NodeState = val
 		}
 		nodes[id] = n
 	}
@@ -257,6 +279,9 @@ type ipManager struct {
 	pChunk    int
 	pNetwork  string
 	pValid    bool
+
+	startupDone bool
+	stop        <-chan struct{}
 }
 
 func newIPManager() *ipManager {
@@ -308,35 +333,66 @@ func newIPManager() *ipManager {
 	return im
 }
 
+// writeChunkFile atomically replaces myChunkFile's contents. A plain
+// os.WriteFile truncates the file in place, which can expose a briefly
+// empty read to mesh-registry's getIPv4Chunk() if it reads at exactly the
+// wrong moment (mesh-registry ticks every 15s independent of this process,
+// so there's no coordination between the two); write-to-temp-then-rename
+// avoids that window since rename is atomic.
+func writeChunkFile(chunk int) {
+	tmp := myChunkFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.Itoa(chunk)), 0644); err != nil {
+		log.Printf("write chunk file: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, myChunkFile); err != nil {
+		log.Printf("rename chunk file: %v", err)
+	}
+}
+
 func (im *ipManager) savePersistent() {
 	content := fmt.Sprintf("PERSISTENT_IPV4=\"%s\"\nPERSISTENT_CHUNK=\"%d\"\nPERSISTENT_NETWORK=\"%s\"\n",
 		im.pIP, im.pChunk, im.pNetwork)
 	os.WriteFile(persistentState, []byte(content), 0644)
 }
 
-func (im *ipManager) claimedChunks() map[int]string {
+// claimedChunks returns the IPv4 chunk each ACTIVE peer currently holds,
+// keyed by chunk number and mapping to that peer's primary MAC (MAC_ADDRESS).
+// This is rebuilt fresh from the registry every call — mesh-registry ticks
+// every 15s, so this is the only real source of truth for "who holds what
+// chunk right now" (the old /tmp/claimed_chunks.txt this replaced was never
+// written by anything in the Go stack). mac is this node's own identity, so
+// its own registry entry (if already published) never shows up as a
+// collision against itself.
+func (im *ipManager) claimedChunks(mac string) map[int]string {
 	claimed := make(map[int]string)
-	data, err := os.ReadFile(claimedChunksFile)
-	if err != nil {
-		return claimed
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		parts := strings.SplitN(strings.TrimSpace(line), ",", 2)
-		if len(parts) == 2 {
-			c, _ := strconv.Atoi(parts[0])
-			claimed[c] = parts[1]
+	mac = strings.ToLower(mac)
+	for _, n := range parseRegistry() {
+		if n.NodeState != "ACTIVE" || n.IPv4Chunk == "" {
+			continue
 		}
+		if strings.ToLower(n.MAC) == mac || strings.Contains(strings.ToLower(n.MACs), mac) {
+			continue
+		}
+		c, err := strconv.Atoi(n.IPv4Chunk)
+		if err != nil {
+			continue
+		}
+		// Store lowercased: myMAC() and every comparison against this map
+		// (macIsLocal, the mac > claimedMAC tie-break) is lowercase, and
+		// string ordering has to match on both sides for the tie-break to be
+		// deterministic rather than case-dependent.
+		claimed[c] = strings.ToLower(n.MAC)
 	}
 	return claimed
 }
 
-func (im *ipManager) randomAvailableChunk() (int, bool) {
+func (im *ipManager) randomAvailableChunk(claimed map[int]string) (int, bool) {
 	mc := maxChunks(im.network, im.chunkSize)
 	if mc < 1 {
 		log.Printf("Network too small for chunk_size=%d", im.chunkSize)
 		return 0, false
 	}
-	claimed := im.claimedChunks()
 	var available []int
 	for i := 0; i < mc; i++ {
 		if _, ok := claimed[i]; !ok {
@@ -450,10 +506,114 @@ func (im *ipManager) cleanupStaleAddrs() {
 	}
 }
 
+// Startup discovery bounds how long a cold boot waits before claiming an
+// IPv4 chunk, so we don't race a peer whose identity/telemetry just hasn't
+// propagated over Alfred yet (a fresh chunk pick is otherwise indistinguishable
+// from a genuine collision until the next mesh-registry tick). It always
+// waits at least one Alfred sync period; if BATMAN can already see peers that
+// haven't shown up in the registry yet, it extends up to
+// startupDiscoveryLimit before giving up and allocating with whatever claims
+// are visible so far.
+//
+// The deadline is anchored to this ipManager's construction (mesh-manager
+// process start), not to bat0/alfred actually being up. On a slow HaLow cold
+// boot, batman-adv/alfred may not be ready until partway through — or even
+// past — startupSettleWindow, which shrinks the effective settle time this
+// wait provides. Gating the timer's start on this node's own identity first
+// appearing in the registry was considered, but that couples this wait's
+// correctness to mesh-registry's own startup ordering and would need its own
+// bounded fallback (what if this node's identity never appears?) — not worth
+// the added complexity for what's already a best-effort settle window, not a
+// correctness guarantee. Left as-is.
+const (
+	startupSettleWindow   = 10 * time.Second
+	startupDiscoveryLimit = 20 * time.Second
+	startupPollInterval   = 2 * time.Second
+)
+
+var originatorRE = regexp.MustCompile(`(?m)^\s*\*?\s*([0-9a-fA-F:]{17})`)
+
+// batmanOriginators returns the set of originator MACs batman-adv currently
+// reports, independent of what the registry (Alfred gossip) still remembers.
+func batmanOriginators() map[string]bool {
+	peers := make(map[string]bool)
+	out, err := run(5*time.Second, "batctl", "o")
+	if err != nil {
+		return peers
+	}
+	for _, m := range originatorRE.FindAllStringSubmatch(out, -1) {
+		peers[strings.ToLower(m[1])] = true
+	}
+	return peers
+}
+
+// registryHasIdentity reports whether some ACTIVE registry entry with a
+// published hostname (i.e. identity has actually propagated, not just a
+// stale/partial record) lists mac among its interfaces. Requiring
+// NODE_STATE=='ACTIVE' matters here: mesh-registry reloads a 7-day
+// known-nodes cache at startup and republishes recently-seen-but-currently-
+// OFFLINE peers with a populated hostname, which would otherwise let a
+// leftover cached entry satisfy this check before the peer's identity has
+// actually reappeared on this boot.
+func registryHasIdentity(mac string, nodes map[string]registryNode) bool {
+	for _, n := range nodes {
+		if n.Hostname == "" || n.NodeState != "ACTIVE" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(n.MACs), mac) {
+			return true
+		}
+	}
+	return false
+}
+
+// waitForStartupDiscovery blocks (bounded) once per boot before this node
+// claims its first IPv4 chunk. Peer membership changes never restart the
+// deadline: start is fixed on entry and never reset for the life of this
+// call. It returns early if stop is closed, so shutdown during the wait
+// isn't delayed; the returned bool reports whether that's what happened, so
+// the caller can avoid claiming a chunk (or marking startup discovery done)
+// during a shutdown that interrupted the wait.
+func (im *ipManager) waitForStartupDiscovery() (interrupted bool) {
+	start := time.Now()
+	for {
+		elapsed := time.Since(start)
+		peers := batmanOriginators()
+		nodes := parseRegistry()
+		missing := 0
+		for mac := range peers {
+			if !registryHasIdentity(mac, nodes) {
+				missing++
+			}
+		}
+
+		if elapsed >= startupSettleWindow && missing == 0 {
+			log.Printf("Startup discovery complete after %.0fs (%d BATMAN peers)", elapsed.Seconds(), len(peers))
+			return false
+		}
+		if elapsed >= startupDiscoveryLimit {
+			log.Printf("Startup discovery deadline reached after %.0fs; %d/%d peers still missing from the registry, allocating anyway", elapsed.Seconds(), missing, len(peers))
+			return false
+		}
+		if elapsed < startupSettleWindow {
+			log.Printf("Startup discovery: waiting for Alfred sync (%.0fs remaining)", (startupSettleWindow - elapsed).Seconds())
+		} else {
+			log.Printf("Startup discovery: waiting for %d/%d peer identities (%.0fs until deadline)", missing, len(peers), (startupDiscoveryLimit - elapsed).Seconds())
+		}
+
+		select {
+		case <-im.stop:
+			log.Printf("Startup discovery interrupted by shutdown after %.0fs", elapsed.Seconds())
+			return true
+		case <-time.After(startupPollInterval):
+		}
+	}
+}
+
 func (im *ipManager) run() {
 	mac := myMAC()
 	if mac == "" {
-		log.Printf("Cannot read MAC from %s", controlIface)
+		log.Printf("Cannot read MAC from bat0 or %s", controlIface)
 		return
 	}
 
@@ -467,16 +627,37 @@ func (im *ipManager) run() {
 
 	configured := currentIP != ""
 	if configured && !im.pValid && isServiceReserved(currentIP, im.network) {
+		// currentIP itself is no longer read anywhere below this point (the
+		// CONFIGURED branch's conflict check now matches on chunk number,
+		// not on this string) — only the configured flag matters from here.
 		configured = false
-		currentIP = ""
 	}
 
 	pLen := prefixLen(im.network)
+
+	// startupDone gates waitForStartupDiscovery to at most once per process
+	// lifetime. It's decided here, before either branch below runs, so a
+	// node that's already configured on its very first pass never re-runs
+	// the wait later just because it lost a chunk tie-break mid-uptime and
+	// went unconfigured on a subsequent tick.
+	firstPass := !im.startupDone
+	if firstPass && !configured {
+		if im.waitForStartupDiscovery() {
+			// Shutdown interrupted the wait: return without claiming a
+			// chunk or touching any state, so a real (non-shutdown) startup
+			// attempt still happens on the next actual start.
+			return
+		}
+	}
+	if firstPass {
+		im.startupDone = true
+	}
 
 	if !configured {
 		// UNCONFIGURED — select and claim a chunk
 		chunk := -1
 		usePersistent := false
+		claimed := im.claimedChunks(mac)
 
 		if im.pValid && im.pIP != "" {
 			if im.pNetwork != "" && im.pNetwork != im.network {
@@ -484,8 +665,12 @@ func (im *ipManager) run() {
 				im.pValid = false
 				im.savePersistent()
 			} else if ipInCIDR(im.pIP, im.network) {
-				chunk = im.pChunk
-				usePersistent = true
+				if claimant, taken := claimed[im.pChunk]; taken {
+					log.Printf("Persisted chunk %d now claimed by peer %s, selecting a new chunk instead", im.pChunk, claimant)
+				} else {
+					chunk = im.pChunk
+					usePersistent = true
+				}
 			} else {
 				im.pValid = false
 				im.savePersistent()
@@ -494,14 +679,13 @@ func (im *ipManager) run() {
 
 		if chunk < 0 {
 			var ok bool
-			chunk, ok = im.randomAvailableChunk()
+			chunk, ok = im.randomAvailableChunk(claimed)
 			if !ok {
 				return
 			}
 		}
 
 		if !usePersistent {
-			claimed := im.claimedChunks()
 			if _, taken := claimed[chunk]; taken {
 				log.Printf("Chunk %d in use, will retry", chunk)
 				return
@@ -528,44 +712,43 @@ func (im *ipManager) run() {
 		im.pValid = true
 		im.savePersistent()
 
-		os.WriteFile(myChunkFile, []byte(strconv.Itoa(chunk)), 0644)
+		writeChunkFile(chunk)
 		log.Printf("Successfully claimed chunk %d", chunk)
 		go meshHook("ip-change", "IP="+c.Primary.String(), "GATEWAY="+c.Secondary.String())
 	} else {
-		// CONFIGURED — check for conflicts
-		claimed := im.claimedChunks()
-		for chunkNum, claimedMAC := range claimed {
-			c, ok := getChunkIPs(im.network, chunkNum, im.chunkSize)
-			if !ok {
-				continue
-			}
-			if c.Primary.String() == currentIP && !macIsLocal(claimedMAC) {
-				log.Printf("CONFLICT for %s! MAC: %s chunk %d", currentIP, claimedMAC, chunkNum)
-				if mac > claimedMAC {
-					log.Printf("Won tie-breaker, defending chunk")
-				} else {
-					log.Printf("Lost tie-breaker, releasing chunk")
-					if im.pValid {
-						pc, ok := getChunkIPs(im.network, im.pChunk, im.chunkSize)
-						if ok {
-							run(5*time.Second, "ip", "addr", "del", pc.Primary.String()+"/"+pLen, "dev", controlIface)
-							run(5*time.Second, "ip", "addr", "del", pc.Secondary.String()+"/"+pLen, "dev", controlIface)
-						}
+		// CONFIGURED — check for conflicts. Match by chunk number
+		// (im.pChunk, this node's own record of which chunk it holds)
+		// rather than by comparing a peer's derived primary IP string
+		// against our current br0 address — chunkNum is ground truth and
+		// doesn't depend on br0's address happening to still read back
+		// exactly as expected.
+		claimed := im.claimedChunks(mac)
+		if claimedMAC, ok := claimed[im.pChunk]; ok && im.pChunk >= 0 && !macIsLocal(claimedMAC) {
+			log.Printf("CONFLICT for chunk %d! peer MAC: %s", im.pChunk, claimedMAC)
+			if mac > claimedMAC {
+				log.Printf("Won tie-breaker, defending chunk")
+			} else {
+				log.Printf("Lost tie-breaker, releasing chunk")
+				if im.pValid {
+					pc, ok := getChunkIPs(im.network, im.pChunk, im.chunkSize)
+					if ok {
+						run(5*time.Second, "ip", "addr", "del", pc.Primary.String()+"/"+pLen, "dev", controlIface)
+						run(5*time.Second, "ip", "addr", "del", pc.Secondary.String()+"/"+pLen, "dev", controlIface)
 					}
-					im.pIP = ""
-					im.pChunk = -1
-					im.pNetwork = ""
-					im.pValid = false
-					im.savePersistent()
-					os.Remove(myChunkFile)
 				}
-				return
+				im.pIP = ""
+				im.pChunk = -1
+				im.pNetwork = ""
+				im.pValid = false
+				im.savePersistent()
+				os.Remove(myChunkFile)
 			}
+			return
 		}
 
 		// No conflict — ensure addresses and dnsmasq are correct
 		if im.pValid && im.pChunk >= 0 {
-			os.WriteFile(myChunkFile, []byte(strconv.Itoa(im.pChunk)), 0644)
+			writeChunkFile(im.pChunk)
 			c, ok := getChunkIPs(im.network, im.pChunk, im.chunkSize)
 			if ok {
 				im.ensureAddr(c.Primary.String())
@@ -956,9 +1139,21 @@ func main() {
 	}()
 
 	im := newIPManager()
+	im.stop = stop
 
 	// Initial IP allocation
 	im.run()
+
+	// im.run() can return early because shutdown interrupted the startup
+	// discovery wait (waitForStartupDiscovery). Don't let a shutdown in
+	// progress run the rest of initial setup — updateMeshDNS's first call
+	// always restarts dnsmasq (its change-gate is empty on startup), which
+	// can otherwise hold up shutdown by several seconds for no reason.
+	select {
+	case <-stop:
+		return
+	default:
+	}
 
 	// Initial hosts + DNS + QoS
 	updateHosts()
