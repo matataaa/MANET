@@ -2,15 +2,19 @@ package main
 
 import (
 	"bufio"
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -39,6 +43,15 @@ const (
 	RefreshMS         = 15000
 	PerfAuthCookie    = "manet_perf_auth"
 	PerfAuthMaxAge    = 15552000
+	// FleetPeerAuthHeader carries a mintFleetPeerToken() value on the
+	// server-to-server terminal proxy hop (handleTerminalProxy -> target's
+	// /ws/terminal). It is checked as an alternative to a session cookie,
+	// scoped only to that one route -- see requireAuthOrPeerToken in
+	// api.go. The token itself is a short-lived, target-bound HMAC (see
+	// mintFleetPeerToken/verifyFleetPeerToken below), not a static secret,
+	// so intercepting one grants at most fleetPeerTokenMaxSkew of replay
+	// against the one target it was minted for.
+	FleetPeerAuthHeader = "X-Manet-Fleet-Peer-Auth"
 )
 
 var (
@@ -533,6 +546,161 @@ func getPerfAuthToken() string {
 	salt := machineTokenSalt()
 	h := sha256.Sum256([]byte(fmt.Sprintf("%s|perf-local|v1|%s", pw, salt)))
 	return fmt.Sprintf("%x", h)
+}
+
+// fleetPeerTokenMaxSkew bounds how old (or how far in the future, to allow
+// for some clock drift between nodes) a fleet peer token's timestamp may be
+// before verifyFleetPeerToken rejects it. Mesh nodes run periodic time sync
+// (see MEMORY: "Upstream sync 2026-08-21 / PR #12" -- mesh time sync), so
+// 30s is generous relative to expected drift; if a fleet is ever seen with
+// worse clock skew than that, the fix is to fix the time sync, not to widen
+// this window (a wider window only weakens the replay protection this is
+// here for).
+const fleetPeerTokenMaxSkew = 30 * time.Second
+
+// fleetPeerTokenKey returns the shared secret behind fleet peer tokens, or
+// nil if this node is not eligible to mint/verify them. Gating on
+// require_auth here (mirroring isAuthed's own check) is deliberate and
+// load-bearing: a node provisioned with a real admin_password but
+// require_auth=n (firstrun.sh.template's default) would otherwise mint a
+// fully valid token for an unauthenticated caller, turning that one open
+// node into a relay that can reach every require_auth=y node in the fleet
+// with no password ever entered -- and, since the target of a proxy dial is
+// caller-controlled, hand the token itself to an arbitrary third party.
+//
+// The key is derived from deriveFleetKey (fleetcrypto.go's already
+// PBKDF2-hardened, 200000-iteration fleet-crypto key), via one more HMAC
+// with its own domain string -- deliberately NOT admin_password|mesh_ssid
+// directly. This fleet's peer TLS defaults to InsecureSkipVerify=true
+// (main.go), so an on-path mesh member (below admin level -- exactly the
+// threat model #36 was built for) can capture a token in transit; deriving
+// the peer-token key straight from the password would hand that attacker a
+// single unsalted HMAC key to brute-force admin_password at GPU speed,
+// undoing #36's PBKDF2 hardening entirely. Going through deriveFleetKey
+// means the same 200000-round cost applies here too, and since
+// deriveFleetKey caches its result, this costs nothing extra on the hot
+// path after the first call. admin_password and mesh_ssid are provisioned
+// identically across the fleet (unlike getPerfAuthToken's
+// machineTokenSalt, which is deliberately per-machine and therefore can't
+// be precomputed cross-node), so every node that IS eligible derives the
+// same key independently.
+func fleetPeerTokenKey() []byte {
+	conf := loadKVFile(MeshConfFile)
+	ra := strings.ToLower(conf["require_auth"])
+	if ra != "y" && ra != "yes" && ra != "1" {
+		return nil
+	}
+	pw := getProvisionedPassword(conf)
+	if pw == "" {
+		return nil
+	}
+	fk, err := deriveFleetKey(pw, conf["mesh_ssid"])
+	if err != nil {
+		return nil
+	}
+	m := hmac.New(sha256.New, fk)
+	m.Write([]byte("manet-fleet-peer-terminal-key|v1"))
+	return m.Sum(nil)
+}
+
+// fleetPeerTokenMAC computes the HMAC over a timestamp+target-bound message.
+// Binding the target host into the signed message means a token minted for
+// one target cannot be replayed against a different one.
+func fleetPeerTokenMAC(key []byte, ts int64, targetHost string) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(fmt.Sprintf("fleet-peer-terminal|v1|%d|%s", ts, targetHost)))
+	return mac.Sum(nil)
+}
+
+// mintFleetPeerTokenAt builds a "<unix-ts>|<hex-hmac>" token for targetHost
+// at the given timestamp, or "" if this node isn't eligible to mint one
+// (see fleetPeerTokenKey). Split out from mintFleetPeerToken so tests can
+// mint an already-expired, but otherwise validly-signed, token to exercise
+// verifyFleetPeerToken's expiry check for real.
+func mintFleetPeerTokenAt(ts int64, targetHost string) string {
+	key := fleetPeerTokenKey()
+	if len(key) == 0 {
+		return ""
+	}
+	mac := fleetPeerTokenMAC(key, ts, targetHost)
+	return fmt.Sprintf("%d|%x", ts, mac)
+}
+
+// mintFleetPeerToken mints a fleet peer token for targetHost, timestamped
+// now. Used only to authenticate the server-to-server terminal proxy hop in
+// handleTerminalProxy -- not a general auth token.
+func mintFleetPeerToken(targetHost string) string {
+	return mintFleetPeerTokenAt(time.Now().Unix(), targetHost)
+}
+
+// verifyFleetPeerToken checks a token received on the receiving end of the
+// terminal proxy hop (requireAuthOrPeerToken) against targetHost -- which
+// must be the *receiving* node's own address as the client addressed it
+// (r.Host), since that's what the token was bound to at mint time. Note:
+// this function only checks the signature and freshness of the token
+// against the CLAIMED targetHost -- it does not itself verify that
+// targetHost is actually this node's address. That check is
+// hostMatchesLocalAddr, which the caller (requireAuthOrPeerToken) must run
+// first: the Host header is sender-controlled, so without that separate
+// check, "binding" to it would be a comment claiming protection that
+// doesn't exist.
+func verifyFleetPeerToken(token, targetHost string) bool {
+	key := fleetPeerTokenKey()
+	if len(key) == 0 || token == "" {
+		return false
+	}
+	tsStr, macHex, ok := strings.Cut(token, "|")
+	if !ok {
+		return false
+	}
+	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil {
+		return false
+	}
+	now := time.Now().Unix()
+	maxSkew := int64(fleetPeerTokenMaxSkew / time.Second)
+	if ts < now-maxSkew || ts > now+maxSkew {
+		return false
+	}
+	got, err := hex.DecodeString(macHex)
+	if err != nil {
+		return false
+	}
+	want := fleetPeerTokenMAC(key, ts, targetHost)
+	return hmac.Equal(got, want)
+}
+
+// hostMatchesLocalAddr reports whether hostport (typically a request's
+// r.Host, e.g. "10.30.2.181", "10.30.2.181:8443", or "[fe80::1]:8443")
+// names one of this node's own network addresses, per
+// net.InterfaceAddrs(). This is what actually enforces the fleet peer
+// token's target binding -- the sender's Host header is otherwise
+// self-reported and unverified.
+func hostMatchesLocalAddr(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i] // strip IPv6 zone, if present
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok || !ipNet.IP.Equal(ip) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // --- Network helpers ---

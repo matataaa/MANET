@@ -66,7 +66,22 @@ func handleTerminalProxy(client *websocket.Conn, target string) {
 		TLSClientConfig:   peerTLSConfig,
 		EnableCompression: true,
 	}
-	remote, _, err := dialer.Dial(remoteURL, nil)
+	// Mint the peer token against the *parsed* authority (u.Host), not the
+	// raw target string: url.Parse normalizes bracket/zone handling, so a
+	// zoned IPv6 target like "fe80::1%bat0" is bound the same way it will
+	// arrive at the target's own HTTP server (zone stripped) -- minting
+	// against the raw string would sign a value that r.Host there could
+	// never match, causing a false 401 even with a correct password and a
+	// fresh timestamp.
+	var reqHeader http.Header
+	if u, perr := url.Parse(remoteURL); perr == nil {
+		if token := mintFleetPeerToken(u.Host); token != "" {
+			reqHeader = http.Header{FleetPeerAuthHeader: {token}}
+		}
+	} else {
+		log.Printf("terminal proxy: parse target %q: %v", target, perr)
+	}
+	remote, _, err := dialer.Dial(remoteURL, reqHeader)
 	if err != nil {
 		log.Printf("terminal proxy dial %s: %v", target, err)
 		client.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\x1b[31mFailed to connect to %s: %v\x1b[0m\r\n", target, err)))
@@ -435,7 +450,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	// WebSocket
-	mux.HandleFunc("/ws/terminal", requireAuth(handleTerminal))
+	mux.HandleFunc("/ws/terminal", requireAuthOrPeerToken(handleTerminal))
 	mux.HandleFunc("/ws/logs", handleLogs)
 	mux.HandleFunc("/ws/voice", handleVoiceWS)
 
