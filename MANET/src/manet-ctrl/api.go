@@ -28,9 +28,15 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// maxJSONBody caps readBody. Every JSON request the UI sends is a few KiB;
+// without a cap, one oversized POST (several routes read the body before
+// checking auth) is buffered whole into memory. Applet uploads have their
+// own, larger limit (maxUploadSize).
+const maxJSONBody = 1 << 20
+
 func readBody(r *http.Request) map[string]interface{} {
 	m := make(map[string]interface{})
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, maxJSONBody))
 	if err != nil || len(body) == 0 {
 		return m
 	}
