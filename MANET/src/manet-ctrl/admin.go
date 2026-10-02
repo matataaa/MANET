@@ -270,6 +270,7 @@ func assembleAdminStatus(authed bool) AdminStatus {
 		"qos_cot_band":            confGet(conf, "qos_cot_band", "1"),
 		"qos_chat_band":           confGet(conf, "qos_chat_band", "2"),
 		"require_auth":            confGet(conf, "require_auth", "n"),
+		"ui_uplink_access":        confGet(conf, "ui_uplink_access", "n"),
 		"auto_update":             confGet(conf, "auto_update", "n"),
 		"update_url":              confGet(conf, "update_url", ""),
 		"auto_update_overlay":     confGet(conf, "auto_update_overlay", "n"),
