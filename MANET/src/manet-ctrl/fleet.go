@@ -243,6 +243,9 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	if updates["multicast_mode"] != "" {
 		applyMulticastMode(updates["multicast_mode"])
 	}
+	if _, ok := updates["ui_uplink_access"]; ok && updates["ui_uplink_access"] != existingConf["ui_uplink_access"] {
+		runUIFirewall()
+	}
 	if updates["voice_mic_volume"] != "" || updates["voice_speaker_volume"] != "" {
 		applyVoiceVolume(conf)
 	}
@@ -818,7 +821,7 @@ func fleetMcastListener() {
 		// compatibility reason to keep accepting it, and it required no
 		// mesh membership at all to exploit (br0 bridges bat0, and this
 		// listener's own multicast port is unfiltered by
-		// manet-ui-firewall.sh, which only covers TCP 80/5201).
+		// manet-ui-firewall.sh, which only covers TCP 80/443/5201).
 		conf := loadKVFile(MeshConfFile)
 		password := conf["admin_password"]
 		if password == "" {

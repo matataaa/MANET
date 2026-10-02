@@ -300,10 +300,10 @@ func assembleAdminStatus(authed bool) AdminStatus {
 
 	// admin_password, mesh_key, and lan_ap_key are secrets. This endpoint is
 	// registered with no auth gate (main.go) so the UI can render most of
-	// the status page before login, but manet-ui-firewall.sh only limits
-	// reachability to this node's own DHCP pool/localhost — that's still an
-	// untrusted device class (any associated EUD, not just an authenticated
-	// admin). Strip the secrets unless the caller already passed the same
+	// the status page before login, and manet-ui-firewall.sh only limits
+	// HTTPS reachability to the mesh side (any node and any EUD in the mesh,
+	// plus the uplink LAN when ui_uplink_access=y) — that's still an
+	// untrusted device class, not just an authenticated admin. Strip the secrets unless the caller already passed the same
 	// checkAuth gate the requireAuth-wrapped /api/admin/* and /api/control/*
 	// routes require (main.go). This must cover
 	// every place a secret can appear in this response, not just

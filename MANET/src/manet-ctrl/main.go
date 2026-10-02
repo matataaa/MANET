@@ -628,6 +628,7 @@ func main() {
 
 	voiceInitChannels()
 	go fleetConfigWatcher()
+	go uiFirewallLoop()
 	go fleetMcastListener()
 	go airtimeLoop()
 
