@@ -331,8 +331,12 @@ func TestRequireAuthOrPeerTokenStillAcceptsValidCookie(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	token, err := sessions.create("fleet-secret")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodGet, "/ws/terminal", nil)
-	req.AddCookie(&http.Cookie{Name: PerfAuthCookie, Value: getPerfAuthToken()})
+	req.AddCookie(&http.Cookie{Name: PerfAuthCookie, Value: token})
 	rr := httptest.NewRecorder()
 
 	handler(rr, req)

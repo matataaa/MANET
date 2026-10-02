@@ -238,7 +238,8 @@ DOCS_TABS.api = [
 '<h3>Authentication</h3>',
 '<table class="docs-table"><thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead><tbody>',
 '<tr><td>GET</td><td><code>/api/auth/status</code></td><td>Whether auth is required and whether the current session is authenticated</td></tr>',
-'<tr><td>POST</td><td><code>/api/perf-auth</code></td><td>Submit admin password, receive session cookie for authenticated access</td></tr>',
+'<tr><td>POST</td><td><code>/api/perf-auth</code></td><td>Submit admin password, receive a session cookie valid for 48 hours on this node. Five failed attempts per client (thirty per node) within a minute return 429</td></tr>',
+'<tr><td>POST</td><td><code>/api/logout</code></td><td>End the current session; other devices stay logged in</td></tr>',
 '</tbody></table>',
 
 '<h3>Performance Testing</h3>',

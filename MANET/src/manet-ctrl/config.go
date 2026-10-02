@@ -42,7 +42,6 @@ const (
 	AppliedConfigFile = "/var/lib/manet_config_applied"
 	RefreshMS         = 15000
 	PerfAuthCookie    = "manet_perf_auth"
-	PerfAuthMaxAge    = 15552000
 	// FleetPeerAuthHeader carries a mintFleetPeerToken() value on a
 	// server-to-server proxy hop (e.g. handleTerminalProxy -> target's
 	// /ws/terminal, handleLogsProxy -> target's /ws/logs). It is checked as
@@ -534,33 +533,8 @@ func parseAppletsBrief(s string) []AppletBrief {
 
 // --- Auth helpers ---
 
-func machineTokenSalt() string {
-	for _, path := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
-		data, err := os.ReadFile(path)
-		if err == nil {
-			s := strings.TrimSpace(string(data))
-			if s != "" {
-				return s
-			}
-		}
-	}
-	h, _ := os.Hostname()
-	return h
-}
-
 func getProvisionedPassword(conf map[string]string) string {
 	return conf["admin_password"]
-}
-
-func getPerfAuthToken() string {
-	conf := loadKVFile(MeshConfFile)
-	pw := getProvisionedPassword(conf)
-	if pw == "" {
-		return ""
-	}
-	salt := machineTokenSalt()
-	h := sha256.Sum256([]byte(fmt.Sprintf("%s|perf-local|v1|%s", pw, salt)))
-	return fmt.Sprintf("%x", h)
 }
 
 // fleetPeerTokenMaxSkew bounds how old (or how far in the future, to allow
@@ -595,9 +569,7 @@ const fleetPeerTokenMaxSkew = 30 * time.Second
 // means the same 200000-round cost applies here too, and since
 // deriveFleetKey caches its result, this costs nothing extra on the hot
 // path after the first call. admin_password and mesh_ssid are provisioned
-// identically across the fleet (unlike getPerfAuthToken's
-// machineTokenSalt, which is deliberately per-machine and therefore can't
-// be precomputed cross-node), so every node that IS eligible derives the
+// identically across the fleet, so every node that IS eligible derives the
 // same key independently.
 func fleetPeerTokenKey() []byte {
 	conf := loadKVFile(MeshConfFile)
