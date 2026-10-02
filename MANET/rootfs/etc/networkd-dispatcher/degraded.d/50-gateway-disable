@@ -1,0 +1,12 @@
+#!/bin/bash
+#
+# Degraded: the link is up but has no routable address (a DHCP renewal blip,
+# or a wired-EUD bridge port, which never has one). Not a loss of carrier,
+# so nothing is torn down here; the dispatcher only demotes a gateway whose
+# carrier is actually gone.
+#
+# The filename matches the cleanup script earlier releases installed here, so
+# an update replaces it.
+set -euo pipefail
+
+/usr/local/bin/manet-uplink-dispatch.sh degraded "${IFACE:-}"

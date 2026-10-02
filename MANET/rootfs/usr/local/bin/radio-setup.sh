@@ -1762,30 +1762,10 @@ systemctl enable node-manager.service
 systemctl daemon-reload
 systemctl enable --now nftables.service
 
-# Install scripts for auto gateway management (skip if source files are gone — already provisioned)
-if [ -d /root/networkd-dispatcher ]; then
-    cp /root/networkd-dispatcher/off /etc/networkd-dispatcher/off.d/50-gateway-disable
-    cp /root/networkd-dispatcher/off /etc/networkd-dispatcher/no-carrier.d/50-gateway-disable
-    cp /root/networkd-dispatcher/off /etc/networkd-dispatcher/degraded.d/50-gateway-disable
-    cp /root/networkd-dispatcher/carrier /etc/networkd-dispatcher/carrier.d/50-ethernet-detect
-fi
+# networkd-dispatcher hooks and ethernet-autodetect.service ship in the rootfs
+# overlay (see rootfs/etc/networkd-dispatcher/README.md); only fix modes here.
 chmod -R 755 /etc/networkd-dispatcher
 
-cat <<- EOF > /etc/systemd/system/ethernet-autodetect.service
-[Unit]
-Description=MANET Ethernet Hotplug Auto Detection
-After=systemd-networkd.service batman-enslave.service
-Wants=systemd-networkd.service
-ConditionPathExists=/usr/local/bin/ethernet-autodetect.sh
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/ethernet-autodetect.sh --hotplug
-TimeoutStartSec=45
-
-[Install]
-WantedBy=multi-user.target
-EOF
 systemctl enable ethernet-autodetect.service
 
 [ -f /root/regulatory.db ] && cp /root/regulatory.db /lib/firmware/

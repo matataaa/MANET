@@ -19,7 +19,7 @@ if [ -f "$STATE_FILE" ]; then
 fi
 
 # A gateway syncs its own time over Ethernet and keeps chrony running to serve
-# it to the mesh (see ethernet-autodetect.sh) — it must not then overwrite that
+# it to the mesh (see manet-gateway-ntp.sh) — it must not then overwrite that
 # with a one-shot sync against some other mesh peer.
 if [ -f /var/run/mesh-ntp.state ]; then
     log "This node is the mesh's NTP gateway; it stays synced. Exiting."
