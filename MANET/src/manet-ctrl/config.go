@@ -485,11 +485,10 @@ func saveKVFile(path string, updates map[string]string) error {
 		}
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strings.Join(out, "\n")), 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// fsync'd: a fleet activation records its pkg_id as applied before it
+	// writes here, so a crash that loses an unsynced mesh.conf leaves the
+	// node on the old config with no way to re-apply (EUD4, 2026-10-02).
+	return writeFileFsync(path, []byte(strings.Join(out, "\n")))
 }
 
 func confGet(conf map[string]string, key, def string) string {
