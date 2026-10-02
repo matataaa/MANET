@@ -2270,7 +2270,10 @@ func applyWPAConfig(conf map[string]string) {
 		if key != "" && strings.Contains(name, "s1g") {
 			restartS1G = true
 		}
-		os.WriteFile(path, []byte(text), 0644)
+		if err := writeFileFsync(path, []byte(text)); err != nil {
+			log.Printf("wpa config write failed: %s: %v", name, err)
+			continue
+		}
 		log.Printf("wpa config updated: %s", name)
 	}
 

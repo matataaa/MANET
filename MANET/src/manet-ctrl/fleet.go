@@ -24,6 +24,7 @@ var (
 )
 
 func fleetConfigWatcher() {
+	fleetResumeActivation()
 	for {
 		time.Sleep(10 * time.Second)
 		fleetPollAlfred()
@@ -557,7 +558,7 @@ func fleetProcessPackage(data []byte) {
 	// clock looks sane (year >= 2025) -- fleetPackageFresh already has the
 	// same unset-clock bypass for the same reason.
 	now := time.Now()
-	if now.Year() >= 2025 {
+	if now.Year() >= 2025 && clockSynchronized() {
 		if stagedAt, _ := pkg["staged_at"].(float64); int64(stagedAt) > now.Add(10*time.Minute).Unix() {
 			log.Printf("fleet: rejecting slot 70 package version %s, staged_at %d is more than 10min ahead of this node's clock — skewed sender clock?", version, int64(stagedAt))
 			return
@@ -586,12 +587,13 @@ func fleetProcessPackage(data []byte) {
 		// legitimate, already-authenticated activation silently dropped just
 		// because the ORIGINAL staging now looks "expired." activate_at
 		// itself is separately bounds-checked (activateAtInBounds).
-		if activateAt, ok := pkg["activate_at"].(float64); ok && activateAt > 0 && activateAtInBounds(int64(activateAt), time.Now()) {
+		if activateAt, ok := pkg["activate_at"].(float64); ok && activateAt > 0 && activationAcceptable(int64(activateAt), time.Now()) {
 			local := getPendingConfig()
 			if local != nil {
 				var localPkg map[string]interface{}
 				if json.Unmarshal(local, &localPkg) == nil {
 					if _, has := localPkg["activate_at"]; !has {
+						pkg["activate_at"] = localActivateAt(int64(activateAt), time.Now())
 						if err := savePendingConfig(pkg); err != nil {
 							log.Printf("fleet: failed to save pending config with activate_at for version %s: %v", version, err)
 						} else {
@@ -837,7 +839,7 @@ func fleetMcastListener() {
 		}
 		version, _ := msg["version"].(string)
 		activateAt, _ := msg["activate_at"].(float64)
-		if version == "" || activateAt <= 0 || !activateAtInBounds(int64(activateAt), time.Now()) {
+		if version == "" || activateAt <= 0 || !activationAcceptable(int64(activateAt), time.Now()) {
 			continue
 		}
 		local := getPendingConfig()
@@ -855,7 +857,7 @@ func fleetMcastListener() {
 		if _, has := localPkg["activate_at"]; has {
 			continue
 		}
-		localPkg["activate_at"] = activateAt
+		localPkg["activate_at"] = localActivateAt(int64(activateAt), time.Now())
 		if err := savePendingConfig(localPkg); err != nil {
 			log.Printf("fleet: failed to save pending config after mcast activation: %v", err)
 			continue

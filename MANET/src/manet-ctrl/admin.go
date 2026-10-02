@@ -145,16 +145,25 @@ func getPendingConfig() json.RawMessage {
 	return json.RawMessage(data)
 }
 
+// savePendingConfig also persists an armed activation (one with
+// activate_at) so it survives a reboot; see fleetactivation.go.
 func savePendingConfig(pkg map[string]interface{}) error {
 	data, err := json.Marshal(pkg)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(PendingConfFile, data, 0644)
+	if err := os.WriteFile(PendingConfFile, data, 0644); err != nil {
+		return err
+	}
+	if _, armed := pkg["activate_at"]; armed {
+		return persistActivation(pkg)
+	}
+	return nil
 }
 
 func clearPendingConfig() {
 	os.Remove(PendingConfFile)
+	clearPersistedActivation()
 }
 
 // broadcastConfigPackage seals pkg into a v2 envelope (see fleetcrypto.go)
