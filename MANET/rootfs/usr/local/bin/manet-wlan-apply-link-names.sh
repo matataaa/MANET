@@ -30,7 +30,10 @@ declare -A pre_rename_mac=()
 RAW_ROLE_FILES="${MANET_WLAN_APPLY_RAW_ROLE_FILES:-0}"
 
 read_mac() {
-    tr '[:upper:]' '[:lower:]' <"/sys/class/net/$1/address" 2>/dev/null
+    # 2>/dev/null first: a device renamed away between the glob and this read
+    # is expected (callers treat the empty result as "skip"), and the shell
+    # reports the failed < redirection before a later 2> would apply.
+    tr '[:upper:]' '[:lower:]' 2>/dev/null <"/sys/class/net/$1/address"
 }
 
 iface_for_mac() {
@@ -89,6 +92,8 @@ fix_one() {
     local dev="$1" m want occ_m tmp=""
     [[ -e "/sys/class/net/$dev" ]] || return 0
     m=$(read_mac "$dev")
+    # Renamed or removed since the check above: nothing to do here.
+    [[ -n "$m" ]] || return 0
     want="${mac_to_target[$m]:-}"
     [[ -z "$want" ]] && return 0
     [[ "$dev" == "$want" ]] && return 0
@@ -124,16 +129,24 @@ apply_renames() {
     local round dev m want any
     for ((round = 0; round < 48; round++)); do
         any=0
-        for dev in /sys/class/net/wlan[0-9]*; do
+        # wt<n> too: a radio left on alloc_tmp's temporary name by an
+        # interrupted swap still has a target and must be finished.
+        for dev in /sys/class/net/wlan[0-9]* /sys/class/net/wt[0-9]*; do
             [[ -d "$dev" ]] || continue
             dev=$(basename "$dev")
-            [[ "$dev" =~ ^wlan[0-9]+$ ]] || continue
+            [[ "$dev" =~ ^(wlan|wt)[0-9]+$ ]] || continue
             m=$(read_mac "$dev")
+            # Renamed or removed since the glob (udev may still be applying
+            # the same .link names): skip it, the next round sees its new name.
+            [[ -n "$m" ]] || continue
             want="${mac_to_target[$m]:-}"
             [[ -z "$want" ]] && continue
             if [[ "$dev" != "$want" ]]; then
                 any=1
-                fix_one "$dev" || return 1
+                if ! fix_one "$dev"; then
+                    # A device that moved under us is not a failure; rescan.
+                    [[ -e "/sys/class/net/$dev" ]] && return 1
+                fi
                 break
             fi
         done
@@ -245,6 +258,15 @@ if [[ ${#mac_to_target[@]} -eq 0 ]]; then
 fi
 
 wait_for_macs
+
+# udev applies the same 10-wlan*.link Name= renames itself, at about the time
+# this unit starts (After=systemd-udevd.service only orders us after udevd has
+# started, not after it has processed the radios). Renaming alongside it
+# races: an interface read as wlan0 is wlan3 a moment later, which failed this
+# unit on most boots of nodes without the MT7916 card (EUD1/EUD2: kernel
+# wlan0/wlan1 -> wlan3/wlan2). Let udev finish first; what is left for this
+# script is the swaps udev cannot do (target name already taken).
+udevadm settle --timeout="${MANET_WLAN_APPLY_SETTLE_MAX:-30}" 2>/dev/null || true
 
 # Snapshot name→MAC before renaming so remap functions can resolve old names
 for _d in /sys/class/net/wlan[0-9]*; do
