@@ -1039,6 +1039,11 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		saved = append(saved, k)
 	}
 
+	if err := validateConfigUpdates(updates); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+
 	existingConf := loadKVFile(MeshConfFile)
 
 	// Validate halow_bw/halow_channel/regulatory_domain against the real
@@ -1408,6 +1413,10 @@ func apiAdminStage(w http.ResponseWriter, r *http.Request) {
 	strConf := make(map[string]string)
 	for k, v := range configMap {
 		strConf[k] = fmt.Sprintf("%v", v)
+	}
+	if err := validateConfigUpdates(strConf); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
 	}
 
 	version := makeConfigVersion(strConf)
@@ -2147,7 +2156,7 @@ func setHostname(name string) {
 		text := string(data)
 		hostRE := regexp.MustCompile(`(?m)^127\.0\.1\.1\s+.*$`)
 		if hostRE.MatchString(text) {
-			text = hostRE.ReplaceAllString(text, "127.0.1.1\t"+name)
+			text = hostRE.ReplaceAllLiteralString(text, "127.0.1.1\t"+name)
 		} else {
 			text += "\n127.0.1.1\t" + name
 		}
@@ -2159,11 +2168,43 @@ func setHostname(name string) {
 	}
 }
 
+var (
+	wpaSSIDRE = regexp.MustCompile(`ssid="[^"]*"`)
+	// 802.11s mesh mode only supports key_mgmt NONE or SAE — there is no
+	// PSK path for a mesh interface, so every wlan*.conf mesh network
+	// (2.4GHz, 5GHz, and HaLow's -s1g) uses sae_password, never psk.
+	wpaSAERE = regexp.MustCompile(`sae_password="[^"]*"`)
+)
+
+// rewriteWPAConf replaces the mesh SSID and (if key is non-empty) SAE
+// password in a wpa_supplicant config. The replacements are literal: with
+// ReplaceAllString a '$' in the value is expanded as a capture-group
+// reference, silently truncating e.g. "abc$def" to "abc". Callers must have
+// passed both values through configValueError first — quoting is not
+// escaped here because wpa_supplicant's quoted strings have no escapes.
+func rewriteWPAConf(text, ssid, key string) string {
+	text = wpaSSIDRE.ReplaceAllLiteralString(text, `ssid="`+ssid+`"`)
+	if key != "" {
+		text = wpaSAERE.ReplaceAllLiteralString(text, `sae_password="`+key+`"`)
+	}
+	return text
+}
+
 func applyWPAConfig(conf map[string]string) {
 	ssid := conf["mesh_ssid"]
 	key := conf["mesh_key"]
 	if ssid == "" {
 		return
+	}
+	// The save/stage/fleet paths validate before persisting, but mesh.conf
+	// may still hold a value written before that validation existed or by
+	// hand; leave the working supplicant configs alone rather than write a
+	// broken one.
+	for k, v := range map[string]string{"mesh_ssid": ssid, "mesh_key": key} {
+		if err := configValueError(k, v); err != nil {
+			log.Printf("wpa config not updated: %v", err)
+			return
+		}
 	}
 
 	wpaDir := "/etc/wpa_supplicant"
@@ -2171,12 +2212,6 @@ func applyWPAConfig(conf map[string]string) {
 	if err != nil {
 		return
 	}
-
-	ssidRE := regexp.MustCompile(`ssid="[^"]*"`)
-	// 802.11s mesh mode only supports key_mgmt NONE or SAE — there is no
-	// PSK path for a mesh interface, so every wlan*.conf mesh network
-	// (2.4GHz, 5GHz, and HaLow's -s1g) uses sae_password, never psk.
-	saeRE := regexp.MustCompile(`sae_password="[^"]*"`)
 
 	restartS1G := false
 	for _, entry := range entries {
@@ -2190,13 +2225,9 @@ func applyWPAConfig(conf map[string]string) {
 		if err != nil {
 			continue
 		}
-		text := string(data)
-		text = ssidRE.ReplaceAllString(text, fmt.Sprintf(`ssid="%s"`, ssid))
-		if key != "" {
-			text = saeRE.ReplaceAllString(text, fmt.Sprintf(`sae_password="%s"`, key))
-			if strings.Contains(name, "s1g") {
-				restartS1G = true
-			}
+		text := rewriteWPAConf(string(data), ssid, key)
+		if key != "" && strings.Contains(name, "s1g") {
+			restartS1G = true
 		}
 		os.WriteFile(path, []byte(text), 0644)
 		log.Printf("wpa config updated: %s", name)
@@ -2674,13 +2705,13 @@ func applyHostapdConfig(conf map[string]string) {
 		if macSuffix != "" {
 			fullSSID += "-" + macSuffix
 		}
-		text = regexp.MustCompile(`(?m)^ssid=.*`).ReplaceAllString(text, "ssid="+fullSSID)
+		text = regexp.MustCompile(`(?m)^ssid=.*`).ReplaceAllLiteralString(text, "ssid="+fullSSID)
 	}
 	if apKey := conf["lan_ap_key"]; apKey != "" {
-		text = regexp.MustCompile(`(?m)^wpa_passphrase=.*`).ReplaceAllString(text, "wpa_passphrase="+apKey)
+		text = regexp.MustCompile(`(?m)^wpa_passphrase=.*`).ReplaceAllLiteralString(text, "wpa_passphrase="+apKey)
 	}
 	if apCh := conf["lan_ap_channel"]; apCh != "" {
-		text = regexp.MustCompile(`(?m)^channel=.*`).ReplaceAllString(text, "channel="+apCh)
+		text = regexp.MustCompile(`(?m)^channel=.*`).ReplaceAllLiteralString(text, "channel="+apCh)
 	}
 	if apBw := conf["lan_ap_bw"]; apBw != "" {
 		bwInt, _ := strconv.Atoi(apBw)

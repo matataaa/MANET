@@ -149,6 +149,15 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	// last line of defense against writing admin_password="" / mesh_key=""
 	// fleet-wide.
 	dropEmptySecrets(updates)
+	// Backstop for apiAdminStage's validateConfigUpdates: drop any value
+	// this node can't store or apply, keeping the rest of the push
+	// (skip-not-abort, like the halow pair check below).
+	for k, v := range updates {
+		if err := configValueError(k, v); err != nil {
+			log.Printf("fleet: dropping %s from this node's apply: %v", k, err)
+			delete(updates, k)
+		}
+	}
 	if len(updates) == 0 {
 		return
 	}
