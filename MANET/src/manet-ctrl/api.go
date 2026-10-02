@@ -23,7 +23,9 @@ import (
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
@@ -2039,17 +2041,20 @@ func apiTerminalReboot(w http.ResponseWriter, r *http.Request) {
 // scheme on every node; it is a fleet configuration precondition, not
 // something this code can enforce itself.
 func isAuthed(r *http.Request) bool {
+	required, authenticated := authState(r)
+	return !required || authenticated
+}
+
+// authState reports whether this node requires a login and, if so, whether
+// the request carries a live session issued under the current password.
+func authState(r *http.Request) (required, authenticated bool) {
 	conf := loadKVFile(MeshConfFile)
 	ra := strings.ToLower(conf["require_auth"])
-	if ra != "y" && ra != "yes" && ra != "1" {
-		return true
-	}
 	pw := getProvisionedPassword(conf)
-	if pw == "" {
-		return true
+	if pw == "" || (ra != "y" && ra != "yes" && ra != "1") {
+		return false, false
 	}
-	cookie, err := r.Cookie(PerfAuthCookie)
-	return err == nil && cookie.Value == getPerfAuthToken()
+	return true, sessions.valid(sessionToken(r), pw)
 }
 
 func checkAuth(w http.ResponseWriter, r *http.Request) bool {
@@ -2107,43 +2112,73 @@ func requireAuthOrPeerToken(domain string) func(http.HandlerFunc) http.HandlerFu
 }
 
 func apiAuthStatus(w http.ResponseWriter, r *http.Request) {
-	conf := loadKVFile(MeshConfFile)
-	ra := strings.ToLower(conf["require_auth"])
-	pw := getProvisionedPassword(conf)
-	required := pw != "" && (ra == "y" || ra == "yes" || ra == "1")
-	authenticated := !required
-	if required {
-		cookie, err := r.Cookie(PerfAuthCookie)
-		if err == nil && cookie.Value == getPerfAuthToken() {
-			authenticated = true
-		}
-	}
+	required, authenticated := authState(r)
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, 200, map[string]interface{}{
 		"required":      required,
-		"authenticated": authenticated,
+		"authenticated": !required || authenticated,
 	})
 }
 
+// apiPerfAuth logs in with the admin password and issues a new session
+// cookie (see sessions.go), replacing any session the browser already had.
 func apiPerfAuth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]interface{}{"ok": false, "error": "POST required"})
+		return
+	}
+	addr := clientAddr(r)
+	if ok, wait := sessions.loginAllowed(addr); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
+		writeJSON(w, 429, map[string]interface{}{"ok": false, "error": "Too many failed logins, try again shortly"})
+		return
+	}
+
 	body := readBody(r)
 	password := jsonStr(body, "password", "")
 
 	conf := loadKVFile(MeshConfFile)
 	expected := getProvisionedPassword(conf)
-	if expected == "" || password != expected {
+	if expected == "" || !passwordMatches(password, expected) {
+		sessions.recordLoginFailure(addr)
 		writeJSON(w, 401, map[string]interface{}{"ok": false, "error": "Invalid password"})
 		return
 	}
 
-	token := getPerfAuthToken()
+	token, err := sessions.create(expected)
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "could not create session"})
+		return
+	}
+	sessions.revoke(sessionToken(r))
+	setSessionCookie(w, r, token, int(sessionLifetime.Seconds()))
+	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
+// apiLogout ends the session the request presents; other browsers stay
+// logged in.
+func apiLogout(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]interface{}{"ok": false, "error": "POST required"})
+		return
+	}
+	sessions.revoke(sessionToken(r))
+	setSessionCookie(w, r, "", -1)
+	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
+func setSessionCookie(w http.ResponseWriter, r *http.Request, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     PerfAuthCookie,
-		Value:    token,
+		Value:    value,
 		Path:     "/",
-		MaxAge:   PerfAuthMaxAge,
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteStrictMode,
 	})
-	writeJSON(w, 200, map[string]interface{}{"ok": true})
 }
 
 func setHostname(name string) {

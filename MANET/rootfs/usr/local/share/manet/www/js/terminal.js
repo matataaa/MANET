@@ -275,6 +275,7 @@ function terminalActivate() {
     document.getElementById('term-target').addEventListener('change', termOnTargetChange);
     document.getElementById('term-reconnect').addEventListener('click', function() {
       if (termMode === 'logs') termConnectLogs();
+      else if (termPendingConnect) termPendingConnect();
       else termConnectWs();
     });
     document.getElementById('term-mode-shell').addEventListener('click', function() { termSetMode('terminal'); });
@@ -518,11 +519,22 @@ function termDoCustomConnect() {
 
 // ===== SINGLE: WEBSOCKET =====
 
+// Connection the login prompt was cancelled for; Reconnect retries it.
+var termPendingConnect = null;
+
 function termConnectWs(target, session) {
   if (_authRequired && !_authenticated) {
-    authShowLogin(function() { termConnectWs(target, session); });
+    var retry = function() { termConnectWs(target, session); };
+    authShowLogin(retry, function() {
+      termPendingConnect = retry;
+      var statusEl = document.getElementById('term-status');
+      statusEl.textContent = 'Login required';
+      statusEl.className = 'term-status term-status-off';
+      document.getElementById('term-reconnect').style.display = '';
+    });
     return;
   }
+  termPendingConnect = null;
   termCloseWs();
   termStopPing();
   termEchoQueue = [];

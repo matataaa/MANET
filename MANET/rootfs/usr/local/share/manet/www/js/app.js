@@ -16,10 +16,23 @@ function authCheckStatus() {
   return fetch('/api/auth/status').then(function(r) { return r.json(); }).then(function(d) {
     _authRequired = d.required;
     _authenticated = d.authenticated;
+    authUpdateLogoutButton();
   }).catch(function() {});
 }
 
-function authShowLogin(onSuccess) {
+function authUpdateLogoutButton() {
+  var btn = document.getElementById('logout-btn');
+  if (btn) btn.style.display = (_authRequired && _authenticated) ? '' : 'none';
+}
+
+function authLogout() {
+  fetch('/api/logout', { method: 'POST' }).finally(function() {
+    window.location.reload();
+  });
+}
+document.getElementById('logout-btn').addEventListener('click', authLogout);
+
+function authShowLogin(onSuccess, onCancel) {
   if (_authLoginVisible) return;
   _authLoginVisible = true;
   var overlay = document.createElement('div');
@@ -54,6 +67,7 @@ function authShowLogin(onSuccess) {
     }).then(function(r) { return r.json(); }).then(function(d) {
       if (d.ok) {
         _authenticated = true;
+        authUpdateLogoutButton();
         overlay.remove();
         _authLoginVisible = false;
         if (onSuccess) onSuccess();
@@ -70,6 +84,7 @@ function authShowLogin(onSuccess) {
   document.getElementById('auth-cancel').onclick = function() {
     overlay.remove();
     _authLoginVisible = false;
+    if (onCancel) onCancel();
   };
 }
 
@@ -77,9 +92,13 @@ function authFetch(url, opts) {
   opts = opts || {};
   return fetch(url, opts).then(function(resp) {
     if (resp.status === 401) {
+      // On cancel, hand back the original 401 so the caller reports the
+      // failure and restores its UI instead of waiting forever.
       return new Promise(function(resolve) {
         authShowLogin(function() {
           fetch(url, opts).then(resolve);
+        }, function() {
+          resolve(resp);
         });
       });
     }

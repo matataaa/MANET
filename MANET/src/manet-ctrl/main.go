@@ -617,6 +617,7 @@ func main() {
 	// Auth
 	mux.HandleFunc("/api/auth/status", apiAuthStatus)
 	mux.HandleFunc("/api/perf-auth", apiPerfAuth)
+	mux.HandleFunc("/api/logout", apiLogout)
 
 	// Applets
 	mux.HandleFunc("/api/applets", apiAppletsRouter)
