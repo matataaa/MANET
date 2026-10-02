@@ -66,6 +66,10 @@ const (
 	// if replayed at the same target host within the same freshness window.
 	FleetPeerAuthDomainTerminal = "fleet-peer-terminal|v1"
 	FleetPeerAuthDomainLogs     = "fleet-peer-logs|v1"
+	// FleetPeerAuthDomainAPI covers /api/ requests relayed by another
+	// node's /api/peer proxy for a user logged in there (see
+	// peerProxyAuthToken / proxiedAPIRequestAuthenticated in api.go).
+	FleetPeerAuthDomainAPI = "fleet-peer-api|v1"
 )
 
 var (
