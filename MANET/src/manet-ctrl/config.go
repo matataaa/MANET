@@ -402,7 +402,59 @@ func loadKVFile(path string) map[string]string {
 // in place).
 var saveKVFileMu sync.Mutex
 
+// configValueError reports why value can't be stored under key, or nil.
+//
+// mesh.conf is line-oriented key=value with no escaping, so a CR/LF in any
+// value would end its line early and the remainder would be read back as
+// additional keys (e.g. "x\nrequire_auth=n").
+//
+// mesh_ssid/mesh_key are further limited to what every writer of the mesh
+// wpa_supplicant configs can represent: applyWPAConfig, radio-setup.sh and
+// manet-wlan-reconcile.sh all embed them unescaped inside ssid="..." /
+// sae_password="...", where a '"' or control character would end the
+// quoted string and let the rest be parsed as extra supplicant directives.
+// 802.11 caps an SSID at 32 bytes.
+func configValueError(key, value string) error {
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("%s must not contain line breaks", key)
+	}
+	switch key {
+	case "mesh_ssid", "mesh_key":
+		for _, c := range value {
+			if c == '"' || c < 0x20 || c == 0x7f {
+				return fmt.Errorf("%s must not contain quotes or control characters", key)
+			}
+		}
+		if key == "mesh_ssid" && len(value) > 32 {
+			return fmt.Errorf("mesh_ssid must be at most 32 bytes")
+		}
+	}
+	return nil
+}
+
+// validateConfigUpdates returns the first configValueError in updates,
+// checking keys in sorted order so the reported error is deterministic.
+func validateConfigUpdates(updates map[string]string) error {
+	keys := make([]string, 0, len(updates))
+	for k := range updates {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if err := configValueError(k, updates[k]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func saveKVFile(path string, updates map[string]string) error {
+	for key, val := range updates {
+		if strings.ContainsAny(val, "\r\n") {
+			return fmt.Errorf("refusing to write %s: value contains a line break", key)
+		}
+	}
+
 	saveKVFileMu.Lock()
 	defer saveKVFileMu.Unlock()
 
