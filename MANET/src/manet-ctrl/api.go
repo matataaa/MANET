@@ -142,6 +142,18 @@ func apiPeer(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Invalid IP"})
 		return
 	}
+	if !isMeshPeerIP(peerIP, loadKVFile(MeshConfFile)) {
+		writeJSON(w, 403, map[string]interface{}{"ok": false, "error": "Peer must be a mesh node address"})
+		return
+	}
+	if subPath != "" && !strings.HasPrefix(subPath, "/api/") {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Only /api/ paths can be proxied"})
+		return
+	}
+	if strings.HasPrefix(subPath, "/api/peer/") {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Proxy requests cannot be chained"})
+		return
+	}
 
 	if subPath == "" {
 		data := getPeerLocalData(peerIP, 2*time.Second)
@@ -155,8 +167,67 @@ func apiPeer(w http.ResponseWriter, r *http.Request) {
 	peerProxyRequest(w, r, peerIP, subPath)
 }
 
+// isMeshPeerIP reports whether ip is an address inside this mesh's
+// ipv4_network. /api/peer only proxies to mesh nodes: it used to dial any
+// address over HTTPS, an open proxy into whatever network the node sits on
+// (reachable from a gateway's uplink LAN too). A bare network without a
+// prefix length (older images) is taken as /24, like mesh-manager does.
+func isMeshPeerIP(ipStr string, conf map[string]string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil || ip.To4() == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
+		return false
+	}
+	network := confGet(conf, "ipv4_network", "10.30.2.0/24")
+	if !strings.Contains(network, "/") {
+		network += "/24"
+	}
+	_, cidr, err := net.ParseCIDR(network)
+	return err == nil && cidr.Contains(ip)
+}
+
+func peerProxyURL(peerIP, path, rawQuery string) string {
+	u := "https://" + peerIP + path
+	if rawQuery != "" {
+		u += "?" + rawQuery
+	}
+	return u
+}
+
+// peerProxyAuthToken carries the user's login across to the peer: when the
+// request to this node has a live login session, the proxied request gets a
+// fleet peer token bound to peerIP and the API domain, which the peer
+// accepts as authenticated (proxiedAPIRequestAuthenticated). Only a session
+// counts here, never a relayed token, and mintFleetPeerToken returns "" on a
+// node without require_auth=y, so an open node can't relay unauthenticated
+// callers into a locked one. The fleet shares one admin password, so a
+// login on any node already proves the same thing.
+func peerProxyAuthToken(r *http.Request, peerIP string) string {
+	if required, authenticated := sessionAuthState(r); !required || !authenticated {
+		return ""
+	}
+	return mintFleetPeerToken(peerIP, FleetPeerAuthDomainAPI)
+}
+
+// copyPeerHeaders copies the peer's response headers, except Set-Cookie: a
+// peer's session cookie must never be set on this node's origin, where it
+// would replace the browser's session with this node.
+func copyPeerHeaders(dst, src http.Header) {
+	for k, vals := range src {
+		if http.CanonicalHeaderKey(k) == "Set-Cookie" {
+			continue
+		}
+		for _, v := range vals {
+			dst.Add(k, v)
+		}
+	}
+}
+
 func peerProxyRequest(w http.ResponseWriter, r *http.Request, peerIP, path string) {
-	targetURL := fmt.Sprintf("https://%s%s", peerIP, path)
+	if r.ContentLength > maxJSONBody {
+		writeJSON(w, 413, map[string]interface{}{"ok": false, "error": "Request body too large"})
+		return
+	}
+	targetURL := peerProxyURL(peerIP, path, r.URL.RawQuery)
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
@@ -164,12 +235,15 @@ func peerProxyRequest(w http.ResponseWriter, r *http.Request, peerIP, path strin
 		},
 	}
 
-	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
+	proxyReq, err := http.NewRequest(r.Method, targetURL, http.MaxBytesReader(w, r.Body, maxJSONBody))
 	if err != nil {
 		writeJSON(w, 502, map[string]interface{}{"ok": false, "error": "proxy request failed"})
 		return
 	}
 	proxyReq.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+	if token := peerProxyAuthToken(r, peerIP); token != "" {
+		proxyReq.Header.Set(FleetPeerAuthHeader, token)
+	}
 	proxyReq.ContentLength = r.ContentLength
 
 	resp, err := client.Do(proxyReq)
@@ -179,11 +253,7 @@ func peerProxyRequest(w http.ResponseWriter, r *http.Request, peerIP, path strin
 	}
 	defer resp.Body.Close()
 
-	for k, vals := range resp.Header {
-		for _, v := range vals {
-			w.Header().Add(k, v)
-		}
-	}
+	copyPeerHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 }
@@ -2058,8 +2128,36 @@ func isAuthed(r *http.Request) bool {
 }
 
 // authState reports whether this node requires a login and, if so, whether
-// the request carries a live session issued under the current password.
+// the request is authenticated: a live session issued under the current
+// password, or an /api/ request relayed by another fleet node's /api/peer
+// proxy on behalf of a user logged in there.
 func authState(r *http.Request) (required, authenticated bool) {
+	required, authenticated = sessionAuthState(r)
+	if required && !authenticated && proxiedAPIRequestAuthenticated(r) {
+		authenticated = true
+	}
+	return required, authenticated
+}
+
+// proxiedAPIRequestAuthenticated accepts a fleet peer token minted for this
+// node under FleetPeerAuthDomainAPI, on /api/ paths only: the domain keeps
+// such a token from being replayed against the terminal or logs
+// websockets, which verify their own domains. As for those, the Host the
+// token is bound to must be one of this node's own addresses.
+func proxiedAPIRequestAuthenticated(r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/api/") {
+		return false
+	}
+	token := r.Header.Get(FleetPeerAuthHeader)
+	if token == "" {
+		return false
+	}
+	return hostMatchesLocalAddr(r.Host) && verifyFleetPeerToken(token, r.Host, FleetPeerAuthDomainAPI)
+}
+
+// sessionAuthState is authState without the proxied-request path: whether
+// the request itself carries a live login session on this node.
+func sessionAuthState(r *http.Request) (required, authenticated bool) {
 	conf := loadKVFile(MeshConfFile)
 	ra := strings.ToLower(conf["require_auth"])
 	pw := getProvisionedPassword(conf)
