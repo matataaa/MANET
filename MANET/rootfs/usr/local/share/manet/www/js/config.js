@@ -183,6 +183,7 @@ function configRenderView(panel, cfg) {
     { title: 'Access', fields: [
       { label: 'Admin Key', key: 'admin_password', masked: true },
       { label: 'Require Auth', key: 'require_auth', fmt: function(v) { return (v||'').toLowerCase() === 'y' ? 'Yes' : 'No'; } },
+      { label: 'UI From Uplink', key: 'ui_uplink_access', fmt: function(v) { return (v||'').toLowerCase() === 'y' ? 'Allowed' : 'Mesh only'; } },
     ]},
     { title: 'Voice', voice: true, fields: [
       { label: 'Voice Enabled', key: 'voice_enabled', yesno: true },
@@ -571,6 +572,7 @@ function configRenderEdit(panel, cfg) {
     { section: 'Access' },
     { label: 'Admin Key', key: 'admin_password', type: 'password' },
     { label: 'Require Auth', key: 'require_auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },
+    { label: 'UI From Uplink', key: 'ui_uplink_access', type: 'select', options: [{v:'n',l:'No (mesh only)'},{v:'y',l:'Yes'}], hint: 'Allow this node\'s web UI from its uplink network, e.g. a monitoring workstation on a gateway\'s LAN' },
     { section: 'Voice' },
     { label: 'Voice Enabled', key: 'voice_enabled', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}],
       hint: 'Off stops this node\'s local mic/speaker and physical PTT button. Browser-based web PTT is unaffected either way.' },
@@ -788,7 +790,7 @@ async function configSave() {
   }
 
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','eud_bandwidth','mesh_ssid','mesh_key',
-    'ipv4_network','regulatory_domain','halow_regulatory_domain','halow_bw','halow_channel','acs','mesh_5ghz_bw','mesh_5ghz_channel','multicast_mode','battery_monitor','admin_password','require_auth',
+    'ipv4_network','regulatory_domain','halow_regulatory_domain','halow_bw','halow_channel','acs','mesh_5ghz_bw','mesh_5ghz_channel','multicast_mode','battery_monitor','admin_password','require_auth','ui_uplink_access',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
     'auto_update','update_url','auto_update_overlay','auto_update_min_mbps',
     'gps','gps_source','gps_static_lat','gps_static_lon','gps_static_alt','callsign','cot_type','cot_team','cot_role','cot_icon',

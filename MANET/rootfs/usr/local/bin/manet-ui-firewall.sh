@@ -6,6 +6,11 @@
 #
 #   port 80    localhost, and clients holding a DHCP lease from THIS node.
 #              Not other radios, not their EUDs, not the uplink LAN.
+#   port 443   localhost and br0, i.e. the mesh side: this node's EUDs, other
+#              nodes and their EUDs (node-to-node peer/fleet calls, the
+#              Android app's node picker). Not the uplink LAN of a gateway,
+#              unless ui_uplink_access=y in mesh.conf (e.g. a monitoring
+#              workstation on the gateway's LAN).
 #   port 5201  the mesh subnet (peers run iperf3 clients against this node's
 #              daemon). Not the uplink.
 #
@@ -18,8 +23,15 @@
 # is independent of manet-uplink-dispatch.sh's gateway rules: a drop here is
 # final, and everything else falls through untouched.
 #
+# Port 443 is filtered by interface instead: everything on the mesh side is
+# allowed, and the uplink (end0 when it isn't a wired EUD, USB uplinks) is
+# never a br0 port. That also covers IPv6.
+#
 # Re-run whenever the DHCP range moves (mesh-ip-manager calls it after
-# rewriting the dnsmasq config). Idempotent, and a no-op when nothing changed.
+# rewriting the dnsmasq config), at manet-ctrl startup and every minute
+# after (which also restores the table if an nftables restart flushed it),
+# and when ui_uplink_access changes. Idempotent, and a no-op when nothing
+# changed.
 # ==============================================================================
 
 TABLE="manet_ui"
@@ -43,12 +55,19 @@ read_mesh_network() {
     awk -F= '$1 == "ipv4_network" {print $2; exit}' "$MESH_CONF" 2>/dev/null
 }
 
+read_uplink_access() {
+    case "$(awk -F= '$1 == "ui_uplink_access" {print tolower($2); exit}' "$MESH_CONF" 2>/dev/null)" in
+        y|yes|1|true) echo y ;;
+        *) echo n ;;
+    esac
+}
+
 apply_rules() {
-    local start="$1" end="$2" mesh_net="$3"
+    local start="$1" end="$2" mesh_net="$3" uplink="$4"
 
     $NFT delete table inet "$TABLE" 2>/dev/null || true
     $NFT add table inet "$TABLE" || return 1
-    # policy accept: this chain only ever removes access to these two ports,
+    # policy accept: this chain only ever removes access to these ports,
     # everything else is somebody else's decision.
     $NFT add chain inet "$TABLE" input \
         '{ type filter hook input priority -10; policy accept; }' || return 1
@@ -57,8 +76,17 @@ apply_rules() {
     # how the pages get looked at from a dev machine.
     $NFT add rule inet "$TABLE" input iifname "lo" accept
 
-    $NFT add rule inet "$TABLE" input tcp dport 80 ip saddr "${start}-${end}" accept
-    $NFT add rule inet "$TABLE" input tcp dport 80 drop
+    # No pool yet means no chunk claimed yet: a port 80 rule now would lock
+    # out the EUDs we cannot yet name, so it waits for mesh-ip-manager.
+    if [ -n "$start" ]; then
+        $NFT add rule inet "$TABLE" input tcp dport 80 ip saddr "${start}-${end}" accept
+        $NFT add rule inet "$TABLE" input tcp dport 80 drop
+    fi
+
+    if [ "$uplink" != y ]; then
+        $NFT add rule inet "$TABLE" input iifname "br0" tcp dport 443 accept
+        $NFT add rule inet "$TABLE" input tcp dport 443 drop
+    fi
 
     if [ -n "$mesh_net" ]; then
         $NFT add rule inet "$TABLE" input tcp dport 5201 ip saddr "$mesh_net" accept
@@ -66,27 +94,21 @@ apply_rules() {
     $NFT add rule inet "$TABLE" input tcp dport 5201 drop
 }
 
+DHCP_START="" DHCP_END=""
 RANGE=$(read_dhcp_range)
-if [ -z "$RANGE" ]; then
-    # No pool yet means no chunk claimed yet. Installing a rule now would lock
-    # out the EUDs we cannot yet name, so leave things alone; mesh-ip-manager
-    # calls back once it has an allocation.
-    log "No dhcp-range in $DNSMASQ_CONF yet; leaving port 80 rules alone"
-    exit 0
-fi
-
-read -r DHCP_START DHCP_END <<< "$RANGE"
+[ -n "$RANGE" ] && read -r DHCP_START DHCP_END <<< "$RANGE"
 MESH_NET=$(read_mesh_network)
-DESIRED="${DHCP_START}-${DHCP_END}|${MESH_NET}"
+UPLINK=$(read_uplink_access)
+DESIRED="${DHCP_START}-${DHCP_END}|${MESH_NET}|uplink=${UPLINK}"
 
 if [ "$(cat "$STATE_FILE" 2>/dev/null)" = "$DESIRED" ] &&
    $NFT list table inet "$TABLE" >/dev/null 2>&1; then
     exit 0
 fi
 
-if apply_rules "$DHCP_START" "$DHCP_END" "$MESH_NET"; then
+if apply_rules "$DHCP_START" "$DHCP_END" "$MESH_NET" "$UPLINK"; then
     echo "$DESIRED" > "$STATE_FILE"
-    log "port 80 limited to ${DHCP_START}-${DHCP_END} + localhost; iperf3 to ${MESH_NET:-mesh only}"
+    log "port 80 limited to ${DHCP_START:+${DHCP_START}-${DHCP_END} + }localhost${DHCP_START:- (no DHCP pool yet: unrestricted)}; 443 $([ "$UPLINK" = y ] && echo "open incl. uplink (ui_uplink_access=y)" || echo "mesh side only"); iperf3 to ${MESH_NET:-mesh only}"
 else
     log "ERROR: failed to install nftables rules"
     exit 1

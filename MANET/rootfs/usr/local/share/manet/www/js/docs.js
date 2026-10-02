@@ -162,6 +162,7 @@ DOCS_TABS.config = [
 '<table class="docs-table"><thead><tr><th>Key</th><th>Values</th><th>UI</th><th>Description</th></tr></thead><tbody>',
 '<tr><td><code>admin_password</code></td><td>string</td><td>Yes</td><td>Password for admin operations (config staging/activation).</td></tr>',
 '<tr><td><code>require_auth</code></td><td>y / n</td><td>Yes</td><td>Require admin password for write operations. Default: n (disabled).</td></tr>',
+'<tr><td><code>ui_uplink_access</code></td><td>y / n</td><td>Yes</td><td>Allow this node\'s web UI (HTTPS) from its uplink network, e.g. a monitoring workstation on a gateway\'s LAN. Default: n (mesh side only).</td></tr>',
 '</tbody></table>',
 
 '<h4>Voice</h4>',
