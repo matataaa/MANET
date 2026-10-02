@@ -274,8 +274,17 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	}
 	_, bwChanged := updates["halow_bw"]
 	_, chChanged := updates["halow_channel"]
-	if bwChanged || chChanged {
+	_, rdChanged := updates["regulatory_domain"]
+	if bwChanged || chChanged || rdChanged {
 		applyFleetHalowBW(conf)
+	}
+	// Same as apiAdminSave: the module options apply at the next boot.
+	_, dutyChanged := updates["halow_duty_cycle"]
+	_, powerChanged := updates["halow_txpower_dbm"]
+	if rdChanged || bwChanged || dutyChanged || powerChanged {
+		if _, err := applyRadioConfigFiles(conf); err != nil {
+			log.Printf("fleet: %v", err)
+		}
 	}
 	if _, ch5Changed := updates["mesh_5ghz_channel"]; ch5Changed {
 		applyFleetMesh5GHzChannel(conf)
@@ -311,8 +320,8 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 // domain in `conf`, which is read AFTER fleetApplyConfig's saveKVFile call --
 // so this validates against the domain that results from this push, not a
 // pre-existing per-node domain that might genuinely differ from what was
-// just written. In practice regulatory_domain/halow_regulatory_domain are
-// themselves network-wide fields that fleet.js always collects and pushes
+// just written. In practice regulatory_domain is
+// itself a network-wide field that fleet.js always collects and pushes
 // alongside every save, so by the time this runs every node in the fleet
 // already has the identical newly-pushed domain -- there is no surviving
 // cross-node divergence left to detect for THIS push.
@@ -342,9 +351,8 @@ func applyFleetHalowBW(conf map[string]string) {
 // pushed against the domain just pushed alongside it, not a genuinely
 // surviving per-node divergence (see applyFleetHalowBW's comment for why
 // that divergence doesn't survive a network-wide push). Resolves the domain via
-// resolveMesh5GHzDomain (api.go) -- deliberately not resolveHalowDomain/
-// halow_regulatory_domain, since HaLow and 5GHz WiFi can run different
-// domains on the same node. Unlike applyFleetHalowBW there is no
+// resolveMesh5GHzDomain (api.go), which uses the 5GHz channel table rather
+// than the HaLow one. Unlike applyFleetHalowBW there is no
 // restart/apply step for mesh_5ghz_channel to skip -- node-manager reads it
 // straight from mesh.conf on its own live 15s tick and already falls back
 // to the default lobby channel for a value it doesn't recognize -- so this

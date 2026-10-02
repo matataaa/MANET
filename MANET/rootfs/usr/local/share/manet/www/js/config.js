@@ -126,11 +126,13 @@ function configRenderView(panel, cfg) {
       { label: 'Mesh Key', key: 'mesh_key', masked: true },
       { label: 'IPv4 Network', key: 'ipv4_network' },
       { label: 'Regulatory Domain', key: 'regulatory_domain' },
-      { label: 'HaLow Regulatory Domain', key: 'halow_regulatory_domain', fmt: function(v) { return v || 'Inherit'; } },
+      { label: 'HaLow Plan', key: 'halow_regulatory_domain', fmt: function(v) { return (v || '?') + ' (from Regulatory Domain)'; } },
       { label: 'HaLow Bandwidth', key: 'halow_bw' },
+      { label: 'HaLow Duty Cycle', key: 'halow_duty_cycle', fmt: function(v) { return v || 'Default'; } },
+      { label: 'HaLow TX Power', key: 'halow_txpower_dbm', fmt: function(v) { return v ? v + ' dBm' : 'Default'; } },
       { label: 'HaLow Channel', key: 'halow_channel', fmt: function(v) {
         if (!v) return 'Auto';
-        var domain = cfg.halow_regulatory_domain || cfg.regulatory_domain || 'US';
+        var domain = halowPlanFor(cfg.regulatory_domain || 'US');
         var startKHz = { US: 902000, EU: 863000 }[domain];
         var ch = parseInt(v, 10);
         if (startKHz && !isNaN(ch)) return v + ' (' + ((startKHz + ch * 500) / 1000) + ' MHz)';
@@ -489,15 +491,19 @@ function configRenderEdit(panel, cfg) {
     { label: 'Mesh SSID', key: 'mesh_ssid', type: 'text' },
     { label: 'Mesh Key', key: 'mesh_key', type: 'password' },
     { label: 'IPv4 Network', key: 'ipv4_network', type: 'text' },
-    { label: 'Regulatory Domain', key: 'regulatory_domain', type: 'select', options: ['US', 'EU', 'JP', 'AU'] },
-    { label: 'HaLow Regulatory Domain', key: 'halow_regulatory_domain', type: 'select', options: [
-      {v:'',l:'Inherit from Regulatory Domain'},'US','EU','JP','AU'
-    ], hint: 'Overrides the regulatory domain for the HaLow radio specifically, independent of the WiFi Regulatory Domain above (e.g. an MM8108 unit can run HaLow on a different domain than its 2.4/5GHz radios). Empty = inherit.' },
+    { label: 'Regulatory Domain', key: 'regulatory_domain', type: 'select', options: WIFI_REG_DOMAINS,
+      hint: 'Country for all radios (a real country code; EU is not one). Wi-Fi uses it directly; HaLow uses the EU plan for EU countries and the same country otherwise. Applies after a reboot.' },
     { label: 'HaLow Bandwidth', key: 'halow_bw', type: 'select', options: [
       {v:'1MHz',l:'1 MHz'},{v:'2MHz',l:'2 MHz'},{v:'4MHz',l:'4 MHz'},{v:'8MHz',l:'8 MHz'}
     ], hint: 'Primary channel width for 802.11ah mesh. EU supports 1MHz only. Narrower = longer range.' },
     { label: 'HaLow Channel', key: 'halow_channel', type: 'channel-halow',
       hint: 'Explicit HaLow channel for the current regulatory domain/bandwidth. Auto (default) picks the standard channel for that combination.' },
+    { label: 'HaLow Duty Cycle', key: 'halow_duty_cycle', type: 'select', options: [
+      {v:'',l:'Default (off on EU plan, auto elsewhere)'},{v:'off',l:'Off (no airtime limit)'},{v:'auto',l:'Auto (regional limit)'}
+    ], hint: 'Auto applies the Morse regional limit: none in US, 10% (AP) / 2.8% (station) in EU. Off in EU exceeds the ETSI 863-868 MHz rules. Applies after a reboot.' },
+    { label: 'HaLow TX Power', key: 'halow_txpower_dbm', type: 'select', options:
+      [{v:'',l:'Default (24/24/22/20 dBm for 1/2/4/8 MHz)'}].concat(Array.from({length: 30}, (_, i) => ({v: String(30 - i), l: (30 - i) + ' dBm'}))),
+      hint: 'Request and driver cap. The regional table (US 30, EU 16 dBm EIRP) and the board calibration (BCF) still limit it; the Hardware tab shows what the radio reports. Applies after a reboot.' },
     { label: '5GHz Mesh Channel Mode', key: 'acs', type: 'select', options: [
       {v:'n',l:'Static (pinned channel)'},{v:'y',l:'Automatic (ACS)'}
     ], hint: 'Static pins the 5GHz (and 2.4GHz) mesh to a fixed channel — deterministic, recommended. Automatic elects a channel via scanning/consensus across the fleet. Live — applies within one 15s tick, no restart needed.' },
@@ -607,6 +613,12 @@ function configRenderEdit(panel, cfg) {
     html += '</div>';
     if (f.type === 'select') {
       html += '<select class="cfg-input" id="cfg-f-' + f.key + '">';
+      // Keep a stored value the list doesn't offer, as fleet.js does:
+      // otherwise the first option is selected and every save writes it.
+      const known = f.options.map(opt => typeof opt === 'object' ? opt.v : opt);
+      if (curVal !== '' && !known.includes(curVal)) {
+        html += '<option value="' + escHtml(curVal) + '" selected>' + escHtml(curVal) + ' (current)</option>';
+      }
       f.options.forEach(opt => {
         const val = typeof opt === 'object' ? opt.v : opt;
         const label = typeof opt === 'object' ? opt.l : opt;
@@ -695,15 +707,12 @@ function configRenderEdit(panel, cfg) {
   async function configRefreshHalowChannels() {
     const chEl = document.getElementById('cfg-f-halow_channel');
     const domainEl = document.getElementById('cfg-f-regulatory_domain');
-    const halowRegDomainEl = document.getElementById('cfg-f-halow_regulatory_domain');
     const bwEl = document.getElementById('cfg-f-halow_bw');
     if (!chEl || !domainEl || !bwEl) return;
 
-    // halow_regulatory_domain overrides regulatory_domain when set, mirroring
-    // resolveHalowDomain's server-side precedence — this only decides what
-    // the picker narrows against client-side; the server still validates
-    // for real on save.
-    const resolvedDomain = (halowRegDomainEl && halowRegDomainEl.value) ? halowRegDomainEl.value : domainEl.value;
+    // The HaLow plan follows the country, as resolveHalowDomain does on the
+    // server; this only narrows the picker, the server validates on save.
+    const resolvedDomain = halowPlanFor(domainEl.value);
 
     const allowedBw = HALOW_BW_BY_DOMAIN[resolvedDomain] || HALOW_BW_OPTIONS.map(o => o.v);
     const currentBw = bwEl.value;
@@ -717,22 +726,16 @@ function configRenderEdit(panel, cfg) {
     await refreshChannelSelect(chEl, url, current);
   }
   const halowDomainEl = document.getElementById('cfg-f-regulatory_domain');
-  const halowRegDomainSelectEl = document.getElementById('cfg-f-halow_regulatory_domain');
   const halowBwEl = document.getElementById('cfg-f-halow_bw');
   if (halowDomainEl) halowDomainEl.addEventListener('change', configRefreshHalowChannels);
-  if (halowRegDomainSelectEl) halowRegDomainSelectEl.addEventListener('change', configRefreshHalowChannels);
   if (halowBwEl) halowBwEl.addEventListener('change', configRefreshHalowChannels);
   configRefreshHalowChannels();
 
   // 5GHz Pinned Channel's option list isn't static either — legal channels
   // depend on Regulatory Domain (same table fleet.js's picker uses via
   // /api/mesh5ghz/channels), so it's rebuilt on load and whenever that
-  // field changes. Deliberately reads plain regulatory_domain only, NOT
-  // halow_regulatory_domain — HaLow and 5GHz WiFi can run different
-  // domains on the same node (e.g. MM8108), so reusing HaLow's resolved
-  // domain here could show/accept a channel illegal for the actual WiFi
-  // domain. Channel candidates don't vary by bandwidth for 5GHz (unlike
-  // HaLow), so no bw param is sent.
+  // field changes. Channel candidates don't vary by bandwidth for 5GHz
+  // (unlike HaLow), so no bw param is sent.
   async function configRefreshMesh5GHzChannels() {
     const chEl = document.getElementById('cfg-f-mesh_5ghz_channel');
     const domainEl = document.getElementById('cfg-f-regulatory_domain');
@@ -790,7 +793,7 @@ async function configSave() {
   }
 
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','eud_bandwidth','mesh_ssid','mesh_key',
-    'ipv4_network','regulatory_domain','halow_regulatory_domain','halow_bw','halow_channel','acs','mesh_5ghz_bw','mesh_5ghz_channel','multicast_mode','battery_monitor','admin_password','require_auth','ui_uplink_access',
+    'ipv4_network','regulatory_domain','halow_bw','halow_channel','halow_duty_cycle','halow_txpower_dbm','acs','mesh_5ghz_bw','mesh_5ghz_channel','multicast_mode','battery_monitor','admin_password','require_auth','ui_uplink_access',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
     'auto_update','update_url','auto_update_overlay','auto_update_min_mbps',
     'gps','gps_source','gps_static_lat','gps_static_lon','gps_static_alt','callsign','cot_type','cot_team','cot_role','cot_icon',

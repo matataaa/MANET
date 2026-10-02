@@ -431,6 +431,10 @@ func configValueError(key, value string) error {
 		if key == "mesh_ssid" && len(value) > 32 {
 			return fmt.Errorf("mesh_ssid must be at most 32 bytes")
 		}
+	case "regulatory_domain":
+		return regionValueError(key, value)
+	case "halow_duty_cycle", "halow_txpower_dbm":
+		return halowOptionValueError(key, value)
 	}
 	return nil
 }

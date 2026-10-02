@@ -249,7 +249,9 @@ func assembleAdminStatus(authed bool) AdminStatus {
 		"gateway_bandwidth":       confGet(conf, "gateway_bandwidth", ""),
 		"halow_bw":                confGet(conf, "halow_bw", ""),
 		"halow_channel":           conf["halow_channel"],
-		"halow_regulatory_domain": conf["halow_regulatory_domain"],
+		"halow_regulatory_domain": resolveHalowDomain(conf), // derived, read-only
+		"halow_duty_cycle":        conf["halow_duty_cycle"],
+		"halow_txpower_dbm":       conf["halow_txpower_dbm"],
 		"acs":                     confGet(conf, "acs", "n"),
 		"mesh_5ghz_bw":            confGet(conf, "mesh_5ghz_bw", "20"),
 		"mesh_5ghz_channel":       conf["mesh_5ghz_channel"],

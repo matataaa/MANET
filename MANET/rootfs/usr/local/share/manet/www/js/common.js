@@ -138,6 +138,24 @@ async function refreshChannelSelect(selEl, url, currentValue) {
   }
 }
 
+// Wi-Fi regulatory domains: real ISO country codes only (the kernel's
+// regulatory.db has no "EU" entry; an unknown code leaves the radios on the
+// restrictive world domain). Same list as provisioning/linux.sh.
+const WIFI_REG_DOMAINS = ['US', 'CA', 'GB', 'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'AT', 'CH', 'SE', 'NO', 'DK', 'FI',
+  'PL', 'CZ', 'HU', 'GR', 'PT', 'IE', 'RO', 'BG', 'HR', 'SI', 'SK', 'LT', 'LV', 'EE', 'CY',
+  'MT', 'LU', 'AU', 'NZ', 'JP', 'KR', 'TW', 'SG', 'MY', 'TH', 'PH', 'ID', 'VN', 'IN', 'CN',
+  'BR', 'AR', 'MX', 'CL', 'CO', 'PE', 'ZA', 'IL', 'AE', 'SA', 'RU', 'UA', 'TR', 'EG'];
+
+
+// Countries on the EU HaLow plan; mirrors euHalowCountryCodes in api.go.
+const EU_HALOW_COUNTRIES = ['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE',
+  'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'GB', 'CH', 'NO'];
+
+// The HaLow plan a domain value uses: EU for any EU-plan country.
+function halowPlanFor(domain) {
+  return EU_HALOW_COUNTRIES.includes(domain) ? 'EU' : domain;
+}
+
 function escHtml(str) {
   const d = document.createElement('div');
   d.textContent = str;
