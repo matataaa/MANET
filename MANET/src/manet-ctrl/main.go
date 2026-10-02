@@ -644,16 +644,11 @@ func main() {
 	if err := ensureTLSCert(*tlsCert, *tlsKey); err != nil {
 		log.Printf("TLS cert generation failed: %v — HTTPS disabled", err)
 		log.Printf("manet-ctrl listening on :%s webroot=%s", *port, *webRoot)
-		log.Fatal(http.ListenAndServe(":"+*port, handler))
+		log.Fatal(newServer(":"+*port, handler).ListenAndServe())
 	} else {
 		go func() {
-			tlsSrv := &http.Server{
-				Addr:    ":" + *tlsPort,
-				Handler: handler,
-				TLSConfig: &tls.Config{
-					MinVersion: tls.VersionTLS12,
-				},
-			}
+			tlsSrv := newServer(":"+*tlsPort, handler)
+			tlsSrv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 			log.Printf("manet-ctrl HTTPS on :%s", *tlsPort)
 			if err := tlsSrv.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil {
 				log.Printf("HTTPS listener failed: %v", err)
@@ -672,6 +667,22 @@ func main() {
 			http.Redirect(w, r, target, http.StatusMovedPermanently)
 		})
 		log.Printf("manet-ctrl HTTP :%s → HTTPS :%s", *port, *tlsPort)
-		log.Fatal(http.ListenAndServe(":"+*port, redirect))
+		log.Fatal(newServer(":"+*port, redirect).ListenAndServe())
+	}
+}
+
+// newServer bounds how long a client may take to send its request headers
+// and how long an idle keep-alive connection is held, so slow or abandoned
+// clients can't pile up connections. There is deliberately no ReadTimeout or
+// WriteTimeout: those would also cut off the streaming iperf/ping/traceroute
+// and terminal-exec responses, config saves that wait on reconcile scripts,
+// and applet uploads over HaLow. Websockets are unaffected either way, since
+// net/http clears connection deadlines on hijack.
+func newServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 }
