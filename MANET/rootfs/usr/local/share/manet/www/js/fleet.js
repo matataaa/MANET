@@ -32,10 +32,8 @@ const MESH_FIELDS = [
   { key: 'multicast_mode', label: 'Multicast Mode', type: 'select', options: [
     {v:'flood',l:'Flood (recommended ≤10 nodes)'},{v:'optimized',l:'Optimized IGMP (10+ nodes)'}
   ] },
-  { key: 'regulatory_domain', label: 'Reg Domain', type: 'select', options: ['US', 'EU', 'JP', 'AU'] },
-  { key: 'halow_regulatory_domain', label: 'HaLow Reg Domain', type: 'select', options: [
-    {v:'',l:'Inherit from Reg Domain'},'US','EU','JP','AU'
-  ], hint: 'Blank = inherit Reg Domain. Overrides it for HaLow specifically (e.g. MM8108 nodes running HaLow on a different domain than their WiFi radios).' },
+  { key: 'regulatory_domain', label: 'Reg Domain', type: 'select', options: WIFI_REG_DOMAINS,
+    hint: 'Country for all radios (a real country code; EU is not one). HaLow uses the EU plan for EU countries and the same country otherwise. Applies after a reboot.' },
   { key: 'dns_servers', label: 'DNS Servers', hint: 'Comma-separated (e.g. 8.8.8.8,8.8.4.4)' },
   { key: 'admin_password', label: 'Admin Password', type: 'password' },
   { key: 'require_auth', label: 'Require Auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },
@@ -769,14 +767,9 @@ function fleetRenderField(f, val, prefix) {
 // falls back server-side to the *serving* node's own domain, which would
 // silently show a US channel list while editing a fleet that's actually on
 // EU.
-function fleetResolveDomain(prefix, forHalow) {
+function fleetResolveDomain(prefix) {
   var domainEl = document.getElementById('fleet-f-' + prefix + 'regulatory_domain');
-  var domain = (domainEl && domainEl.value) || 'US';
-  if (forHalow) {
-    var halowDomainEl = document.getElementById('fleet-f-' + prefix + 'halow_regulatory_domain');
-    if (halowDomainEl && halowDomainEl.value) domain = halowDomainEl.value;
-  }
-  return domain;
+  return (domainEl && domainEl.value) || 'US';
 }
 
 // Refreshes one channel-picker <select> via the shared common.js helper,
@@ -790,12 +783,12 @@ function fleetRefreshChannelPicker(f, prefix) {
   var current = chEl.value;
   var domain, url;
   if (f.type === 'channel-halow') {
-    domain = fleetResolveDomain(prefix, true);
+    domain = fleetResolveDomain(prefix);
     var bwEl = document.getElementById('fleet-f-' + prefix + 'halow_bw');
     var bw = (bwEl && bwEl.value) || '4MHz';
     url = '/api/halow/channels?domain=' + encodeURIComponent(domain) + '&bw=' + encodeURIComponent(bw);
   } else if (f.type === 'channel-5ghz') {
-    domain = fleetResolveDomain(prefix, false);
+    domain = fleetResolveDomain(prefix);
     url = '/api/mesh5ghz/channels?domain=' + encodeURIComponent(domain);
   } else {
     return;
@@ -820,7 +813,7 @@ function fleetWireChannelPickers(fields, prefix) {
   fields.forEach(function(f) {
     if (f.type !== 'channel-halow' && f.type !== 'channel-5ghz') return;
     var controllerKeys = f.type === 'channel-halow'
-      ? ['regulatory_domain', 'halow_regulatory_domain', 'halow_bw']
+      ? ['regulatory_domain', 'halow_bw']
       : ['regulatory_domain'];
     controllerKeys.forEach(function(key) {
       var el = document.getElementById('fleet-f-' + prefix + key);

@@ -985,7 +985,7 @@ var saveableKeys = map[string]bool{
 	"node_hostname": true, "eud": true, "lan_ap_ssid": true, "lan_ap_key": true,
 	"lan_ap_channel": true, "lan_ap_bw": true,
 	"max_euds_per_node": true, "mesh_ssid": true, "mesh_key": true,
-	"ipv4_network": true, "regulatory_domain": true, "halow_regulatory_domain": true, "halow_bw": true, "halow_channel": true, "mesh_5ghz_bw": true, "mesh_5ghz_channel": true,
+	"ipv4_network": true, "regulatory_domain": true, "halow_bw": true, "halow_channel": true, "halow_duty_cycle": true, "halow_txpower_dbm": true, "mesh_5ghz_bw": true, "mesh_5ghz_channel": true,
 	"acs":             true,
 	"battery_monitor": true, "admin_password": true, "require_auth": true, "ui_uplink_access": true,
 	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
@@ -1006,61 +1006,62 @@ var saveableKeys = map[string]bool{
 // and any future admin UI. Keys with no entry here still show up in
 // apiConfigKeys, just without a description.
 var keyDescriptions = map[string]string{
-	"node_hostname":           "Hostname prefix for this node (full hostname adds mesh SSID + MAC suffix)",
-	"eud":                     "Enable End User Device access (WiFi AP / wired bridge)",
-	"lan_ap_ssid":             "SSID for the EUD-facing WiFi access point",
-	"lan_ap_key":              "WPA2-PSK passphrase for the EUD-facing WiFi access point",
-	"lan_ap_channel":          "Channel for the EUD-facing WiFi access point",
-	"lan_ap_bw":               "Channel bandwidth for the EUD-facing WiFi access point",
-	"max_euds_per_node":       "Maximum number of EUD clients this node will serve",
-	"mesh_ssid":               "Mesh network name shared by all nodes",
-	"mesh_key":                "SAE (WPA3) passphrase for the mesh backhaul",
-	"ipv4_network":            "Base IPv4 CIDR the mesh allocates node addresses from",
-	"regulatory_domain":       "Wireless regulatory domain (country code)",
-	"halow_regulatory_domain": "HaLow-specific regulatory domain override, independent of the WiFi regulatory_domain (e.g. MM8108 hardware can run HaLow on a different domain than the 2.4/5GHz radios). Empty = inherit regulatory_domain.",
-	"halow_bw":                "802.11ah HaLow channel bandwidth — EU domain supports 1MHz only; changing regulatory domain/bandwidth changes the on-air channel, so roll out to all HaLow nodes together, not one at a time",
-	"halow_channel":           "802.11ah HaLow channel (empty = Auto, domain/bandwidth default)",
-	"mesh_5ghz_bw":            "5GHz mesh channel width: 20 (deterministic peering, default), 40 or 80 (higher throughput — 40 requires the patched wpa_supplicant and silently falls back to 20 without it; 80 without the patch can mismatch primary channel between nodes) — fleet-wide, never mixed per node",
-	"mesh_5ghz_channel":       "5GHz mesh channel number to pin the static-mode (acs=n) data channel to — valid: 36, 40, 44, 48, 149, 153, 157, 161, 165 (last five US-only, illegal under ETSI); unrecognized/absent falls back to the default lobby channel; has no effect when acs=y",
-	"acs":                     "5GHz/2.4GHz mesh channel selection mode: n (default) pins static channels, y runs automatic channel selection/election — live, applies within one 15s node-manager tick, no restart needed",
-	"battery_monitor":         "Enable Waveshare UPS HAT battery monitoring",
-	"admin_password":          "Password gating write/control API access when require_auth is set",
-	"require_auth":            "Require admin_password for control/config endpoints",
-	"ui_uplink_access":        "Allow the web UI (HTTPS) from this node's uplink network, e.g. a monitoring workstation on a gateway's LAN: y/n (default n, mesh side only)",
-	"gateway":                 "Enable gateway election and internet uplink for the mesh",
-	"gateway_nat":             "Enable NAT/masquerade on the elected gateway node",
-	"gateway_mss_clamp":       "Enable TCP MSS clamping on the gateway uplink",
-	"gateway_bandwidth":       "Uplink bandwidth cap advertised by the gateway",
-	"multicast_mode":          "Mesh multicast handling: flood or optimized (IGMP snooping)",
-	"voice_mic_volume":        "PTT microphone input gain",
-	"voice_speaker_volume":    "PTT speaker output volume",
-	"voice_channel":           "Default PTT voice channel",
-	"voice_rx_channels":       "Additional PTT channels to receive on",
-	"voice_ptt_mode":          "Hardware PTT trigger mode",
-	"voice_gain":              "PTT audio gain applied before encoding",
-	"voice_enabled":           "Enable the PTT voice service",
-	"voice_beep_tx_start":     "Play a beep when PTT transmission starts",
-	"voice_beep_rx_end":       "Play a beep when incoming PTT transmission ends",
-	"dns_servers":             "Upstream DNS servers for .mesh resolution fallthrough",
-	"eud_bandwidth":           "Bandwidth cap applied to connected EUD clients",
-	"qos_enabled":             "Enable tc prio QoS bands on br0",
-	"qos_voice_band":          "QoS priority band assigned to voice traffic",
-	"qos_cot_band":            "QoS priority band assigned to CoT traffic",
-	"qos_chat_band":           "QoS priority band assigned to chat/bulk traffic",
-	"auto_update":             "Enable automatic OTA tools tarball updates",
-	"update_url":              "URL node-update polls for tarball updates",
-	"auto_update_overlay":     "Enable automatic overlay (no-rollback) updates",
-	"auto_update_min_mbps":    "Minimum measured bandwidth required before an auto-update proceeds",
-	"gps":                     "Enable GPS (gpsd) on this node",
-	"gps_source":              "GPS source: receiver (gpsd) or static",
-	"gps_static_lat":          "Static latitude reported when gps_source=static",
-	"gps_static_lon":          "Static longitude reported when gps_source=static",
-	"gps_static_alt":          "Static altitude reported when gps_source=static",
-	"callsign":                "Callsign used in CoT position reports",
-	"cot_type":                "CoT type code broadcast for this node's position",
-	"cot_team":                "CoT team/affiliation for this node's position",
-	"cot_role":                "CoT role for this node's position",
-	"cot_icon":                "CoT icon override for this node's position",
+	"node_hostname":        "Hostname prefix for this node (full hostname adds mesh SSID + MAC suffix)",
+	"eud":                  "Enable End User Device access (WiFi AP / wired bridge)",
+	"lan_ap_ssid":          "SSID for the EUD-facing WiFi access point",
+	"lan_ap_key":           "WPA2-PSK passphrase for the EUD-facing WiFi access point",
+	"lan_ap_channel":       "Channel for the EUD-facing WiFi access point",
+	"lan_ap_bw":            "Channel bandwidth for the EUD-facing WiFi access point",
+	"max_euds_per_node":    "Maximum number of EUD clients this node will serve",
+	"mesh_ssid":            "Mesh network name shared by all nodes",
+	"mesh_key":             "SAE (WPA3) passphrase for the mesh backhaul",
+	"ipv4_network":         "Base IPv4 CIDR the mesh allocates node addresses from",
+	"regulatory_domain":    "Country code (e.g. US, NL) for all radios: the Wi-Fi radios use it directly, HaLow uses the EU plan for EU countries and the same country otherwise. Applies at the next reboot.",
+	"halow_bw":             "802.11ah HaLow channel bandwidth — EU domain supports 1MHz only; changing regulatory domain/bandwidth changes the on-air channel, so roll out to all HaLow nodes together, not one at a time",
+	"halow_channel":        "802.11ah HaLow channel (empty = Auto, domain/bandwidth default)",
+	"halow_duty_cycle":     "HaLow duty cycling: off (no airtime limit) or auto (the driver's regional limit: none in US, 10%/2.8% in EU). Empty = off on the EU plan, auto elsewhere. Applies at the next reboot. Off in EU exceeds the ETSI 863-868 MHz duty-cycle rules.",
+	"halow_txpower_dbm":    "HaLow TX power request and driver cap in dBm (1-30). Empty = per-bandwidth default (24/24/22/20 dBm for 1/2/4/8 MHz). The Morse regulatory table (EU 16 dBm EIRP, US 30) and the board's BCF still cap it; the radio reports what it actually uses. Applies at the next reboot.",
+	"mesh_5ghz_bw":         "5GHz mesh channel width: 20 (deterministic peering, default), 40 or 80 (higher throughput — 40 requires the patched wpa_supplicant and silently falls back to 20 without it; 80 without the patch can mismatch primary channel between nodes) — fleet-wide, never mixed per node",
+	"mesh_5ghz_channel":    "5GHz mesh channel number to pin the static-mode (acs=n) data channel to — valid: 36, 40, 44, 48, 149, 153, 157, 161, 165 (last five US-only, illegal under ETSI); unrecognized/absent falls back to the default lobby channel; has no effect when acs=y",
+	"acs":                  "5GHz/2.4GHz mesh channel selection mode: n (default) pins static channels, y runs automatic channel selection/election — live, applies within one 15s node-manager tick, no restart needed",
+	"battery_monitor":      "Enable Waveshare UPS HAT battery monitoring",
+	"admin_password":       "Password gating write/control API access when require_auth is set",
+	"require_auth":         "Require admin_password for control/config endpoints",
+	"ui_uplink_access":     "Allow the web UI (HTTPS) from this node's uplink network, e.g. a monitoring workstation on a gateway's LAN: y/n (default n, mesh side only)",
+	"gateway":              "Enable gateway election and internet uplink for the mesh",
+	"gateway_nat":          "Enable NAT/masquerade on the elected gateway node",
+	"gateway_mss_clamp":    "Enable TCP MSS clamping on the gateway uplink",
+	"gateway_bandwidth":    "Uplink bandwidth cap advertised by the gateway",
+	"multicast_mode":       "Mesh multicast handling: flood or optimized (IGMP snooping)",
+	"voice_mic_volume":     "PTT microphone input gain",
+	"voice_speaker_volume": "PTT speaker output volume",
+	"voice_channel":        "Default PTT voice channel",
+	"voice_rx_channels":    "Additional PTT channels to receive on",
+	"voice_ptt_mode":       "Hardware PTT trigger mode",
+	"voice_gain":           "PTT audio gain applied before encoding",
+	"voice_enabled":        "Enable the PTT voice service",
+	"voice_beep_tx_start":  "Play a beep when PTT transmission starts",
+	"voice_beep_rx_end":    "Play a beep when incoming PTT transmission ends",
+	"dns_servers":          "Upstream DNS servers for .mesh resolution fallthrough",
+	"eud_bandwidth":        "Bandwidth cap applied to connected EUD clients",
+	"qos_enabled":          "Enable tc prio QoS bands on br0",
+	"qos_voice_band":       "QoS priority band assigned to voice traffic",
+	"qos_cot_band":         "QoS priority band assigned to CoT traffic",
+	"qos_chat_band":        "QoS priority band assigned to chat/bulk traffic",
+	"auto_update":          "Enable automatic OTA tools tarball updates",
+	"update_url":           "URL node-update polls for tarball updates",
+	"auto_update_overlay":  "Enable automatic overlay (no-rollback) updates",
+	"auto_update_min_mbps": "Minimum measured bandwidth required before an auto-update proceeds",
+	"gps":                  "Enable GPS (gpsd) on this node",
+	"gps_source":           "GPS source: receiver (gpsd) or static",
+	"gps_static_lat":       "Static latitude reported when gps_source=static",
+	"gps_static_lon":       "Static longitude reported when gps_source=static",
+	"gps_static_alt":       "Static altitude reported when gps_source=static",
+	"callsign":             "Callsign used in CoT position reports",
+	"cot_type":             "CoT type code broadcast for this node's position",
+	"cot_team":             "CoT team/affiliation for this node's position",
+	"cot_role":             "CoT role for this node's position",
+	"cot_icon":             "CoT icon override for this node's position",
 }
 
 func apiConfigKeys(w http.ResponseWriter, r *http.Request) {
@@ -1134,8 +1135,6 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	_, bwSubmitted := updates["halow_bw"]
 	_, chSubmitted := updates["halow_channel"]
 	_, rdSubmitted := updates["regulatory_domain"]
-	_, hrdSubmitted := updates["halow_regulatory_domain"]
-	rdSubmitted = rdSubmitted || hrdSubmitted
 	if bwSubmitted || chSubmitted || rdSubmitted {
 		effective := make(map[string]string, len(existingConf)+len(updates))
 		for k, v := range existingConf {
@@ -1296,6 +1295,23 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	if bwSubmitted || chSubmitted || rdSubmitted {
 		if applyHalowBW(conf) {
 			applied["halow_bw_applied"] = true
+		}
+	}
+
+	// Region, HaLow duty cycle and HaLow power: module options and radio
+	// configs. Idempotent, so it runs on every save that carries one of
+	// them (config.js always sends them).
+	_, dutySubmitted := updates["halow_duty_cycle"]
+	_, powerSubmitted := updates["halow_txpower_dbm"]
+	if rdSubmitted || bwSubmitted || dutySubmitted || powerSubmitted {
+		changed, err := applyRadioConfigFiles(conf)
+		if err != nil {
+			log.Printf("radio config: %v", err)
+			warnings = append(warnings, err.Error())
+		}
+		if len(changed) > 0 {
+			applied["radio_reboot_required"] = true
+			warnings = append(warnings, "Region / HaLow duty cycle / HaLow power written to the radio module options; reboot this node for the radios to use them")
 		}
 	}
 
@@ -2456,23 +2472,15 @@ func normalizeRegDomain(domain string) string {
 	return domain
 }
 
-// resolveHalowDomain resolves the effective HaLow regulatory domain for a
-// node, mirroring radio-setup.sh's halow_regulatory_domain fallback
-// (lines 391-392): halow_regulatory_domain takes precedence over the
-// general regulatory_domain, defaulting to "US" if neither is set. Any real
-// ISO country code that radio-setup.sh's uses_eu_halow_region() recognizes
-// as EU-band is normalized to the literal "EU" domain used by
-// halowChannelTable -- unlike the bash side, this only normalizes whichever
-// value actually won the precedence above; it does not also let a WiFi-side
-// regulatory_domain override an explicitly-set halow_regulatory_domain
-// (that's the separate, already-tracked regulatory_domain_wifi_halow_split
-// gap, not fixed here).
+// resolveHalowDomain is the HaLow plan for the node's country: "EU" for an
+// EU-plan country, otherwise the country itself. HaLow always follows
+// regulatory_domain, as upstream does: the Morse driver adopts the kernel's
+// Wi-Fi country whenever it has its own table for it, so a separate HaLow
+// region cannot be relied on. Any halow_regulatory_domain left in an old
+// mesh.conf is ignored. radio-setup.sh's resolve_halow_domain applies the
+// same rule; keep them in step.
 func resolveHalowDomain(conf map[string]string) string {
-	domain := confGet(conf, "halow_regulatory_domain", "")
-	if domain == "" {
-		domain = confGet(conf, "regulatory_domain", "US")
-	}
-	return normalizeRegDomain(domain)
+	return normalizeRegDomain(confGet(conf, "regulatory_domain", "US"))
 }
 
 // halowChannelTable is the ground-truth legal HaLow channel list per
@@ -2532,12 +2540,7 @@ func halowChannelCandidates(domain, bw string) []int {
 }
 
 // resolveMesh5GHzDomain resolves the effective regulatory domain for the
-// 5GHz mesh (WiFi) radio: reads the plain regulatory_domain key only,
-// defaulting to "US" if unset. Deliberately does NOT reuse
-// resolveHalowDomain/halow_regulatory_domain -- HaLow and 5GHz WiFi can
-// legitimately run different regulatory domains on the same node (e.g. an
-// MM8108 unit), so letting halow_regulatory_domain=US leak into this check
-// could unlock illegal 5GHz WiFi channels under a EU regulatory_domain.
+// 5GHz mesh (WiFi) radio from regulatory_domain, defaulting to "US" if unset.
 //
 // regulatory_domain holds a real ISO country code in provisioned config
 // (e.g. "HR", "NL"), not just the literal "EU" the web UI's select emits --
@@ -2739,7 +2742,8 @@ func apiHalowChannels(w http.ResponseWriter, r *http.Request) {
 func applyHalowBW(conf map[string]string) bool {
 	bw := effectiveHalowBW(conf)
 	regDomain := resolveHalowDomain(conf)
-	opClass, ch, chwidth, txMBM := halowBWParams(bw, regDomain)
+	opClass, ch, chwidth, _ := halowBWParams(bw, regDomain)
+	txMBM, _ := halowTxpowerMBM(conf)
 	if explicit := conf["halow_channel"]; explicit != "" {
 		ch = explicit
 	}
