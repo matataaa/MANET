@@ -1,0 +1,12 @@
+#!/bin/bash
+#
+# Installed as off.d/50-gateway-disable and no-carrier.d/50-gateway-disable:
+# the link is gone. end0 returns to its baseline through ethernet-autodetect.sh
+# (one cleanup implementation, serialized with detection); other interfaces
+# go to uplink reconciliation, which demotes them if they were the gateway.
+
+if [ "${IFACE:-}" = "end0" ]; then
+    /usr/local/bin/ethernet-autodetect.sh --unplug
+else
+    /usr/local/bin/manet-uplink-dispatch.sh "${STATE:-off}" "${IFACE:-}"
+fi

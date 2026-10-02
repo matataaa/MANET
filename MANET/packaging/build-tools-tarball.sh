@@ -44,6 +44,11 @@ mkdir -p "$STAGE/usr/local/bin" "$STAGE/etc"
 install_tree "$ROOTFS/usr" "$STAGE/usr"
 install_tree "$ROOTFS/etc/systemd" "$STAGE/etc/systemd"
 install_tree "$ROOTFS/etc/udev" "$STAGE/etc/udev"
+# networkd-dispatcher hooks: shipped here too so an update replaces the ones
+# a node was provisioned with (they route end0 to ethernet-autodetect.sh).
+install_tree "$ROOTFS/etc/networkd-dispatcher" "$STAGE/etc/networkd-dispatcher"
+chmod 0755 "$STAGE/etc/networkd-dispatcher"/*.d/*
+rm -f "$STAGE/etc/networkd-dispatcher/README.md"
 
 chmod -R a+rX "$STAGE/usr/local/bin"
 find "$STAGE/usr/local/bin" -type f \

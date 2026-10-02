@@ -8,12 +8,19 @@ LEGACY_ETH_STATE=/var/run/ethernet_detection_state
 UPSTREAM_IFACE_FILE=/var/run/upstream_iface
 LOCK_FILE=/run/manet-uplink-dispatch.lock
 NETWORKD_DIR=/etc/systemd/network
+# Written only by ethernet-autodetect.sh, which owns the Ethernet port's role.
+ETH_ROLE_FILE=/run/manet-eth-role
 
 EVENT="${1:-${STATE:-reconcile}}"
 IFACE="${2:-${IFACE:-${INTERFACE:-}}}"
 
+# Periodic and hotplug reconciles skip a busy pass; explicit promote/release
+# requests from ethernet-autodetect.sh wait for it (bounded).
 exec 200>"$LOCK_FILE"
-flock -n 200 || exit 0
+case "$EVENT" in
+    promote|release) flock -w 60 200 || exit 0 ;;
+    *) flock -n 200 || exit 0 ;;
+esac
 
 log() {
     printf '[%(%Y-%m-%d %H:%M:%S)T] - MANET-UPLINK: %s\n' -1 "$*" >&2
@@ -39,6 +46,28 @@ is_upstream_iface() {
     local bus
     bus=$(readlink "/sys/class/net/$iface/device/subsystem" 2>/dev/null | grep -o 'usb' || true)
     [ "$bus" = "usb" ]
+}
+
+# ethernet-autodetect.sh's role for iface, if it manages it.
+eth_role() {
+    local IFACE="" ROLE=""
+    [ -f "$ETH_ROLE_FILE" ] || return 0
+    # shellcheck disable=SC1090
+    . "$ETH_ROLE_FILE"
+    [ "$IFACE" = "$1" ] && echo "$ROLE"
+    return 0
+}
+
+# A port that is a wired EUD (bridged into br0, or being detected) is never
+# an uplink candidate: probing it would detach the EUD and run a DHCP client
+# on its cable.
+is_eud_port() {
+    local iface="$1"
+    [ "$(basename "$(readlink "/sys/class/net/$iface/master" 2>/dev/null)")" = "br0" ] && return 0
+    case "$(eth_role "$iface")" in
+        wired-eud|detecting) return 0 ;;
+    esac
+    return 1
 }
 
 has_carrier() {
@@ -158,6 +187,7 @@ find_working_uplink() {
     for iface in $(candidate_ifaces); do
         is_upstream_iface "$iface" || continue
         has_carrier "$iface" || continue
+        is_eud_port "$iface" && continue
 
         ip link set "$iface" nomaster 2>/dev/null || true
         if [ ! -f "${NETWORKD_DIR}/20-${iface}.network" ]; then
@@ -289,6 +319,10 @@ EOF
     ensure_eud_services
     systemctl restart mesh-manager 2>/dev/null || true
     systemctl restart gateway-manager 2>/dev/null || true
+    # Sync over the uplink and serve time to the mesh. Takes up to ~90s, so
+    # it runs as its own transient unit rather than holding this lock.
+    systemd-run --no-block --collect --unit=manet-gateway-ntp \
+        /usr/local/bin/manet-gateway-ntp.sh start >/dev/null 2>&1 || true
 
     log "Promoted $iface as MANET gateway (${ip}, gw=${gw:-none})"
 }
@@ -298,7 +332,12 @@ demote_gateway() {
 
     clear_firewall
     batctl gw_mode client 2>/dev/null || true
-    rm -f "$LEGACY_GATEWAY_STATE" "$LEGACY_NTP_STATE" "$LEGACY_ETH_STATE" "$STATE_FILE" "$UPSTREAM_IFACE_FILE"
+    systemctl stop manet-gateway-ntp.service 2>/dev/null || true
+    /usr/local/bin/manet-gateway-ntp.sh stop || true
+    rm -f "$LEGACY_GATEWAY_STATE" "$LEGACY_NTP_STATE" "$STATE_FILE" "$UPSTREAM_IFACE_FILE"
+    # ethernet_detection_state describes the Ethernet port's role; only drop
+    # it here when it described this uplink, not a wired EUD on end0.
+    grep -q '^ETH_MODE=GATEWAY' "$LEGACY_ETH_STATE" 2>/dev/null && rm -f "$LEGACY_ETH_STATE"
 
     if [ -n "$old_iface" ] && is_upstream_iface "$old_iface"; then
         ip addr flush dev "$old_iface" 2>/dev/null || true
@@ -372,7 +411,31 @@ case "$EVENT" in
     carrier|routable|configured|online|add|reconcile|--hotplug)
         reconcile
         ;;
-    off|no-carrier|degraded|remove|offline)
+    promote)
+        # ethernet-autodetect.sh found a lease with internet on IFACE.
+        is_upstream_iface "$IFACE" || { log "promote: $IFACE is not an uplink interface"; exit 0; }
+        promote_gateway "$IFACE" || true
+        ;;
+    release)
+        # ethernet-autodetect.sh is taking IFACE for another role (wired EUD)
+        # or the cable is gone: demote only if it was the gateway uplink.
+        if [ -n "$IFACE" ] && [ "$IFACE" = "$(current_uplink_iface)" ]; then
+            demote_gateway "$IFACE"
+        fi
+        ;;
+    degraded)
+        # A degraded event with carrier still present (a DHCP renewal blip,
+        # a bridge port without an address) is not a loss of uplink.
+        if [ -n "$IFACE" ] && has_carrier "$IFACE"; then
+            reconcile
+        elif [ -n "$IFACE" ] && [ "$IFACE" = "$(current_uplink_iface)" ]; then
+            demote_gateway "$IFACE"
+            reconcile
+        else
+            reconcile
+        fi
+        ;;
+    off|no-carrier|remove|offline)
         current=$(current_uplink_iface)
         if [ -n "$IFACE" ] && [ "$IFACE" != "$current" ]; then
             log "$EVENT on $IFACE is not current uplink (${current:-none}); reconciling"
