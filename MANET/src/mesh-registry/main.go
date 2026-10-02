@@ -791,10 +791,26 @@ func getDirectNeighbors() string {
 	if err != nil {
 		return ""
 	}
+	return parseDirectNeighbors(string(out))
+}
+
+// neighborMaxLastSeen drops batman neighbors not heard from recently. batman
+// keeps a neighbor in `batctl n` well after its link has gone, and peers
+// draw every published neighbor as a direct link on their dashboards.
+// manet-ctrl applies the same 60s cutoff to its own neighbor list.
+const neighborMaxLastSeen = 60.0
+
+// parseDirectNeighbors turns `batctl n` output into the published
+// DIRECT_NEIGHBORS value: MAC[=speed[=iface]] entries, comma-separated.
+// Rows look like: 0c:bf:74:00:2b:ee    0.432s (        8.5) [     wlan2]
+func parseDirectNeighbors(out string) string {
 	var entries []string
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 3 && strings.Contains(fields[0], ":") {
+			if lastSeen, err := strconv.ParseFloat(strings.TrimSuffix(fields[1], "s"), 64); err == nil && lastSeen > neighborMaxLastSeen {
+				continue
+			}
 			entry := fields[0]
 			if len(fields) >= 4 {
 				speed := strings.Trim(fields[3], "()")

@@ -572,17 +572,25 @@ func assembleStatusData() StatusData {
 			if !ok || nbNodeID == selfID || nbNodeID == n.ID {
 				continue
 			}
+			peerEdge := Edge{Source: n.ID, Target: nbNodeID, Type: "direct", TQ: peerTQ, Throughput: peerTP, Iface: peerIface}
 			dup := false
-			for _, e := range edges {
+			for i, e := range edges {
 				s := e.Source
 				t := e.Target
 				if (s == n.ID && t == nbNodeID) || (s == nbNodeID && t == n.ID) {
+					// An "inferred" hop is only this node's guess from its
+					// own routing table (with this node's TQ to the
+					// target); the peer's neighbor list is the hop itself,
+					// with its own link quality and radio.
+					if e.Type == "inferred" {
+						edges[i] = peerEdge
+					}
 					dup = true
 					break
 				}
 			}
 			if !dup {
-				edges = append(edges, Edge{Source: n.ID, Target: nbNodeID, Type: "direct", TQ: peerTQ, Throughput: peerTP, Iface: peerIface})
+				edges = append(edges, peerEdge)
 			}
 		}
 	}
