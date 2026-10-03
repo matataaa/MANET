@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,7 +28,7 @@ var Version = "dev"
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:    16384,
 	WriteBufferSize:   16384,
-	CheckOrigin:       func(r *http.Request) bool { return true },
+	CheckOrigin:       sameOrigin,
 	EnableCompression: true,
 }
 
@@ -66,7 +67,22 @@ func handleTerminalProxy(client *websocket.Conn, target string) {
 		TLSClientConfig:   peerTLSConfig,
 		EnableCompression: true,
 	}
-	remote, _, err := dialer.Dial(remoteURL, nil)
+	// Mint the peer token against the *parsed* authority (u.Host), not the
+	// raw target string: url.Parse normalizes bracket/zone handling, so a
+	// zoned IPv6 target like "fe80::1%bat0" is bound the same way it will
+	// arrive at the target's own HTTP server (zone stripped) -- minting
+	// against the raw string would sign a value that r.Host there could
+	// never match, causing a false 401 even with a correct password and a
+	// fresh timestamp.
+	var reqHeader http.Header
+	if u, perr := url.Parse(remoteURL); perr == nil {
+		if token := mintFleetPeerToken(u.Host, FleetPeerAuthDomainTerminal); token != "" {
+			reqHeader = http.Header{FleetPeerAuthHeader: {token}}
+		}
+	} else {
+		log.Printf("terminal proxy: parse target %q: %v", target, perr)
+	}
+	remote, _, err := dialer.Dial(remoteURL, reqHeader)
 	if err != nil {
 		log.Printf("terminal proxy dial %s: %v", target, err)
 		client.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\x1b[31mFailed to connect to %s: %v\x1b[0m\r\n", target, err)))
@@ -114,16 +130,10 @@ func handleTerminalSSH(conn *websocket.Conn, q url.Values) {
 		password = conf["admin_password"]
 	}
 
-	sshArgs := []string{"-tt",
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "ConnectTimeout=5",
-		fmt.Sprintf("%s@%s", user, target),
-	}
-	var cmd *exec.Cmd
-	if password != "" {
-		cmd = exec.Command("sshpass", append([]string{"-p", password, "ssh"}, sshArgs...)...)
-	} else {
-		cmd = exec.Command("ssh", sshArgs...)
+	cmd, err := sshCommand(user, target, password, true, "")
+	if err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\x1b[31m%v\x1b[0m\r\n", err)))
+		return
 	}
 
 	handleTerminalPTY(conn, cmd, target)
@@ -135,7 +145,12 @@ func handleTerminalLocal(conn *websocket.Conn) {
 }
 
 func handleTerminalPTY(conn *websocket.Conn, cmd *exec.Cmd, target string) {
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "LANG=en_US.UTF-8")
+	// Keep an environment the caller prepared (sshCommand's askpass setup).
+	env := cmd.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	cmd.Env = append(env, "TERM=xterm-256color", "LANG=en_US.UTF-8")
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -237,6 +252,72 @@ func handleTerminalPTY(conn *websocket.Conn, cmd *exec.Cmd, target string) {
 	log.Printf("terminal ended pid=%d", pid)
 }
 
+// logsAllowedDir is the only directory tree handleLogs will tail a file
+// from. The file= query param is otherwise attacker/caller-controlled and
+// this handler runs as root (manet-ctrl's service User=root) via "tail -f",
+// so without this restriction any authenticated caller (or, before this fix,
+// literally anyone -- /ws/logs had no auth wrapper at all) could stream
+// /etc/mesh.conf's admin_password/mesh_key or any other file readable by
+// root. Logs legitimately live under /var/log/ (see mesh-debug SKILL.md's
+// "Logs & Kernel Messages" section); nothing else should ever be a valid
+// target here.
+const logsAllowedDir = "/var/log/"
+
+const (
+	logsDefaultLines = 200
+	// logsMaxLines caps an absurd caller-supplied value from turning into an
+	// effectively unbounded "tail -n" read; this is a sanity clamp, not a
+	// security boundary (the caller is already authenticated for this
+	// route).
+	logsMaxLines = 100000
+)
+
+// validateLogLines parses and bounds the lines= query param. Returns
+// logsDefaultLines for an empty string (matches the previous default),
+// and an error for anything non-numeric, non-positive, or absurdly large --
+// exec.Command passes this as a literal argv entry (no shell involved), so
+// this is an input-sanity check, not a shell-injection guard.
+func validateLogLines(raw string) (int, error) {
+	if raw == "" {
+		return logsDefaultLines, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid lines value %q: not a number", raw)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("invalid lines value %d: must be positive", n)
+	}
+	if n > logsMaxLines {
+		return 0, fmt.Errorf("invalid lines value %d: exceeds max %d", n, logsMaxLines)
+	}
+	return n, nil
+}
+
+// validateLogFile confirms raw names a file under logsAllowedDir once
+// resolved, rejecting any ".."-traversal (e.g.
+// "/var/log/../etc/mesh.conf") or path outside that tree (e.g.
+// "/etc/mesh.conf"). filepath.Clean lexically collapses "..", so the
+// prefix check below runs against the collapsed path, not the raw one --
+// a naive prefix check against the *raw* string would be bypassable by the
+// exact traversal example above. Deliberately not also calling
+// filepath.EvalSymlinks here: this is a fixed service reachable only by an
+// already-authenticated caller (see requireAuthOrPeerToken on this route),
+// not a hostile-input-facing endpoint, and planting a symlink under
+// /var/log/ in the first place would already require the same root-level
+// write access this handler runs with -- EvalSymlinks would add a failure
+// mode (it errors on a not-yet-created log file, which "tail -f" is
+// routinely pointed at) without closing a realistic gap for this threat
+// model.
+func validateLogFile(raw string) (string, error) {
+	clean := filepath.Clean(raw)
+	allowedRoot := strings.TrimSuffix(logsAllowedDir, "/")
+	if clean != allowedRoot && !strings.HasPrefix(clean, logsAllowedDir) {
+		return "", fmt.Errorf("invalid file %q: must be under %s", raw, logsAllowedDir)
+	}
+	return clean, nil
+}
+
 func handleLogs(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -249,23 +330,35 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 	target := q.Get("target")
 	unit := q.Get("unit")
 	file := q.Get("file")
-	lines := q.Get("lines")
-	if lines == "" {
-		lines = "200"
-	}
 
 	if target != "" {
 		handleLogsProxy(conn, target, q)
 		return
 	}
 
+	lines, err := validateLogLines(q.Get("lines"))
+	if err != nil {
+		if werr := conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\x1b[31m%v\x1b[0m\r\n", err))); werr != nil {
+			log.Printf("logs: write validation error to client: %v", werr)
+		}
+		return
+	}
+
 	var cmd *exec.Cmd
 	if file != "" {
-		cmd = exec.Command("tail", "-f", "-n", lines, file)
+		cleanFile, err := validateLogFile(file)
+		if err != nil {
+			if werr := conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\x1b[31m%v\x1b[0m\r\n", err))); werr != nil {
+				log.Printf("logs: write validation error to client: %v", werr)
+			}
+			return
+		}
+		file = cleanFile
+		cmd = exec.Command("tail", "-f", "-n", strconv.Itoa(lines), file)
 	} else if unit != "" {
-		cmd = exec.Command("journalctl", "-u", unit, "-f", "-n", lines, "--no-pager", "-o", "short-iso")
+		cmd = exec.Command("journalctl", "-u", unit, "-f", "-n", strconv.Itoa(lines), "--no-pager", "-o", "short-iso")
 	} else {
-		cmd = exec.Command("journalctl", "-f", "-n", lines, "--no-pager", "-o", "short-iso")
+		cmd = exec.Command("journalctl", "-f", "-n", strconv.Itoa(lines), "--no-pager", "-o", "short-iso")
 	}
 
 	stdout, err := cmd.StdoutPipe()
@@ -325,7 +418,19 @@ func handleLogsProxy(client *websocket.Conn, target string, q url.Values) {
 		HandshakeTimeout:  5 * time.Second,
 		EnableCompression: true,
 	}
-	remote, _, err := dialer.Dial(remoteURL, nil)
+	// Mint against the parsed authority (u.Host), same reasoning as
+	// handleTerminalProxy: url.Parse normalizes bracket/zone handling so the
+	// signed value matches what r.Host will actually be on the target's own
+	// HTTP server.
+	var reqHeader http.Header
+	if u, perr := url.Parse(remoteURL); perr == nil {
+		if token := mintFleetPeerToken(u.Host, FleetPeerAuthDomainLogs); token != "" {
+			reqHeader = http.Header{FleetPeerAuthHeader: {token}}
+		}
+	} else {
+		log.Printf("logs proxy: parse target %q: %v", target, perr)
+	}
+	remote, _, err := dialer.Dial(remoteURL, reqHeader)
 	if err != nil {
 		log.Printf("logs proxy dial %s: %v", target, err)
 		client.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\x1b[31mFailed to connect to %s: %v\x1b[0m\r\n", target, err)))
@@ -414,6 +519,11 @@ func serveStatic(webRoot string) http.HandlerFunc {
 }
 
 func main() {
+	// Before flag parsing: as ssh's askpass helper this binary is started
+	// with the prompt text as its argument (see sshaskpass.go).
+	if runAsAskpass() {
+		return
+	}
 	port := flag.String("port", "80", "listen port")
 	tlsPort := flag.String("tls-port", "443", "HTTPS listen port")
 	tlsCert := flag.String("tls-cert", "/etc/manet/tls/cert.pem", "TLS certificate file")
@@ -435,8 +545,8 @@ func main() {
 	mux := http.NewServeMux()
 
 	// WebSocket
-	mux.HandleFunc("/ws/terminal", requireAuth(handleTerminal))
-	mux.HandleFunc("/ws/logs", handleLogs)
+	mux.HandleFunc("/ws/terminal", requireAuthOrPeerToken(FleetPeerAuthDomainTerminal)(handleTerminal))
+	mux.HandleFunc("/ws/logs", requireAuthOrPeerToken(FleetPeerAuthDomainLogs)(handleLogs))
 	mux.HandleFunc("/ws/voice", handleVoiceWS)
 
 	// Status APIs (read-only — no auth)
@@ -511,6 +621,7 @@ func main() {
 	// Auth
 	mux.HandleFunc("/api/auth/status", apiAuthStatus)
 	mux.HandleFunc("/api/perf-auth", apiPerfAuth)
+	mux.HandleFunc("/api/logout", apiLogout)
 
 	// Applets
 	mux.HandleFunc("/api/applets", apiAppletsRouter)
@@ -519,12 +630,16 @@ func main() {
 	// Static files (SPA fallback)
 	mux.HandleFunc("/", serveStatic(*webRoot))
 
+	if err := initCLIToken(); err != nil {
+		log.Printf("mesh CLI token: %v (CLI write commands will be refused)", err)
+	}
 	voiceInitChannels()
 	go fleetConfigWatcher()
+	go uiFirewallLoop()
 	go fleetMcastListener()
 	go airtimeLoop()
 
-	handler := appletHostRedirect(mux, *webRoot)
+	handler := originGuard(appletHostRedirect(mux, *webRoot))
 
 	go func() {
 		sig := make(chan os.Signal, 1)
@@ -537,16 +652,11 @@ func main() {
 	if err := ensureTLSCert(*tlsCert, *tlsKey); err != nil {
 		log.Printf("TLS cert generation failed: %v — HTTPS disabled", err)
 		log.Printf("manet-ctrl listening on :%s webroot=%s", *port, *webRoot)
-		log.Fatal(http.ListenAndServe(":"+*port, handler))
+		log.Fatal(newServer(":"+*port, handler).ListenAndServe())
 	} else {
 		go func() {
-			tlsSrv := &http.Server{
-				Addr:    ":" + *tlsPort,
-				Handler: handler,
-				TLSConfig: &tls.Config{
-					MinVersion: tls.VersionTLS12,
-				},
-			}
+			tlsSrv := newServer(":"+*tlsPort, handler)
+			tlsSrv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 			log.Printf("manet-ctrl HTTPS on :%s", *tlsPort)
 			if err := tlsSrv.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil {
 				log.Printf("HTTPS listener failed: %v", err)
@@ -565,6 +675,22 @@ func main() {
 			http.Redirect(w, r, target, http.StatusMovedPermanently)
 		})
 		log.Printf("manet-ctrl HTTP :%s → HTTPS :%s", *port, *tlsPort)
-		log.Fatal(http.ListenAndServe(":"+*port, redirect))
+		log.Fatal(newServer(":"+*port, redirect).ListenAndServe())
+	}
+}
+
+// newServer bounds how long a client may take to send its request headers
+// and how long an idle keep-alive connection is held, so slow or abandoned
+// clients can't pile up connections. There is deliberately no ReadTimeout or
+// WriteTimeout: those would also cut off the streaming iperf/ping/traceroute
+// and terminal-exec responses, config saves that wait on reconcile scripts,
+// and applet uploads over HaLow. Websockets are unaffected either way, since
+// net/http clears connection deadlines on hijack.
+func newServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 }

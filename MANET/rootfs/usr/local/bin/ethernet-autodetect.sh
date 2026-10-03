@@ -2,29 +2,61 @@
 # ==============================================================================
 # Ethernet Auto-Detection Script
 # ==============================================================================
-# Detects ethernet role and configures bridging appropriately
+# Sole owner of the built-in Ethernet port's role. Decides, once per physical
+# connection, what is on the other end of the cable:
 #
-# Modes:
-#   gateway: end0 has internet (DHCP from ISP) - stays routed, NAT enabled
-#   wired-eud: end0 connected to EUD device - bridge to br0
+#   gateway    a lease plus internet: handed to manet-uplink-dispatch.sh, which
+#              owns gateway setup (NAT, batman gw_mode, radvd, NTP serving)
+#   wired-eud  no lease and no sign of a network: one or more EUDs (e.g. a
+#              team's devices on an unmanaged switch) or a silent cable.
+#              Bridged into br0 so they get addresses from this node's dnsmasq
+#   network    an attached LAN (router adverts, STP/LLDP/CDP, or a lease
+#              without internet): left unbridged, no DHCP
+#              served onto it. Its DHCP client keeps running, so a late lease
+#              with internet is picked up by the dispatcher's routable hook.
 #
-# wlan1 handling:
-#   - In wireless/auto mode with no cable: wlan1 is AP (br0, not bat0)
-#   - In wired mode or auto with wired EUD: wlan1 returns to mesh (bat0)
-#   - In gateway mode: wlan1 behavior depends on EUD config
-#	-  - EUD wired: wlan1 into mesh
-#   -  - Wireless:  wlan1 AP
-#   -  - Auto:  wlan1 into mesh
+# The role is recorded in $ROLE_FILE with the port's carrier_down_count.
+# Bridging the port and networkd reconfiguring it produce fresh carrier
+# events without the link going down, so a carrier event is only acted on
+# when that counter has changed (a real unplug, re-plug or link flap).
+#
+# Other scripts read $ROLE_FILE and never change the port's role:
+# manet-uplink-dispatch.sh skips ports bridged into br0 or marked wired-eud /
+# detecting, and the networkd-dispatcher unplug hook calls --unplug here.
+#
+# wlan1/AP handling (when /var/lib/ap_interface is set):
+#   - wired EUD in auto/wired mode: the AP radio returns to the mesh
+#   - no cable in auto/wireless mode: the AP is (re)started
+#
+# Usage: ethernet-autodetect.sh [--hotplug] [--unplug] [--iface IF]
+#                               [--mode wired-eud|network]
 # ==============================================================================
 
 # Full xtrace + tee-to-journal only when debugging: set -x sends every traced
 # line to journald via the dispatcher, which is real load when events loop.
 if [ -f /etc/eth-detect-debug ]; then
-    exec > >(tee /var/log/ethernet-detect.log) 2>&1
+    exec > >(tee -a /var/log/ethernet-detect.log) 2>&1
     set -x
 else
-    exec > /var/log/ethernet-detect.log 2>&1
+    exec >> /var/log/ethernet-detect.log 2>&1
 fi
+
+ROLE_FILE="/run/manet-eth-role"
+LOCK_FILE="/run/manet-eth.lock"
+NETWORKD_DIR="/etc/systemd/network"
+DISPATCH="/usr/local/bin/manet-uplink-dispatch.sh"
+UPLINK_SPEED="${MANET_UPLINK_SPEED:-/usr/local/bin/manet-uplink-speed.sh}"
+ETH_STATE_FILE="/var/run/ethernet_detection_state"
+
+# Passive capture taken while waiting for a lease. Bounded in time, packet
+# count and snap length so a busy LAN can't grow it past ~60 KiB.
+LAN_CAPTURE_FILE="/run/eth-detect.pcap"
+LAN_CAPTURE_PID=""
+LEASE_WAIT_SECS=20
+
+log() {
+    printf '[%(%Y-%m-%d %H:%M:%S)T] - ETH-DETECT: %s\n' -1 "$1" >&2
+}
 
 # systemctl unmask always triggers a full daemon-reload, and enable on units
 # with sysv shims (dnsmasq, hostapd) spawns update-rc.d which reloads again.
@@ -41,33 +73,20 @@ enable_if_disabled() {
     return 0
 }
 
-# Determine which upstream interface to use.
-# Priority: end0 (native ethernet) > USB ethernet (usb*, enx*)
-# Can be overridden by passing --iface <name> or via /var/run/upstream_iface
+# Which port to manage: --iface, else end0, else the first USB Ethernet port.
 resolve_eth_iface() {
-    # Explicit override from caller
     if [ -n "${FORCE_IFACE:-}" ]; then
         echo "$FORCE_IFACE"
         return
     fi
-    # Saved upstream from previous detection
-    if [ -f /var/run/upstream_iface ]; then
-        local saved
-        saved=$(cat /var/run/upstream_iface)
-        if ip link show "$saved" &>/dev/null; then
-            echo "$saved"
-            return
-        fi
-    fi
-    # Native ethernet first
     if ip link show end0 &>/dev/null; then
         echo "end0"
         return
     fi
-    # USB ethernet: usb0, usb1, enxXXX (CDC ECM/RNDIS/NCM dongles/tethering)
-    for iface in $(ls /sys/class/net/); do
-        local bus
-        bus=$(readlink /sys/class/net/$iface/device/subsystem 2>/dev/null | grep -o 'usb' || true)
+    local path iface bus
+    for path in /sys/class/net/*; do
+        iface=${path##*/}
+        bus=$(readlink "$path/device/subsystem" 2>/dev/null | grep -o 'usb' || true)
         if [ "$bus" = "usb" ] && [[ "$iface" != wlan* ]] && [[ "$iface" != bat* ]] && [[ "$iface" != br* ]]; then
             echo "$iface"
             return
@@ -76,532 +95,384 @@ resolve_eth_iface() {
     echo "end0"
 }
 
-ETH_IFACE=$(resolve_eth_iface)
-LOCK_FILE="/var/run/ethernet-autodetect.lock"
-
-# Written when DHCP works but the internet test fails, so repeated dispatcher
-# events on the same iface+IP don't rerun the cleanup/reconfigure cycle.
-NO_INET_STATE="/var/run/eth-no-internet.state"
-NO_INET_RECHECK_SECS=600
-
-# Networkd config paths
-NETWORKD_DIR="/etc/systemd/network"
-GATEWAY_CONFIG="${NETWORKD_DIR}/20-end0-gateway.network.off"
-ACTIVE_CONFIG="${NETWORKD_DIR}/20-${ETH_IFACE}.network"
-
-log() {
-    printf '[%(%Y-%m-%d %H:%M:%S)T] - ETH-DETECT: %s\n' -1 "$1" >&2
+has_carrier() {
+    [ "$(cat "/sys/class/net/$ETH_IFACE/carrier" 2>/dev/null || echo 0)" = "1" ]
 }
 
-run_no_carrier_cleanup() {
-    log "No carrier on $ETH_IFACE - running unplug cleanup"
+down_count() {
+    cat "/sys/class/net/$ETH_IFACE/carrier_down_count" 2>/dev/null || echo na
+}
 
-    if [ -x /etc/networkd-dispatcher/off.d/50-gateway-disable ]; then
-        IFACE="$ETH_IFACE" /etc/networkd-dispatcher/off.d/50-gateway-disable
-    elif [ -x /root/networkd-dispatcher/off ]; then
-        IFACE="$ETH_IFACE" /root/networkd-dispatcher/off
-    else
-        rm -f "$ACTIVE_CONFIG" /var/run/mesh-gateway.state /var/run/mesh-ntp.state /var/run/ethernet_detection_state
-        ip addr flush dev "$ETH_IFACE" 2>/dev/null || true
-        ip link set "$ETH_IFACE" nomaster 2>/dev/null || true
-        batctl gw_mode client 2>/dev/null || true
-        nft delete table inet filter 2>/dev/null || true
-        nft flush chain ip nat postrouting 2>/dev/null || true
-        systemctl restart gateway-route-manager.service 2>/dev/null || true
-        systemctl restart dnsmasq.service 2>/dev/null || true
+eud_mode() {
+    local mode
+    mode=$(grep "^eud=" /etc/mesh.conf 2>/dev/null | cut -d'=' -f2)
+    case "$mode" in
+        wireless|wired|auto|none) echo "$mode" ;;
+        *) echo auto ;;
+    esac
+}
+
+ap_interface() {
+    cat /var/lib/ap_interface 2>/dev/null || true
+}
+
+# --- role record --------------------------------------------------------------
+
+write_role() {
+    cat > "$ROLE_FILE.tmp" <<EOF
+IFACE=$ETH_IFACE
+ROLE=$1
+DOWN_COUNT=$(down_count)
+SINCE=$(date +%s)
+EOF
+    mv "$ROLE_FILE.tmp" "$ROLE_FILE"
+}
+
+# The role recorded for this port during the current physical connection, if
+# any. Empty when the link has gone down since (or nothing was recorded).
+current_connection_role() {
+    [ -f "$ROLE_FILE" ] || return 0
+    local IFACE="" ROLE="" DOWN_COUNT=""
+    # shellcheck disable=SC1090
+    . "$ROLE_FILE"
+    if [ "$IFACE" = "$ETH_IFACE" ] && [ "$DOWN_COUNT" = "$(down_count)" ] && [ "$DOWN_COUNT" != na ]; then
+        echo "$ROLE"
     fi
 }
 
-wait_for_end0_ip() {
-    local wait_count=0
-    local max_wait="${1:-20}"
-    local ip=""
+# --- networkd -------------------------------------------------------------------
 
-    while [ "$wait_count" -lt "$max_wait" ]; do
+WIRED_EUD_CONFIG=""
+
+# networkd applies the first matching .network file and, on every
+# reconfigure, resets the master of a link whose file has no Bridge=. The
+# node's 10-<iface>.network is a DHCP client, so a port bridged only with
+# `ip link set master` would be detached again on the next reconfigure. This
+# file sorts first, so while it exists networkd itself keeps the port in br0.
+write_wired_eud_config() {
+    cat > "$WIRED_EUD_CONFIG" <<EOF
+[Match]
+Name=$ETH_IFACE
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+Bridge=br0
+DHCP=no
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+EOF
+    networkctl reload 2>/dev/null || true
+}
+
+remove_wired_eud_config() {
+    [ -f "$WIRED_EUD_CONFIG" ] || return 0
+    rm -f "$WIRED_EUD_CONFIG"
+    networkctl reload 2>/dev/null || true
+}
+
+# --- AP radio -------------------------------------------------------------------
+
+# Return the AP candidate radio to the mesh (auto/wired mode with a wired EUD).
+ap_to_mesh() {
+    local ap
+    ap=$(ap_interface)
+    [ -n "$ap" ] || return 0
+    batctl if | grep -q "$ap" && return 0
+
+    # AP-only hardware (e.g. an onboard Wi-Fi radio with no mesh supplicant
+    # config) never joins the mesh: just stop the AP.
+    if [ ! -f "/etc/wpa_supplicant/wpa_supplicant-$ap.conf" ]; then
+        log "$ap is AP-only (no mesh config); stopping the AP"
+        systemctl stop hostapd.service ap-txpower.service 2>/dev/null
+        systemctl disable hostapd.service 2>/dev/null
+        ip link set "$ap" nomaster 2>/dev/null || true
+        return 0
+    fi
+
+    log "Returning $ap from AP to mesh"
+    systemctl stop hostapd.service ap-txpower.service 2>/dev/null
+    systemctl disable hostapd.service 2>/dev/null
+    ip link set "$ap" down
+    ip link set "$ap" nomaster 2>/dev/null || true
+    iw dev "$ap" set type mesh
+    ip link set "$ap" up
+    systemctl restart "wpa_supplicant@$ap.service" 2>/dev/null
+    sleep 2
+    if batctl if add "$ap" 2>/dev/null; then
+        log "$ap added to bat0"
+    else
+        log "Failed to add $ap to bat0"
+    fi
+    # The AP radio changed role, so mesh-manager must rebuild its ebtables
+    # and dnsmasq view. Only on this transition: a plain wired EUD needs no
+    # service restarts (dnsmasq already serves br0).
+    systemctl restart mesh-manager 2>/dev/null || true
+}
+
+# Make sure the AP serves EUDs (auto/wireless mode without a wired EUD).
+ap_serve() {
+    local ap
+    ap=$(ap_interface)
+    [ -n "$ap" ] || return 0
+
+    if batctl if | grep -q "$ap"; then
+        log "Removing $ap from bat0 (it serves the AP)"
+        batctl if del "$ap" 2>/dev/null || true
+    fi
+    unmask_if_masked dnsmasq.service
+    enable_if_disabled hostapd.service
+    systemctl start hostapd.service 2>/dev/null
+    enable_if_disabled dnsmasq.service
+    systemctl start dnsmasq.service 2>/dev/null
+    systemctl start ap-txpower.service 2>/dev/null
+    if ! ip link show "$ap" | grep -q "master br0"; then
+        ip link set "$ap" master br0
+        ip link set "$ap" up
+    fi
+}
+
+# --- LAN capture (attached network vs. single EUD) ---------------------------
+
+# Record inbound frames on the port while DHCP runs. -Q in keeps our own
+# DHCP requests out of the source-MAC count.
+start_lan_capture() {
+    rm -f "$LAN_CAPTURE_FILE"
+    command -v tcpdump >/dev/null 2>&1 || return 0
+    timeout 30 tcpdump -i "$ETH_IFACE" -Q in -n -U -s 256 -c 200 \
+        -w "$LAN_CAPTURE_FILE" >/dev/null 2>&1 200>&- &
+    LAN_CAPTURE_PID=$!
+}
+
+stop_lan_capture() {
+    [ -n "$LAN_CAPTURE_PID" ] || return 0
+    kill "$LAN_CAPTURE_PID" 2>/dev/null || true
+    wait "$LAN_CAPTURE_PID" 2>/dev/null || true
+    LAN_CAPTURE_PID=""
+}
+
+# Classify what the far end sent while no lease arrived. Prints "network"
+# when the port is attached to a LAN, "eud" for EUDs or a silent cable, or
+# "unknown" when there is no capture.
+#
+# Router advertisements or switch control frames (STP, LLDP, CDP) mean a
+# network is attached; bridging it would extend the mesh into that LAN and
+# put our dnsmasq on it as a second DHCP server. The number of devices is
+# deliberately not a signal: with no lease and none of those frames, several
+# devices are far more likely a team's EUDs on an unmanaged switch than a
+# foreign network (and one EUD can use several MACs, e.g. VMs). A foreign
+# static-IP LAN with no router or managed switch is the remaining miss; use
+# --mode network for that.
+lan_capture_verdict() {
+    # tcpdump -w writes the pcap header on start, so an empty or missing file
+    # means it never ran; a header-only file is a silent cable.
+    if [ ! -s "$LAN_CAPTURE_FILE" ]; then
+        echo unknown
+        return 0
+    fi
+
+    local control_frames sources
+    control_frames=$(tcpdump -r "$LAN_CAPTURE_FILE" -n \
+        'ether dst 01:80:c2:00:00:00 or ether dst 01:80:c2:00:00:0e or ether proto 0x88cc or ether dst 01:00:0c:cc:cc:cc or (icmp6 and ip6[40] == 134)' \
+        2>/dev/null | wc -l)
+    sources=$(tcpdump -r "$LAN_CAPTURE_FILE" -n -e 2>/dev/null \
+        | awk '{print $2}' | sort -u | wc -l)
+
+    log "Capture on $ETH_IFACE: $control_frames router/switch control frame(s), $sources source MAC(s)"
+    if [ "$control_frames" -gt 0 ]; then
+        echo network
+    else
+        echo eud
+    fi
+}
+
+wait_for_ip() {
+    local ip
+    for _ in $(seq 1 "$LEASE_WAIT_SECS"); do
         ip=$(ip -4 addr show dev "$ETH_IFACE" | grep -oP 'inet \K[\d.]+' | head -1)
         if [ -n "$ip" ]; then
             echo "$ip"
             return 0
         fi
-
         sleep 1
-        ((wait_count++))
     done
-
     return 1
 }
 
-detect_hotplug_mode() {
-    local carrier ip
+# --- roles ----------------------------------------------------------------------
 
-    carrier=$(cat /sys/class/net/$ETH_IFACE/carrier 2>/dev/null || echo 0)
-    if [ "$carrier" != "1" ]; then
-        # Cable gone: forget the no-internet verdict so a re-plug re-detects.
-        rm -f "$NO_INET_STATE"
-        run_no_carrier_cleanup
-        exit 0
-    fi
-
-    # Hotplug events can be emitted repeatedly after networkd restarts. If this
-    # node is already a working gateway, do not flush end0 or restart networkd;
-    # that creates a loop which interrupts dnsmasq and EUD DHCP.
-    ip=$(ip -4 addr show dev "$ETH_IFACE" | grep -oP 'inet \K[\d.]+' | head -1)
-    if [ -f /var/run/mesh-gateway.state ] && [ -n "$ip" ] && \
-       ip route show dev "$ETH_IFACE" | grep -q '^default '; then
-        log "Existing gateway state is healthy on $ETH_IFACE ($ip); skipping re-detection"
-        # Exit the whole script — returning here would still run the gateway
-        # mode section, which rewrites 20-end0.network, triggers a networkd
-        # inotify reconfigure, and restarts this loop.
-        exit 0
-    fi
-
-    # Same idea for the DHCP-but-no-internet outcome: the cleanup below ends
-    # with a networkctl reconfigure, which fires another dispatcher event and
-    # would otherwise repeat the flush/DHCP/ping/cleanup cycle every 1-2 min
-    # forever on LANs without internet. If we already concluded "no internet"
-    # for this iface+IP recently, leave everything alone. The timestamp lets
-    # a periodic re-check notice if internet comes back on the same lease.
-    if [ -f "$NO_INET_STATE" ] && [ -n "$ip" ]; then
-        read -r prev_iface prev_ip prev_ts < "$NO_INET_STATE" || true
-        if [ "$prev_iface" = "$ETH_IFACE" ] && [ "$prev_ip" = "$ip" ] && \
-           [ $(( $(date +%s) - ${prev_ts:-0} )) -lt "$NO_INET_RECHECK_SECS" ]; then
-            log "No-internet state is current on $ETH_IFACE ($ip); skipping re-detection"
-            exit 0
-        fi
-    fi
-
-    log "Carrier present on $ETH_IFACE - detecting role"
-
-    # Detach from any bridge before DHCP (wired-EUD may have enslaved it).
-    ip link set "$ETH_IFACE" nomaster 2>/dev/null || true
+apply_wired_eud() {
+    log "Configuring $ETH_IFACE as wired EUD (bridged into br0)"
+    "$DISPATCH" release "$ETH_IFACE"
+    rm -f "$NETWORKD_DIR/20-$ETH_IFACE.network"
     ip addr flush dev "$ETH_IFACE" 2>/dev/null || true
+    write_wired_eud_config
+    ip link set "$ETH_IFACE" master br0 2>/dev/null || true
+    ip link set "$ETH_IFACE" up
+    write_role wired-eud
 
-    # Trigger DHCP without writing a networkd config file. Writing
-    # 20-end0.network fires an inotify event that causes networkd to
-    # reconfigure, briefly drops any existing lease, and restarts this loop.
-    # networkd uses 10-end0.network (or equivalent) for DHCP automatically.
-    networkctl reconfigure "$ETH_IFACE" 2>/dev/null || true
-
-    ip=$(wait_for_end0_ip 20 || true)
-    if [ -n "$ip" ]; then
-        log "IP acquired on $ETH_IFACE: $ip"
-        if ping -c 3 -W 2 -I "$ETH_IFACE" 8.8.8.8 >/dev/null 2>&1; then
-            DETECTED_MODE="gateway"
-            return 0
-        fi
-
-        log "DHCP succeeded but internet test failed; leaving as mesh client"
-        echo "$ETH_IFACE $ip $(date +%s)" > "$NO_INET_STATE"
-        run_no_carrier_cleanup
-        exit 0
-    fi
-
-    DETECTED_MODE="wired-eud"
-}
-
-# Ensure only one instance runs
-exec 200>"$LOCK_FILE"
-flock -n 200 || { log "Already running. Exiting."; exit 0; }
-
-# Parse CLI argument
-DETECTED_MODE=""
-ARGS=("$@")
-i=0
-while [ $i -lt ${#ARGS[@]} ]; do
-    case "${ARGS[$i]}" in
-        --iface)
-            i=$((i+1))
-            FORCE_IFACE="${ARGS[$i]}"
-            ETH_IFACE=$(resolve_eth_iface)
-            ACTIVE_CONFIG="${NETWORKD_DIR}/20-${ETH_IFACE}.network"
-            ;;
-        --mode)
-            i=$((i+1))
-            DETECTED_MODE="${ARGS[$i]}"
-            log "Called with mode: $DETECTED_MODE"
-            ;;
-        --hotplug|"")
-            ;;
+    case "$(eud_mode)" in
+        auto|wired) ap_to_mesh ;;
     esac
-    i=$((i+1))
-done
+    unmask_if_masked dnsmasq.service
+    systemctl start dnsmasq.service 2>/dev/null || true
 
-if [ -z "$DETECTED_MODE" ]; then
-    detect_hotplug_mode
-    log "Hotplug detected mode: $DETECTED_MODE"
-fi
-
-# Reaching here means a definite mode (gateway/wired-eud) was chosen;
-# the no-internet paths above all exit before this point.
-rm -f "$NO_INET_STATE"
-
-# Save which interface we're managing so other scripts know
-echo "$ETH_IFACE" > /var/run/upstream_iface
-
-# Check if interface exists
-if ! ip link show "$ETH_IFACE" &>/dev/null; then
-    log "Interface $ETH_IFACE not found"
-    exit 1
-fi
-
-# Check carrier (cable connected)
-# Should not be needed, this script is called by networkd-dispatcher
-# But this is a double check
-CARRIER=$(cat /sys/class/net/$ETH_IFACE/carrier 2>/dev/null || echo 0)
-if [ "$CARRIER" != "1" ]; then
-    log "No carrier on $ETH_IFACE - cable unplugged"
-
-    # Clean up detection configs
-    rm -f "$ACTIVE_CONFIG"
-    rm -f /var/run/mesh-gateway.state
-    rm -f /var/run/mesh-ntp.state
-    rm -f /var/run/ethernet_detection_state
-    rm -f "$NO_INET_STATE"
-
-    # In AUTO mode with no ethernet, ensure AP is enabled (if configured)
-    EUD_MODE=$(grep "^eud=" /etc/mesh.conf 2>/dev/null | cut -d'=' -f2)
-    if [ "$EUD_MODE" == "auto" ] && [ -f /var/lib/ap_interface ]; then
-        AP_INTERFACE=$(cat /var/lib/ap_interface)
-        log "Auto mode: No ethernet, ensuring AP on $AP_INTERFACE"
-
-        # Ensure wlan1 is NOT in bat0 (will be in br0 via hostapd/bridge config)
-        if batctl if | grep -q "$AP_INTERFACE"; then
-            log "Removing $AP_INTERFACE from bat0 (will be AP)"
-            batctl if del "$AP_INTERFACE" 2>/dev/null || true
-        fi
-
-        unmask_if_masked dnsmasq.service
-        enable_if_disabled hostapd.service
-        systemctl start hostapd.service 2>/dev/null
-        enable_if_disabled dnsmasq.service
-        systemctl start dnsmasq.service 2>/dev/null
-
-		# If acting as an AP, lower the tx power
-        systemctl start ap-txpower.service 2>/dev/null
-
-        # Bridge AP interface to br0 for EUD connectivity
-        if ! ip link show "$AP_INTERFACE" | grep -q "master br0"; then
-            log "Bridging $AP_INTERFACE to br0"
-            ip link set "$AP_INTERFACE" master br0
-            ip link set "$AP_INTERFACE" up
-        else
-            log "$AP_INTERFACE already bridged to br0"
-        fi
-
-        # Reconfigure ebtables (wlan1 should allow DHCP)
-        systemctl restart mesh-manager 2>/dev/null || true
-
-
-
-    fi
-    exit 0
-fi
-
-log "Ethernet cable detected on $ETH_IFACE"
-
-# Check for EUD mode in config
-EUD_MODE=$(grep "^eud=" /etc/mesh.conf 2>/dev/null | cut -d'=' -f2)
-
-case "$EUD_MODE" in
-    "wireless")
-        log "EUD mode: wireless (AP always on)"
-        ;;
-    "wired")
-        log "EUD mode: wired (AP disabled)"
-        ;;
-    "auto")
-        log "EUD mode: auto (AP controlled by ethernet detection)"
-        ;;
-    "none")
-        log "EUD mode: none (uplink gateway only, no EUD services)"
-        ;;
-    *)
-        log "Unknown EUD mode, defaulting to auto"
-        EUD_MODE="auto"
-        ;;
-esac
-
-# Read AP interface if configured
-AP_INTERFACE=""
-if [ -f /var/lib/ap_interface ]; then
-    AP_INTERFACE=$(cat /var/lib/ap_interface)
-    log "AP interface: $AP_INTERFACE"
-fi
-
-# Get existing IP if any
-EXISTING_IP=$(ip -4 addr show dev "$ETH_IFACE" | grep -oP 'inet \K[\d.]+' | head -1)
-
-# ===================================================================
-# CONFIGURE BASED ON DETECTED MODE
-# ===================================================================
-
-if [ "$DETECTED_MODE" == "gateway" ]; then
-    # ===================================
-    # GATEWAY MODE - Has internet
-    # ===================================
-    log "Configuring as gateway/uplink..."
-
-    if [ -z "$EXISTING_IP" ]; then
-        log "ERROR: Gateway mode but no IP found on $ETH_IFACE"
-        exit 1
-    fi
-
-    ETH_IP="$EXISTING_IP"
-
-    # Do not rewrite $ACTIVE_CONFIG here — it was already written (if needed)
-    # during detect_hotplug_mode, and rewriting it triggers an inotify event
-    # that causes networkd to reconfigure end0, briefly drops the DHCP lease,
-    # and restarts this loop. networkd uses 10-end0.network regardless.
-    touch /var/run/mesh-gateway.state
-
-    # Configure NAT
-    log "Configuring NAT..."
-    nft add table ip nat 2>/dev/null || true
-    nft add chain ip nat postrouting { type nat hook postrouting priority 100 \; } 2>/dev/null || true
-    nft flush chain ip nat postrouting 2>/dev/null || true
-    nft add rule ip nat postrouting oifname "$ETH_IFACE" masquerade
-
-    # Add MSS clamping for TCP packets going through the bridge
-    nft add table ip mangle 2>/dev/null || true
-    nft add chain ip mangle forward { type filter hook forward priority -150 \; } 2>/dev/null || true
-    nft flush chain ip mangle forward 2>/dev/null || true
-    nft add rule ip mangle forward tcp flags syn tcp option maxseg size set rt mtu
-
-    sysctl -q net.ipv4.ip_forward=1
-
-    DEFAULT_GW=$(ip route show dev "$ETH_IFACE" | grep default | awk '{print $3}')
-    log "Default gateway: ${DEFAULT_GW:-none}"
-
-    # Enable BATMAN gateway mode
-    if command -v batctl &>/dev/null; then
-        batctl gw_mode server 2>/dev/null || log "BATMAN not ready yet"
-        log "Enabled BATMAN gateway mode"
-    fi
-
-    # Update router advertisements
-    cp /etc/radvd-gateway.conf /etc/radvd.conf
-    systemctl restart radvd 2>/dev/null
-
-    # === NTP SERVER SETUP ===
-    log "Attempting to sync time with external NTP..."
-    cp /etc/chrony/chrony-test.conf /etc/chrony/chrony.conf
-    systemctl restart chrony.service 2>/dev/null
-
-    # waitsync blocks until chronyd has actually disciplined the clock, which is
-    # the condition we care about. The old check burst and then grepped for a
-    # selected source after a fixed 8 s, which is not enough time to resolve the
-    # pool, take four samples and settle on one — so a node with working
-    # internet was routinely recorded as having failed and left unsynced.
-    chronyc -a 'burst 4/4' >/dev/null 2>&1
-    if timeout 90 chronyc waitsync 60 0 0 1 >/dev/null 2>&1; then
-        log "Time sync successful. Promoting to mesh NTP server."
-        touch /var/run/mesh-ntp.state
-        systemctl stop chrony.service
-        cp /etc/chrony/chrony-server.conf /etc/chrony/chrony.conf
-        systemctl start chrony.service
-    else
-        log "Failed to sync time. Will not become NTP server."
-        rm -f /var/run/mesh-ntp.state
-        systemctl stop chrony.service
-        cp /etc/chrony/chrony-default.conf /etc/chrony/chrony.conf
-    fi
-
-    # === AP CONTROL ===
-    # In gateway mode, AP behavior depends on EUD mode
-    if [ "$EUD_MODE" == "auto" ] && [ -n "$AP_INTERFACE" ]; then
-        log "Auto mode + Gateway: Keeping AP enabled"
-
-        # Ensure wlan1 is NOT in bat0 (it's the AP)
-        if batctl if | grep -q "$AP_INTERFACE"; then
-            log "Removing $AP_INTERFACE from bat0 (dual role gateway+AP)"
-            batctl if del "$AP_INTERFACE" 2>/dev/null || true
-        fi
-
-        unmask_if_masked dnsmasq.service
-        enable_if_disabled hostapd.service
-        systemctl start hostapd.service 2>/dev/null
-        enable_if_disabled dnsmasq.service
-        systemctl start dnsmasq.service 2>/dev/null
-        systemctl start ap-txpower.service 2>/dev/null
-
-        # Bridge AP interface to br0 for EUD connectivity
-        if ! ip link show "$AP_INTERFACE" | grep -q "master br0"; then
-            log "Bridging $AP_INTERFACE to br0"
-            ip link set "$AP_INTERFACE" master br0
-            ip link set "$AP_INTERFACE" up
-        else
-            log "$AP_INTERFACE already bridged to br0"
-        fi
-
-    elif [ "$EUD_MODE" == "wireless" ] && [ -n "$AP_INTERFACE" ]; then
-        log "Wireless mode: Ensuring AP is enabled"
-
-        # Ensure wlan1 is NOT in bat0
-        if batctl if | grep -q "$AP_INTERFACE"; then
-            log "Removing $AP_INTERFACE from bat0 (wireless mode AP)"
-            batctl if del "$AP_INTERFACE" 2>/dev/null || true
-        fi
-
-        unmask_if_masked dnsmasq.service
-        enable_if_disabled hostapd.service
-        systemctl start hostapd.service 2>/dev/null
-        enable_if_disabled dnsmasq.service
-        systemctl start dnsmasq.service 2>/dev/null
-        systemctl start ap-txpower.service 2>/dev/null
-
-    elif [ "$EUD_MODE" == "wired" ] && [ -n "$AP_INTERFACE" ]; then
-        log "Wired mode: Disabling AP, returning $AP_INTERFACE to mesh"
-
-        systemctl stop hostapd.service 2>/dev/null
-        systemctl stop dnsmasq.service 2>/dev/null
-        systemctl stop ap-txpower.service 2>/dev/null
-        systemctl disable hostapd.service 2>/dev/null
-
-        # Add wlan1 back to bat0
-        if ! batctl if | grep -q "$AP_INTERFACE"; then
-            log "Adding $AP_INTERFACE back to bat0 (wired mode)"
-
-            systemctl stop hostapd.service 2>/dev/null
-            ip link set "$AP_INTERFACE" down
-            ip link set "$AP_INTERFACE" nomaster 2>/dev/null || true
-            sleep 1
-
-            # Set to mesh mode and bring up
-            iw dev "$AP_INTERFACE" set type mesh
-            ip link set "$AP_INTERFACE" up
-            sleep 1
-            # Restart wpa_supplicant for this interface to join mesh
-            systemctl restart wpa_supplicant@$AP_INTERFACE.service 2>/dev/null
-        fi
-		sleep 3
-
-        # Add to bat0
-        if batctl if add "$AP_INTERFACE" 2>/dev/null; then
-           log "$AP_INTERFACE added to bat0"
-        else
-           log "Failed to add $AP_INTERFACE to bat0"
-        fi
-
-    fi
-
-    # Reconfigure ebtables and dnsmasq (handles wlan1 role changes)
-    systemctl restart mesh-manager 2>/dev/null || true
-
-    # Save state
-    cat > /var/run/ethernet_detection_state <<EOF
-ETH_MODE=GATEWAY
-ETH_IP=$ETH_IP
-DEFAULT_GW=${DEFAULT_GW:-none}
-DETECTED_AT=$(date +%s)
-DETECTION_METHOD=CARRIER_WITH_INTERNET
-EOF
-
-    log "Gateway configuration complete"
-
-
-
-    # ===================================
-    # WIRED EUD MODE - Bridge to mesh
-    # ===================================
-elif [ "$DETECTED_MODE" == "wired-eud" ]; then
-    log "Configuring as wired EUD (bridged mode)..."
-
-    # Remove any networkd configs for end0 (bridge will handle it)
-    rm -f "$ACTIVE_CONFIG"
-
-    # Flush IP from end0 (will get address via br0)
-    ip addr flush dev "$ETH_IFACE" 2>/dev/null
-
-    # Ensure end0 is enslaved to br0
-    if ! ip link show "$ETH_IFACE" | grep -q "master br0"; then
-        log "Enslaving $ETH_IFACE to br0"
-        ip link set "$ETH_IFACE" master br0
-        ip link set "$ETH_IFACE" up
-    else
-        log "$ETH_IFACE already in br0"
-    fi
-
-    # Disable AP if in auto or wired mode (wlan1 returns to mesh)
-    if [ "$EUD_MODE" == "auto" ] || [ "$EUD_MODE" == "wired" ]; then
-        if [ -n "$AP_INTERFACE" ]; then
-            log "$EUD_MODE mode with wired EUD: Disabling AP, returning $AP_INTERFACE to mesh"
-
-            systemctl stop hostapd.service 2>/dev/null
-            systemctl stop ap-txpower.service 2>/dev/null
-            systemctl disable hostapd.service 2>/dev/null
-
-            # Remove wlan1 from br0 if it's there
-            if ip link show "$AP_INTERFACE" 2>/dev/null | grep -q "master br0"; then
-                log "Removing $AP_INTERFACE from br0"
-                ip link set "$AP_INTERFACE" nomaster 2>/dev/null || true
-            fi
-
-            # Add wlan1 back to bat0
-            if ! batctl if | grep -q "$AP_INTERFACE"; then
-
-                log "Adding $AP_INTERFACE back to bat0"
-
-                # Stop hostapd first to release the interface
-                systemctl stop hostapd.service 2>/dev/null
-                ip link set "$AP_INTERFACE" down
-                sleep 1
-
-                # Set to mesh mode and bring up
-                iw dev "$AP_INTERFACE" set type mesh
-                ip link set "$AP_INTERFACE" up
-                sleep 1
-                # Restart wpa_supplicant for this interface to join mesh
-                systemctl restart wpa_supplicant@$AP_INTERFACE.service 2>/dev/null
-            fi
-				sleep 2
-
-                # Add to bat0
-            if batctl if add "$AP_INTERFACE" 2>/dev/null; then
-               log "$AP_INTERFACE added to bat0"
-            else
-               log "Failed to add $AP_INTERFACE to bat0"
-            fi
-
-        fi
-    elif [ "$EUD_MODE" == "wireless" ] && [ -n "$AP_INTERFACE" ]; then
-        log "Wireless mode: AP stays enabled even with wired EUD"
-        # AP stays running, no changes
-    fi
-
-    # Remove gateway state
-    rm -f /var/run/mesh-gateway.state
-    rm -f /var/run/mesh-ntp.state
-
-    # Disable BATMAN gateway mode
-    if command -v batctl &>/dev/null; then
-        batctl gw_mode client 2>/dev/null || log "BATMAN not ready yet"
-        log "Set BATMAN to client mode"
-    fi
-
-    # Revert radvd
-    cp /etc/radvd-mesh.conf /etc/radvd.conf
-    systemctl restart radvd 2>/dev/null
-
-    # Remove NAT and firewall rules
-    nft delete table inet filter 2>/dev/null || true
-    nft flush chain ip nat postrouting 2>/dev/null || true
-
-    # Reconfigure ebtables and dnsmasq (handles wlan1 role + end0 addition)
-    systemctl restart mesh-manager 2>/dev/null || true
-
-    # Save state
-    cat > /var/run/ethernet_detection_state <<EOF
+    cat > "$ETH_STATE_FILE" <<EOF
 ETH_MODE=WIRED_EUD
 ETH_BRIDGE=br0
 DETECTED_AT=$(date +%s)
 DETECTION_METHOD=CARRIER_NO_DHCP
 EOF
-
     log "Wired EUD configuration complete"
+}
 
-else
-    log "ERROR: Unknown mode: $DETECTED_MODE"
+# Attached network: unbridged, no DHCP served onto it; its DHCP client keeps
+# running so a late lease reaches the dispatcher through the routable hook.
+apply_network() {
+    log "$1 - leaving $ETH_IFACE unbridged with no DHCP service"
+    log "To bridge it as a wired EUD anyway, run: ethernet-autodetect.sh --mode wired-eud"
+    write_role network
+    cat > "$ETH_STATE_FILE" <<EOF
+ETH_MODE=NETWORK
+DETECTED_AT=$(date +%s)
+EOF
+}
+
+apply_gateway() {
+    log "Lease and internet on $ETH_IFACE - handing it to the uplink dispatcher as gateway"
+    write_role gateway
+    "$DISPATCH" promote "$ETH_IFACE"
+}
+
+detect_and_apply() {
+    log "Carrier present on $ETH_IFACE - detecting role"
+    write_role detecting
+
+    remove_wired_eud_config
+    ip link set "$ETH_IFACE" nomaster 2>/dev/null || true
+    ip addr flush dev "$ETH_IFACE" 2>/dev/null || true
+
+    start_lan_capture
+    networkctl reconfigure "$ETH_IFACE" 2>/dev/null || true
+    local ip
+    ip=$(wait_for_ip || true)
+    stop_lan_capture
+
+    if [ -n "$ip" ]; then
+        rm -f "$LAN_CAPTURE_FILE"
+        log "IP acquired on $ETH_IFACE: $ip"
+        # The speed test is the internet check that matters: a captive portal
+        # or a filtered network passes ping but cannot complete it, and such a
+        # port must not become a gateway. Its result is what the gateway
+        # announces. Exit 2 (not an Ethernet port) means not tested. A later
+        # pass of the dispatcher's reconcile retries a failure.
+        local speed_rc=1
+        if ping -c 3 -W 2 -I "$ETH_IFACE" 8.8.8.8 >/dev/null 2>&1; then
+            speed_rc=0
+            "$UPLINK_SPEED" measure "$ETH_IFACE" >/dev/null || speed_rc=$?
+        fi
+        if [ "$speed_rc" -eq 0 ] || [ "$speed_rc" -eq 2 ]; then
+            apply_gateway
+        else
+            apply_network "Lease but no internet (or the speed test failed)"
+        fi
+        return
+    fi
+
+    local verdict
+    verdict=$(lan_capture_verdict)
+    rm -f "$LAN_CAPTURE_FILE"
+    case "$verdict" in
+        network)
+            apply_network "No lease, but $ETH_IFACE is attached to a network"
+            ;;
+        unknown)
+            log "WARN: no capture available (tcpdump missing or failed); treating no lease as a wired EUD"
+            apply_wired_eud
+            ;;
+        *)
+            apply_wired_eud
+            ;;
+    esac
+}
+
+# Cable gone (or the link went down): return the port to its baseline.
+unplug() {
+    if has_carrier; then
+        log "Unplug event for $ETH_IFACE but carrier is back - ignoring stale event"
+        return 0
+    fi
+    log "No carrier on $ETH_IFACE - returning it to baseline"
+    rm -f "$ROLE_FILE" "$ETH_STATE_FILE"
+    remove_wired_eud_config
+    rm -f "$NETWORKD_DIR/20-$ETH_IFACE.network"
+    # Restore the provisioned DHCP client config if something replaced it.
+    local default="$NETWORKD_DIR/10-$ETH_IFACE.network.dhcp-default"
+    if [ -f "$default" ] && ! cmp -s "$default" "$NETWORKD_DIR/10-$ETH_IFACE.network"; then
+        cp "$default" "$NETWORKD_DIR/10-$ETH_IFACE.network"
+        networkctl reload 2>/dev/null || true
+    fi
+    ip link set "$ETH_IFACE" nomaster 2>/dev/null || true
+    ip addr flush dev "$ETH_IFACE" 2>/dev/null || true
+    "$DISPATCH" release "$ETH_IFACE"
+
+    case "$(eud_mode)" in
+        auto|wireless) ap_serve ;;
+    esac
+}
+
+# ==============================================================================
+
+ACTION=hotplug
+FORCED_ROLE=""
+FORCE_IFACE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --iface) FORCE_IFACE="$2"; shift ;;
+        --mode) FORCED_ROLE="$2"; shift ;;
+        --unplug) ACTION=unplug ;;
+        --hotplug) ACTION=hotplug ;;
+    esac
+    shift
+done
+
+ETH_IFACE=$(resolve_eth_iface)
+WIRED_EUD_CONFIG="$NETWORKD_DIR/05-$ETH_IFACE-wired-eud.network"
+
+if ! ip link show "$ETH_IFACE" &>/dev/null; then
+    log "Interface $ETH_IFACE not found"
     exit 1
 fi
 
+# One policy decision at a time. Events queued behind a running detection
+# wait (bounded) and then re-check the connection state themselves.
+exec 200>"$LOCK_FILE"
+if ! flock -w 90 200; then
+    log "Timed out waiting for another detection on $ETH_IFACE; giving up"
+    exit 0
+fi
+
+if [ "$ACTION" = unplug ] || ! has_carrier; then
+    unplug
+    exit 0
+fi
+
+if [ -n "$FORCED_ROLE" ]; then
+    log "Called with mode: $FORCED_ROLE"
+    case "$FORCED_ROLE" in
+        wired-eud) apply_wired_eud ;;
+        network) apply_network "Forced" ;;
+        *) log "ERROR: unknown mode $FORCED_ROLE (use wired-eud or network)"; exit 1 ;;
+    esac
+    exit 0
+fi
+
+role=$(current_connection_role)
+if [ -n "$role" ] && [ "$role" != detecting ]; then
+    log "Role '$role' is current for this connection on $ETH_IFACE; skipping re-detection"
+    exit 0
+fi
+
+detect_and_apply
 exit 0

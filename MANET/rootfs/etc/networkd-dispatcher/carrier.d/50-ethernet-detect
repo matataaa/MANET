@@ -1,0 +1,22 @@
+#!/bin/bash
+#
+# Carrier gained on an interface. The built-in port (end0) belongs to
+# ethernet-autodetect.sh, which decides between gateway, wired EUD and an
+# attached network once per physical connection. Other interfaces (USB
+# uplinks, tethers) go to uplink reconciliation.
+
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] - CARRIER-DETECT: $1" | systemd-cat -t ethernet-carrier
+}
+
+if [ "${IFACE:-}" = "end0" ]; then
+    log "Carrier on $IFACE - running hotplug detection"
+    /usr/local/bin/ethernet-autodetect.sh --hotplug
+else
+    /usr/local/bin/manet-uplink-dispatch.sh carrier "${IFACE:-}"
+fi
+
+# Automatic tool updates if enabled and internet is now available.
+if grep -qiE '^auto_update=(y|yes|1|true)[[:space:]]*$' /etc/mesh.conf 2>/dev/null && ping -c 1 -W 2 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
+    systemctl reload node-update 2>/dev/null || true
+fi

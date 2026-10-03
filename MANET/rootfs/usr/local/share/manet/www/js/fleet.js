@@ -32,10 +32,8 @@ const MESH_FIELDS = [
   { key: 'multicast_mode', label: 'Multicast Mode', type: 'select', options: [
     {v:'flood',l:'Flood (recommended ≤10 nodes)'},{v:'optimized',l:'Optimized IGMP (10+ nodes)'}
   ] },
-  { key: 'regulatory_domain', label: 'Reg Domain', type: 'select', options: ['US', 'EU', 'JP', 'AU'] },
-  { key: 'halow_regulatory_domain', label: 'HaLow Reg Domain', type: 'select', options: [
-    {v:'',l:'Inherit from Reg Domain'},'US','EU','JP','AU'
-  ], hint: 'Blank = inherit Reg Domain. Overrides it for HaLow specifically (e.g. MM8108 nodes running HaLow on a different domain than their WiFi radios).' },
+  { key: 'regulatory_domain', label: 'Reg Domain', type: 'select', options: WIFI_REG_DOMAINS,
+    hint: 'Country for all radios (a real country code; EU is not one). HaLow uses the EU plan for EU countries and the same country otherwise. Applies after a reboot.' },
   { key: 'dns_servers', label: 'DNS Servers', hint: 'Comma-separated (e.g. 8.8.8.8,8.8.4.4)' },
   { key: 'admin_password', label: 'Admin Password', type: 'password' },
   { key: 'require_auth', label: 'Require Auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },
@@ -61,7 +59,7 @@ const PROFILE_SECTIONS = [
     { key: 'gateway_nat', label: 'NAT Masquerade', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { key: 'gateway_mss_clamp', label: 'MSS Clamping', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { key: 'gateway_bandwidth', label: 'Bandwidth Advertisement', type: 'select', options: [
-      {v:'',l:'Auto (batman default)'},{v:'2M/2M',l:'2 Mbit'},{v:'5M/5M',l:'5 Mbit'},{v:'10M/10M',l:'10 Mbit'},
+      {v:'',l:'Auto (measured on Ethernet, else 10/2)'},{v:'2M/2M',l:'2 Mbit'},{v:'5M/5M',l:'5 Mbit'},{v:'10M/10M',l:'10 Mbit'},
       {v:'20M/20M',l:'20 Mbit'},{v:'50M/50M',l:'50 Mbit'},{v:'100M/100M',l:'100 Mbit'},
       {v:'200M/200M',l:'200 Mbit'},{v:'300M/300M',l:'300 Mbit'},{v:'500M/500M',l:'500 Mbit'},{v:'1000M/1000M',l:'1 Gbit'},
     ] },
@@ -279,7 +277,7 @@ function fleetRender() {
     });
   }
   var editBtn = document.getElementById('fleet-edit-btn');
-  if (editBtn) editBtn.addEventListener('click', fleetStartEdit);
+  if (editBtn) editBtn.addEventListener('click', fleetStartEditGated);
   var activateBtn = document.getElementById('fleet-activate-btn');
   if (activateBtn) activateBtn.addEventListener('click', function() { fleetActivateConfig(false); });
   var forceBtn = document.getElementById('fleet-force-btn');
@@ -294,6 +292,12 @@ function fleetRender() {
   if (updateSelSwBtn) updateSelSwBtn.addEventListener('click', function() { fleetUpdateSelected('software', updateSelSwBtn); });
   var updateSelOvBtn = document.getElementById('fleet-update-selected-ov-btn');
   if (updateSelOvBtn) updateSelOvBtn.addEventListener('click', function() { fleetUpdateSelected('overlay', updateSelOvBtn); });
+  var forceUpdateBothBtn = document.getElementById('fleet-force-update-both-btn');
+  if (forceUpdateBothBtn) forceUpdateBothBtn.addEventListener('click', function() { fleetForceUpdate('both', forceUpdateBothBtn); });
+  var updateSelBothBtn = document.getElementById('fleet-update-selected-both-btn');
+  if (updateSelBothBtn) updateSelBothBtn.addEventListener('click', function() { fleetUpdateSelected('both', updateSelBothBtn); });
+  var checkUpdatesBtn = document.getElementById('fleet-check-updates-btn');
+  if (checkUpdatesBtn) checkUpdatesBtn.addEventListener('click', function() { fleetCheckUpdates(checkUpdatesBtn); });
 }
 
 // Renders a sticky "N of M nodes have an update available" banner, same
@@ -354,6 +358,12 @@ function fleetRenderUpdateBanner() {
     html += '<button class="fleet-btn fleet-btn-danger" id="fleet-force-update-ov-btn" data-below="' +
       ovBelow + '" data-total="' + ovNodes.length + '">Force Update Kernel/Drivers (' + ovNodes.length + ')</button>';
   }
+  // Both at once (one download pass and one reboot per node), offered only
+  // when both channels have updates; otherwise it would equal one of the above.
+  if (!swApplying && !ovApplying && swNodes.length && ovNodes.length) {
+    html += '<button class="fleet-btn fleet-btn-danger" id="fleet-force-update-both-btn" data-below="' +
+      belowCount(withUpdate) + '" data-total="' + withUpdate.length + '">Force Update Both (' + withUpdate.length + ')</button>';
+  }
   html += '</div></div>';
   return html;
 }
@@ -400,8 +410,10 @@ function fleetRenderNodeUpdateTable() {
   });
   html += '</table>';
   html += '<div class="fleet-actions" style="margin-top:10px">';
+  html += '<button class="fleet-btn" id="fleet-check-updates-btn">Check for Updates</button>';
   html += '<button class="fleet-btn fleet-btn-primary" id="fleet-update-selected-sw-btn">Update Selected — MANET</button>';
   html += '<button class="fleet-btn fleet-btn-danger" id="fleet-update-selected-ov-btn">Update Selected — Kernel/Drivers</button>';
+  html += '<button class="fleet-btn fleet-btn-danger" id="fleet-update-selected-both-btn">Update Selected — Both</button>';
   html += '</div></div>';
   return html;
 }
@@ -412,12 +424,27 @@ function fleetRenderNodeUpdateTable() {
 // the same selection set. Each request goes straight to that node's own
 // /api/admin/update-now, proxied via /api/peer/<ip> for every node except
 // the local one (mirrors configBaseUrl()'s local-vs-peer routing).
+function fleetChannelLabel(channel) {
+  if (channel === 'overlay') return 'Kernel/Drivers';
+  if (channel === 'both') return 'MANET + Kernel/Drivers';
+  return 'MANET';
+}
+
+// Whether node n has an update on channel; for 'both', on either channel
+// (node-update applies whichever it has, with one reboot).
+function fleetHasUpdate(n, channel) {
+  var s = n.status;
+  if (!s) return false;
+  if (channel === 'both') return !!((s.software && s.software.available) || (s.overlay && s.overlay.available));
+  return !!(s[channel] && s[channel].available);
+}
+
 function fleetUpdateSelected(channel, btn) {
-  var channelLabel = channel === 'overlay' ? 'Kernel/Drivers' : 'MANET';
+  var channelLabel = fleetChannelLabel(channel);
   var checkedIPs = Array.from(document.querySelectorAll('.fleet-upd-select:checked'))
     .map(function(cb) { return cb.getAttribute('data-ip'); });
   var nodes = (fleetUpdateSummaryData.nodes || []).filter(function(n) {
-    return checkedIPs.indexOf(n.ip) !== -1 && n.status && n.status[channel] && n.status[channel].available;
+    return checkedIPs.indexOf(n.ip) !== -1 && fleetHasUpdate(n, channel);
   });
   if (!nodes.length) {
     fleetToast('No selected node has a ' + channelLabel + ' update available', 'error');
@@ -430,7 +457,7 @@ function fleetUpdateSelected(channel, btn) {
   }).length;
 
   var msg = 'Update ' + channelLabel + ' on ' + nodes.length + ' selected node' + (nodes.length !== 1 ? 's' : '') + ' now?';
-  if (channel === 'overlay') {
+  if (channel !== 'software') {
     msg += ' The Kernel/Drivers channel updates kernel/firmware — there is no rollback if it fails to boot.';
   }
   if (below > 0) {
@@ -438,7 +465,7 @@ function fleetUpdateSelected(channel, btn) {
       ' below the recommended bandwidth and may take a long time to update, disrupting mesh connectivity. ' + msg;
   }
 
-  fleetConfirm(msg, { label: 'Update ' + channelLabel, danger: below > 0 || channel === 'overlay' }, async function() {
+  fleetConfirm(msg, { label: 'Update ' + channelLabel, danger: below > 0 || channel !== 'software' }, async function() {
     btn.disabled = true;
     var results = await Promise.all(nodes.map(function(n) {
       var base = (LOCAL_DATA && n.ip === LOCAL_DATA.ip) ? '' : '/api/peer/' + n.ip;
@@ -459,17 +486,41 @@ function fleetUpdateSelected(channel, btn) {
   });
 }
 
-// channel is explicit ('software' or 'overlay') — separate buttons rather
+// Asks every node to re-check the update server now (node-update's 'check'
+// trigger: detect only, no cooldown, never applies), so the version table
+// shows a just-published release without waiting for the 6-hour cycle.
+// Peers get it through the slot 71 broadcast within ~10 s; the summary is
+// refetched twice to pick their fresh status up.
+async function fleetCheckUpdates(btn) {
+  btn.disabled = true;
+  try {
+    var r = await fetch('/api/admin/force-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: 'check' })
+    });
+    if (!r.ok) throw new Error('request failed');
+    fleetToast('Checking for updates on all nodes…', 'success');
+    setTimeout(fleetFetchUpdateSummary, 15000);
+    setTimeout(fleetFetchUpdateSummary, 45000);
+  } catch(e) {
+    btn.disabled = false;
+    fleetToast('Failed to start the update check', 'error');
+  }
+}
+
+// channel is explicit ('software', 'overlay' or 'both') — separate buttons rather
 // than one combined action, so overlay (no rollback) is never triggered as
-// a side effect of a routine fleet-wide software push.
+// a side effect of a routine fleet-wide software push. 'both' is its own,
+// explicitly labelled button with the overlay warning.
 function fleetForceUpdate(channel, btn) {
   var below = parseInt(btn.getAttribute('data-below') || '0', 10);
   var total = parseInt(btn.getAttribute('data-total') || '0', 10);
-  var channelLabel = channel === 'overlay' ? 'Kernel/Drivers' : 'MANET';
+  var channelLabel = fleetChannelLabel(channel);
 
   var msg = 'Force ' + channelLabel + ' update on all ' + total + ' node' + (total !== 1 ? 's' : '') +
     ' with an update available now?';
-  if (channel === 'overlay') {
+  if (channel !== 'software') {
     msg += ' The Kernel/Drivers channel updates kernel/firmware — there is no rollback if it fails to boot.';
   }
   if (below > 0) {
@@ -478,7 +529,7 @@ function fleetForceUpdate(channel, btn) {
       ' below the recommended bandwidth and may take a long time to update, ' +
       'disrupting mesh connectivity during the download and reboot. ' + msg;
   }
-  fleetConfirm(msg, { label: 'Force ' + channelLabel + ' Update', danger: below > 0 || channel === 'overlay' }, async function() {
+  fleetConfirm(msg, { label: 'Force ' + channelLabel + ' Update', danger: below > 0 || channel !== 'software' }, async function() {
     // Disable immediately — before the request resolves — so a second
     // click during the network round-trip can't fire a duplicate
     // broadcast. fleetFetchUpdateSummary() below picks up real per-node
@@ -537,11 +588,44 @@ function fleetRenderPending(pkg, status) {
   }
 
   var nodes = status.nodes || [];
-  var acked = nodes.filter(function(n) { return n.ack === version; }).length;
-  var total = nodes.length;
+  // Prefer the server's ack_status (admin.go's ackStatus helper) when it
+  // matches this pending version — it's the exact same merged
+  // registry+local-ack+multicast, ACTIVE-node-filtered computation
+  // apiAdminActivate's non-force gate enforces server-side. Recomputing our
+  // own acked/total from `nodes` here (as before) could disagree with that
+  // gate — e.g. it never filtered out stale/dead nodes — showing an
+  // Activate button enabled that the server would then reject. Falls back
+  // to the old client-side computation only if ack_status is absent
+  // (older server) or doesn't match this version yet.
+  var ackInfo = status.ack_status;
+  var acked, total;
+  if (ackInfo && ackInfo.version === version && typeof ackInfo.total === 'number') {
+    acked = ackInfo.acked;
+    total = ackInfo.total;
+  } else {
+    acked = nodes.filter(function(n) { return n.ack === version; }).length;
+    total = nodes.length;
+  }
   var pct = total > 0 ? Math.round(acked / total * 100) : 0;
   html += '<div class="fleet-ack-bar"><div class="fleet-ack-fill" style="width:' + pct + '%"></div></div>';
   html += '<div class="fleet-ack-label">' + acked + '/' + total + ' nodes acknowledged</div>';
+
+  // Mirrors apiAdminActivate's non-force gate (api.go): a push that changes
+  // admin_password/mesh_ssid/mesh_key/ipv4_network while ANY registry node
+  // is offline risks silently orphaning it, even with full ACK from every
+  // node that IS online. dangerous_keys/offline_nodes come from the same
+  // server-side computation (ackStatus + dangerousKeyChanges/
+  // offlineNodeNames, admin.go) the server enforces, so this always agrees
+  // with what a plain Activate click would actually be rejected for.
+  var orphanRisk = !!(ackInfo && ackInfo.version === version &&
+    ackInfo.dangerous_keys && ackInfo.dangerous_keys.length &&
+    ackInfo.offline_nodes && ackInfo.offline_nodes.length);
+  if (orphanRisk) {
+    html += '<div class="fleet-dangerous">Changes ' + ackInfo.dangerous_keys.map(escHtml).join(', ') +
+      ' while offline: ' + ackInfo.offline_nodes.map(escHtml).join(', ') +
+      ' — these node(s) risk being orphaned (unable to open future fleet pushes, or to rejoin the mesh). ' +
+      'Force Activate is required to proceed.</div>';
+  }
 
   if (activateAt) {
     var remaining = activateAt - Math.floor(Date.now() / 1000);
@@ -550,10 +634,16 @@ function fleetRenderPending(pkg, status) {
 
   html += '<div class="fleet-actions">';
   if (!activateAt) {
-    var allAcked = acked === total && total > 0;
-    html += '<button class="fleet-btn ' + (allAcked ? 'fleet-btn-go' : '') + '" id="fleet-activate-btn"' +
-      (!allAcked ? ' disabled' : '') + '>Activate</button>';
-    if (acked < total) html += '<button class="fleet-btn fleet-btn-danger" id="fleet-force-btn">Force Activate</button>';
+    // Mirrors apiAdminActivate's non-force gate exactly: it only blocks on
+    // ack count when total > 0 (an empty/solo registry has nothing to wait
+    // for), so total === 0 must allow a plain Activate here too -- the old
+    // "acked === total && total > 0" form disabled BOTH buttons in that
+    // case, blocking an operation the server would have accepted.
+    var ackGateBlocks = total > 0 && acked < total;
+    var allowActivate = !ackGateBlocks && !orphanRisk;
+    html += '<button class="fleet-btn ' + (allowActivate ? 'fleet-btn-go' : '') + '" id="fleet-activate-btn"' +
+      (!allowActivate ? ' disabled' : '') + '>Activate</button>';
+    if (ackGateBlocks || orphanRisk) html += '<button class="fleet-btn fleet-btn-danger" id="fleet-force-btn">Force Activate</button>';
   }
   html += '<button class="fleet-btn fleet-btn-danger" id="fleet-cancel-btn">Cancel</button>';
   html += '</div></div>';
@@ -585,6 +675,30 @@ function fleetRenderNodes(nodes, pending) {
 }
 
 // --- Edit mode ---
+
+// fleetStartEditGated ensures the edit form is never populated from a
+// redacted (pre-login) /api/admin/status snapshot: if auth is required and
+// the operator hasn't logged in yet, it runs the login flow FIRST and
+// re-fetches fresh (now-authenticated, unredacted) fleetData before ever
+// calling fleetStartEdit. This is the actual UX fix for the incident where
+// opening the edit form pre-login, then logging in when a save/stage got a
+// 401, would resubmit the SAME already-collected (blank-secret) form state.
+// If the operator cancels the login prompt, this simply never proceeds —
+// fleetStartEdit is not called, and no half-authenticated edit state is
+// left behind. Note: the server-side guards (dropEmptySecrets et al.,
+// admin.go/fleet.go) are what actually prevent damage even if this gate is
+// ever bypassed (e.g. a stale cached page, a race) — this function is
+// purely about not showing the operator misleading blank fields in the
+// first place.
+async function fleetStartEditGated() {
+  if (_authRequired && !_authenticated) {
+    await new Promise(function(resolve) {
+      authShowLogin(function() { resolve(); });
+    });
+    await fleetFetch();
+  }
+  fleetStartEdit();
+}
 
 function fleetStartEdit() {
   fleetEditing = true;
@@ -679,8 +793,16 @@ function fleetRenderField(f, val, prefix) {
     html += '<div class="fleet-field-hint" id="fleet-f-' + prefix + f.key + '-domain-label"></div>';
   } else {
     var inputType = f.type === 'password' ? 'password' : 'text';
+    // A blank password-type field could mean "genuinely unset" OR "this
+    // came from a redacted /api/admin/status response" (see
+    // fleetCollectEditState) -- either way, a plain empty box looks like a
+    // value the operator is expected to fill in, inviting exactly the
+    // blank-it-out mistake this whole fix exists to prevent. Show an
+    // explicit placeholder instead so leaving it blank clearly reads as
+    // "leave unchanged," not "set to empty."
+    var placeholder = f.type === 'password' && val === '' ? '(unchanged)' : f.hint;
     html += '<input type="' + inputType + '" id="fleet-f-' + prefix + f.key + '" value="' + escHtml(val) + '"' +
-      (f.hint ? ' placeholder="' + escHtml(f.hint) + '"' : '') + '>';
+      (placeholder ? ' placeholder="' + escHtml(placeholder) + '"' : '') + '>';
   }
   if (f.dangerous) html += '<div class="fleet-field-hint">Changing this may disconnect nodes</div>';
   else if (f.hint) html += '<div style="font-size:10px;color:var(--muted);margin-top:2px">' + escHtml(f.hint) + '</div>';
@@ -698,14 +820,9 @@ function fleetRenderField(f, val, prefix) {
 // falls back server-side to the *serving* node's own domain, which would
 // silently show a US channel list while editing a fleet that's actually on
 // EU.
-function fleetResolveDomain(prefix, forHalow) {
+function fleetResolveDomain(prefix) {
   var domainEl = document.getElementById('fleet-f-' + prefix + 'regulatory_domain');
-  var domain = (domainEl && domainEl.value) || 'US';
-  if (forHalow) {
-    var halowDomainEl = document.getElementById('fleet-f-' + prefix + 'halow_regulatory_domain');
-    if (halowDomainEl && halowDomainEl.value) domain = halowDomainEl.value;
-  }
-  return domain;
+  return (domainEl && domainEl.value) || 'US';
 }
 
 // Refreshes one channel-picker <select> via the shared common.js helper,
@@ -719,12 +836,12 @@ function fleetRefreshChannelPicker(f, prefix) {
   var current = chEl.value;
   var domain, url;
   if (f.type === 'channel-halow') {
-    domain = fleetResolveDomain(prefix, true);
+    domain = fleetResolveDomain(prefix);
     var bwEl = document.getElementById('fleet-f-' + prefix + 'halow_bw');
     var bw = (bwEl && bwEl.value) || '4MHz';
     url = '/api/halow/channels?domain=' + encodeURIComponent(domain) + '&bw=' + encodeURIComponent(bw);
   } else if (f.type === 'channel-5ghz') {
-    domain = fleetResolveDomain(prefix, false);
+    domain = fleetResolveDomain(prefix);
     url = '/api/mesh5ghz/channels?domain=' + encodeURIComponent(domain);
   } else {
     return;
@@ -749,7 +866,7 @@ function fleetWireChannelPickers(fields, prefix) {
   fields.forEach(function(f) {
     if (f.type !== 'channel-halow' && f.type !== 'channel-5ghz') return;
     var controllerKeys = f.type === 'channel-halow'
-      ? ['regulatory_domain', 'halow_regulatory_domain', 'halow_bw']
+      ? ['regulatory_domain', 'halow_bw']
       : ['regulatory_domain'];
     controllerKeys.forEach(function(key) {
       var el = document.getElementById('fleet-f-' + prefix + key);
@@ -912,7 +1029,15 @@ function fleetCollectEditState() {
   var meshCfg = {};
   MESH_FIELDS.forEach(function(f) {
     var el = document.getElementById('fleet-f-mesh-' + f.key);
-    if (el) meshCfg[f.key] = el.value;
+    if (!el) return;
+    // An empty password-type field must NEVER be sent as "set this secret
+    // to blank" -- it almost certainly means the field was populated from
+    // a redacted (pre-login) /api/admin/status response and the operator
+    // never actually touched it. The server independently guards against
+    // this too (dropEmptySecrets, admin.go), but skip it client-side as
+    // well so an empty secret is never even sent.
+    if (f.type === 'password' && el.value === '') return;
+    meshCfg[f.key] = el.value;
   });
 
   var profiles = {};
@@ -925,7 +1050,9 @@ function fleetCollectEditState() {
     PROFILE_SECTIONS.forEach(function(sec) {
       sec.fields.forEach(function(f) {
         var el = document.getElementById('fleet-f-p-' + pid + '-' + f.key);
-        if (el) cfg[f.key] = el.value;
+        if (!el) return;
+        if (f.type === 'password' && el.value === '') return;
+        cfg[f.key] = el.value;
       });
     });
     profiles[pid] = { name: name, config: cfg };

@@ -10,14 +10,18 @@
 # re-adds the interfaces.
 #
 
-ALL_MESH_INTERFACES=""
-if [ -s /var/lib/mesh_if ]; then
-    ALL_MESH_INTERFACES=$(cat /var/lib/mesh_if | tr '\n' ' ')
-fi
-if [ -s /var/lib/halow_if ]; then
-    ALL_MESH_INTERFACES="$ALL_MESH_INTERFACES $(cat /var/lib/halow_if | tr '\n' ' ')"
-fi
-ALL_MESH_INTERFACES=$(echo "$ALL_MESH_INTERFACES" | xargs)
+WAIT_SECS="${SAE_WATCHDOG_WAIT_SECS:-15}"
+
+read_mesh_interfaces() {
+    ALL_MESH_INTERFACES=""
+    if [ -s /var/lib/mesh_if ]; then
+        ALL_MESH_INTERFACES=$(cat /var/lib/mesh_if | tr '\n' ' ')
+    fi
+    if [ -s /var/lib/halow_if ]; then
+        ALL_MESH_INTERFACES="$ALL_MESH_INTERFACES $(cat /var/lib/halow_if | tr '\n' ' ')"
+    fi
+    ALL_MESH_INTERFACES=$(echo "$ALL_MESH_INTERFACES" | xargs)
+}
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] - SAE-WATCHDOG: $*"
@@ -82,19 +86,27 @@ bat0_has_all_interfaces() {
     return 0
 }
 
-log "Starting SAE watchdog (monitoring: ${ALL_MESH_INTERFACES:-all wpa_supplicant@wlan*.service})"
-
-# Monitor journald for SAE block events across enabled mesh interfaces
-JOURNAL_ARGS=()
-for iface in $ALL_MESH_INTERFACES; do
-    radio_iface_enabled "$iface" || continue
-    JOURNAL_ARGS+=("-fu" "$(service_unit_for_iface "$iface")")
+# Monitor journald for SAE block events across enabled mesh interfaces.
+# Until there is one (first boot before radio-setup assigns roles, or every
+# mesh radio turned off), wait here. Exiting instead made Restart=always rerun
+# the unit every 5s, and each start pulled in batman-enslave (Wants=).
+waiting=""
+while :; do
+    read_mesh_interfaces
+    JOURNAL_ARGS=()
+    for iface in $ALL_MESH_INTERFACES; do
+        radio_iface_enabled "$iface" || continue
+        JOURNAL_ARGS+=("-fu" "$(service_unit_for_iface "$iface")")
+    done
+    [ ${#JOURNAL_ARGS[@]} -gt 0 ] && break
+    if [ -z "$waiting" ]; then
+        log "No enabled mesh interfaces yet; waiting for them"
+        waiting=1
+    fi
+    sleep "$WAIT_SECS"
 done
 
-if [ ${#JOURNAL_ARGS[@]} -eq 0 ]; then
-    log "No enabled mesh interfaces in radio-state; exiting SAE watchdog monitor"
-    exit 0
-fi
+log "Starting SAE watchdog (monitoring: $ALL_MESH_INTERFACES)"
 
 journalctl "${JOURNAL_ARGS[@]}" \
     --output=cat 2>/dev/null | \

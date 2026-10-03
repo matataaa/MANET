@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ var (
 )
 
 func fleetConfigWatcher() {
+	fleetResumeActivation()
 	for {
 		time.Sleep(10 * time.Second)
 		fleetPollAlfred()
@@ -48,7 +50,28 @@ func fleetCheckActivation() {
 	if time.Now().Unix() < int64(at) {
 		return
 	}
-	log.Printf("fleet: activation time reached, applying config")
+
+	pkgID, _ := pkg["pkg_id"].(string)
+	version, _ := pkg["version"].(string)
+	stagedAt, _ := pkg["staged_at"].(float64)
+	if pkgID == "" {
+		log.Printf("fleet: pending config has no pkg_id, refusing to apply (stale/legacy package?)")
+		clearPendingConfig()
+		return
+	}
+	if isPkgIDApplied(pkgID) {
+		log.Printf("fleet: pkg_id %s (version %s) already applied, skipping re-apply — replay?", pkgID, version)
+		clearPendingConfig()
+		return
+	}
+	// Record BEFORE apply, not after: a crash mid-apply must never be able
+	// to replay this exact package again on the next boot.
+	if err := recordPkgIDApplied(pkgID, version, int64(stagedAt)); err != nil {
+		log.Printf("fleet: failed to record pkg_id %s as applied, refusing to apply: %v", pkgID, err)
+		return
+	}
+
+	log.Printf("fleet: activation time reached, applying config (pkg_id=%s)", pkgID)
 	fleetApplyConfig(pkg)
 	clearPendingConfig()
 	log.Printf("fleet: config applied and pending cleared")
@@ -80,6 +103,32 @@ func expandNodeTemplates(updates map[string]string, conf map[string]string) {
 	}
 }
 
+// fleetLocalIdentityKeys are saveableKeys that must NEVER be applied
+// literally from a fleet push, regardless of value -- they describe a
+// receiving node's own local identity, not shared fleet state.
+// node_hostname is the prototypical (and currently only) case: the fleet
+// UI's normal "load current config -> edit one unrelated field -> save"
+// flow naturally round-trips the STAGING node's own current node_hostname
+// value alongside whatever the operator actually meant to change. Without
+// this guard, pushing ANY unrelated field (hardware-confirmed: a bare
+// callsign edit was enough) silently overwrites every OTHER node's real OS
+// hostname prefix with the sender's, via the setHostname() call further
+// down in fleetApplyConfig -- this happened live during hardware testing
+// and needed manual SSH recovery on two nodes. The {{hostname}} templating
+// feature (expandNodeTemplates above) exists precisely so OTHER fields can
+// reference each node's own identity without node_hostname itself ever
+// needing to travel as a literal fleet-wide value -- confirming
+// node_hostname was never meant to be pushed literally in the first place.
+// Shaped as a list (not a single hardcoded check) so another local-identity
+// field could be added here later without restructuring this function.
+var fleetLocalIdentityKeys = []string{"node_hostname"}
+
+func dropLocalIdentityKeys(updates map[string]string) {
+	for _, k := range fleetLocalIdentityKeys {
+		delete(updates, k)
+	}
+}
+
 func fleetApplyConfig(pkg map[string]interface{}) {
 	configRaw, ok := pkg["config"].(map[string]interface{})
 	if !ok {
@@ -89,6 +138,26 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	for k, v := range configRaw {
 		if saveableKeys[k] {
 			updates[k] = fmt.Sprintf("%v", v)
+		}
+	}
+	// See fleetLocalIdentityKeys's doc comment: a fleet push must never
+	// rename a receiving node's own hostname.
+	dropLocalIdentityKeys(updates)
+	// Backstop: apiAdminSave/apiAdminStage/apiFleetPreferences already strip
+	// an empty secret value before it's ever persisted or broadcast (see
+	// dropEmptySecrets, admin.go), but this is the function that actually
+	// writes mesh.conf on every OTHER node in the fleet -- if something
+	// upstream ever missed that check (a new call path, a bug), this is the
+	// last line of defense against writing admin_password="" / mesh_key=""
+	// fleet-wide.
+	dropEmptySecrets(updates)
+	// Backstop for apiAdminStage's validateConfigUpdates: drop any value
+	// this node can't store or apply, keeping the rest of the push
+	// (skip-not-abort, like the halow pair check below).
+	for k, v := range updates {
+		if err := configValueError(k, v); err != nil {
+			log.Printf("fleet: dropping %s from this node's apply: %v", k, err)
+			delete(updates, k)
 		}
 	}
 	if len(updates) == 0 {
@@ -125,6 +194,14 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 			delete(updates, "halow_channel")
 		}
 	}
+
+	// NOTE: admin_password rotation has no grace-period/fallback key here by
+	// design (see fleetOpen's doc comment) — a node that misses a rotation
+	// push simply can't open any subsequent fleet package until its
+	// admin_password is fixed locally (SSH) to match. That's the accepted
+	// manual-recovery story for a small, operator-controlled fleet, in
+	// exchange for an old, possibly-leaked password never staying valid
+	// indefinitely.
 
 	expandNodeTemplates(updates, existingConf)
 	if err := saveKVFile(MeshConfFile, updates); err != nil {
@@ -167,6 +244,9 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	if updates["multicast_mode"] != "" {
 		applyMulticastMode(updates["multicast_mode"])
 	}
+	if uplinkAccessChanged(updates, existingConf) {
+		runUIFirewall()
+	}
 	if updates["voice_mic_volume"] != "" || updates["voice_speaker_volume"] != "" {
 		applyVoiceVolume(conf)
 	}
@@ -195,8 +275,17 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	}
 	_, bwChanged := updates["halow_bw"]
 	_, chChanged := updates["halow_channel"]
-	if bwChanged || chChanged {
+	_, rdChanged := updates["regulatory_domain"]
+	if bwChanged || chChanged || rdChanged {
 		applyFleetHalowBW(conf)
+	}
+	// Same as apiAdminSave: the module options apply at the next boot.
+	_, dutyChanged := updates["halow_duty_cycle"]
+	_, powerChanged := updates["halow_txpower_dbm"]
+	if rdChanged || bwChanged || dutyChanged || powerChanged {
+		if _, err := applyRadioConfigFiles(conf); err != nil {
+			log.Printf("fleet: %v", err)
+		}
 	}
 	if _, ch5Changed := updates["mesh_5ghz_channel"]; ch5Changed {
 		applyFleetMesh5GHzChannel(conf)
@@ -232,8 +321,8 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 // domain in `conf`, which is read AFTER fleetApplyConfig's saveKVFile call --
 // so this validates against the domain that results from this push, not a
 // pre-existing per-node domain that might genuinely differ from what was
-// just written. In practice regulatory_domain/halow_regulatory_domain are
-// themselves network-wide fields that fleet.js always collects and pushes
+// just written. In practice regulatory_domain is
+// itself a network-wide field that fleet.js always collects and pushes
 // alongside every save, so by the time this runs every node in the fleet
 // already has the identical newly-pushed domain -- there is no surviving
 // cross-node divergence left to detect for THIS push.
@@ -263,9 +352,8 @@ func applyFleetHalowBW(conf map[string]string) {
 // pushed against the domain just pushed alongside it, not a genuinely
 // surviving per-node divergence (see applyFleetHalowBW's comment for why
 // that divergence doesn't survive a network-wide push). Resolves the domain via
-// resolveMesh5GHzDomain (api.go) -- deliberately not resolveHalowDomain/
-// halow_regulatory_domain, since HaLow and 5GHz WiFi can run different
-// domains on the same node. Unlike applyFleetHalowBW there is no
+// resolveMesh5GHzDomain (api.go), which uses the 5GHz channel table rather
+// than the HaLow one. Unlike applyFleetHalowBW there is no
 // restart/apply step for mesh_5ghz_channel to skip -- node-manager reads it
 // straight from mesh.conf on its own live 15s tick and already falls back
 // to the default lobby channel for a value it doesn't recognize -- so this
@@ -288,19 +376,59 @@ func fleetPollAlfred() {
 	if err != nil || len(out) == 0 {
 		return
 	}
-	if best := parseAlfredBest(out, getMyMAC(), "staged_at"); best != nil {
+	conf := loadKVFile(MeshConfFile)
+	password := conf["admin_password"]
+	if password == "" {
+		log.Printf("fleet: admin_password is empty, refusing to process slot 70 packages")
+		return
+	}
+	if best := parseAlfredBest(out, ownMACs(), "70", "staged_at", password, conf["mesh_ssid"]); best != nil {
 		fleetProcessPackage(best)
 	}
 }
 
 // parseAlfredBest scans `alfred -r <slot>` output — one line per node:
-// { "mac", "json_payload" } — and returns the raw JSON payload with the
-// largest value of tsField, skipping this node's own entry. Shared by the
-// config-push and update-trigger watchers, which differ only in which
-// timestamp field orders "most recent."
-func parseAlfredBest(out []byte, myMAC, tsField string) []byte {
+// { "mac", "envelope_json" }, where envelope_json is now a fully sealed v2
+// envelope (see fleetcrypto.go), not a plaintext package. It authenticates
+// and decrypts EVERY candidate entry FIRST, discarding anything that fails to
+// open (including plain v1 packages — hard rejection, no dual-accept, see
+// the rollout policy), and only THEN ranks the survivors by their INNER
+// (now-authenticated) tsField.
+//
+// This order matters: the previous version picked the single entry with the
+// largest OUTER, unauthenticated tsField and only afterward would-be verify
+// it, which let an attacker who couldn't even decrypt permanently shadow
+// every legitimate push with a bogus far-future timestamp. Ranking only ever
+// happens on content that has already passed GCM authentication now, so that
+// class of attack no longer has anything to act on.
+// ownMACs is every MAC address this node owns, colons stripped, for
+// recognising its own alfred entries. alfred labels an entry with the MAC of
+// the interface it serves on (br0, see radio-setup.sh's alfred unit), not the
+// bat0 MAC getMyMAC() returns, and br0's MAC follows its ports; comparing
+// against bat0 alone never matched, so every node acted on its own packages.
+func ownMACs() map[string]bool {
+	own := map[string]bool{}
+	if mac := getMyMAC(); mac != "" {
+		own[strings.ReplaceAll(mac, ":", "")] = true
+	}
+	paths, _ := filepath.Glob("/sys/class/net/*/address")
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		mac := strings.ReplaceAll(normMAC(string(data)), ":", "")
+		if mac != "" && mac != "000000000000" {
+			own[mac] = true
+		}
+	}
+	return own
+}
+
+func parseAlfredBest(out []byte, own map[string]bool, slot, tsField, password, meshSSID string) []byte {
 	var best []byte
 	var bestTS int64
+	haveBest := false
 
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
@@ -309,7 +437,7 @@ func parseAlfredBest(out []byte, myMAC, tsField string) []byte {
 			continue
 		}
 		mac := strings.TrimLeft(line[:idx], "{ \"")
-		if strings.ReplaceAll(mac, ":", "") == strings.ReplaceAll(myMAC, ":", "") {
+		if own[strings.ReplaceAll(normMAC(mac), ":", "")] {
 			continue
 		}
 		rest := line[idx+4:]
@@ -323,14 +451,22 @@ func parseAlfredBest(out []byte, myMAC, tsField string) []byte {
 		if json.Unmarshal([]byte("\""+payload+"\""), &raw) != nil {
 			raw = payload
 		}
+
+		pt, err := fleetOpen(slot, []byte(raw), password, meshSSID)
+		if err != nil {
+			logRejectV1Once(slot, mac)
+			continue
+		}
+
 		var pkg map[string]interface{}
-		if json.Unmarshal([]byte(raw), &pkg) != nil {
+		if json.Unmarshal(pt, &pkg) != nil {
 			continue
 		}
 		ts, _ := pkg[tsField].(float64)
-		if int64(ts) > bestTS {
+		if !haveBest || int64(ts) > bestTS {
 			bestTS = int64(ts)
-			best = []byte(raw)
+			best = pt
+			haveBest = true
 		}
 	}
 	return best
@@ -338,19 +474,38 @@ func parseAlfredBest(out []byte, myMAC, tsField string) []byte {
 
 // broadcastUpdatePackage pushes a fleet-wide "force update" command via the
 // same Alfred gossip mechanism config-push already uses, on a separate slot
-// so the two package schemas never collide.
-func broadcastUpdatePackage(channel string) bool {
+// so the two package schemas never collide, sealed the same way slot 70 is
+// (see fleetSeal's slot-bound AAD — a slot 70 envelope can't be replayed
+// here and vice versa).
+func broadcastUpdatePackage(channel string) (triggeredAt int64, ok bool) {
+	conf := loadKVFile(MeshConfFile)
+	password := conf["admin_password"]
+	if password == "" {
+		log.Printf("fleet: refusing to broadcast slot 71 update trigger, admin_password is empty")
+		return 0, false
+	}
+	triggeredAt = time.Now().Unix()
 	pkg := map[string]interface{}{
 		"channel":      channel,
-		"triggered_at": time.Now().Unix(),
+		"triggered_at": triggeredAt,
 	}
 	data, err := json.Marshal(pkg)
 	if err != nil {
-		return false
+		log.Printf("fleet: failed to marshal update package: %v", err)
+		return 0, false
+	}
+	envelope, err := fleetSeal("71", data, password, conf["mesh_ssid"])
+	if err != nil {
+		log.Printf("fleet: failed to seal update package: %v", err)
+		return 0, false
 	}
 	cmd := exec.Command("alfred", "-s", "71")
-	cmd.Stdin = strings.NewReader(string(data))
-	return cmd.Run() == nil
+	cmd.Stdin = strings.NewReader(string(envelope))
+	if err := cmd.Run(); err != nil {
+		log.Printf("fleet: alfred -s 71 failed: %v", err)
+		return 0, false
+	}
+	return triggeredAt, true
 }
 
 func fleetPollUpdateAlfred() {
@@ -358,7 +513,13 @@ func fleetPollUpdateAlfred() {
 	if err != nil || len(out) == 0 {
 		return
 	}
-	if best := parseAlfredBest(out, getMyMAC(), "triggered_at"); best != nil {
+	conf := loadKVFile(MeshConfFile)
+	password := conf["admin_password"]
+	if password == "" {
+		log.Printf("fleet: admin_password is empty, refusing to process slot 71 packages")
+		return
+	}
+	if best := parseAlfredBest(out, ownMACs(), "71", "triggered_at", password, conf["mesh_ssid"]); best != nil {
 		fleetProcessUpdatePackage(best)
 	}
 }
@@ -376,7 +537,7 @@ func fleetProcessUpdatePackage(data []byte) {
 	}
 	triggeredAt, _ := pkg["triggered_at"].(float64)
 	channel, _ := pkg["channel"].(string)
-	if triggeredAt <= 0 || (channel != "software" && channel != "overlay" && channel != "both") {
+	if triggeredAt <= 0 || !validUpdateChannel(channel) {
 		return
 	}
 
@@ -386,15 +547,18 @@ func fleetProcessUpdatePackage(data []byte) {
 	}
 
 	log.Printf("fleet: update trigger received (channel=%s, triggered_at=%d)", channel, int64(triggeredAt))
-	if err := os.WriteFile(UpdateTriggerFile, []byte(channel), 0644); err != nil {
-		log.Printf("fleet: failed to write update trigger: %v", err)
+	if err := triggerLocalUpdate(channel); err != nil {
+		log.Printf("fleet: update trigger: %v", err)
 		return
 	}
-	if _, err := runCmd(5*time.Second, "pkill", "-USR1", "-x", "node-update"); err != nil {
-		log.Printf("fleet: failed to signal node-update: %v", err)
-		return
+	// FleetUpdateAckFile is this node's persistent (non-tmpfs, see config.go)
+	// replay record for slot 71 — check and fsync its write the same way
+	// recordPkgIDApplied does for slot 70's record, so a crash right after
+	// signaling node-update can't leave this unrecorded and replay the same
+	// trigger again on the next boot.
+	if err := writeFileFsync(FleetUpdateAckFile, []byte(strconv.FormatInt(int64(triggeredAt), 10))); err != nil {
+		log.Printf("fleet: failed to persist update-trigger ack: %v", err)
 	}
-	os.WriteFile(FleetUpdateAckFile, []byte(strconv.FormatInt(int64(triggeredAt), 10)), 0644)
 }
 
 func fleetProcessPackage(data []byte) {
@@ -406,19 +570,68 @@ func fleetProcessPackage(data []byte) {
 	if version == "" {
 		return
 	}
+	pkgID, _ := pkg["pkg_id"].(string)
+	if pkgID == "" {
+		log.Printf("fleet: rejecting slot 70 package version %s with no pkg_id (stale/legacy format?)", version)
+		return
+	}
+	if isPkgIDApplied(pkgID) {
+		// Already applied this exact package before (possibly across a
+		// reboot that lost AckVersionFile's tmpfs record while a peer kept
+		// gossiping the same already-applied package) — refuse to re-stage.
+		return
+	}
+	// Sanity-bound staged_at itself, before it's ever compared against (and
+	// could poison) the watermark below. These boards have no RTC: a node
+	// with a future-skewed clock could stage a package whose staged_at, if
+	// accepted and later applied, becomes this node's new
+	// highestAppliedStagedAt — permanently rejecting every subsequent
+	// legitimate push fleet-wide as a "rollback" until real time catches up
+	// (recovery needs SSH on every node). Only enforced when THIS node's own
+	// clock looks sane (year >= 2025) -- fleetPackageFresh already has the
+	// same unset-clock bypass for the same reason.
+	now := time.Now()
+	if now.Year() >= 2025 && clockSynchronized() {
+		if stagedAt, _ := pkg["staged_at"].(float64); int64(stagedAt) > now.Add(10*time.Minute).Unix() {
+			log.Printf("fleet: rejecting slot 70 package version %s, staged_at %d is more than 10min ahead of this node's clock — skewed sender clock?", version, int64(stagedAt))
+			return
+		}
+	}
+	// Reject anything older than (or equal to) the newest package this node
+	// has ever actually applied. The pkg_id ring above only remembers the
+	// last appliedRecordMax packages; this watermark never shrinks, so it's
+	// what actually stops a rollback replay of an older, already-superseded
+	// package once its pkg_id has aged out of that ring — e.g. this node
+	// ACKed newer version C, but still has an older version A's pkg_id (now
+	// evicted from the ring) re-published by some mesh member reading
+	// `alfred -r 70`, within A's own still-valid expires_at window.
+	if stagedAt, _ := pkg["staged_at"].(float64); int64(stagedAt) <= highestAppliedStagedAt() {
+		log.Printf("fleet: rejecting slot 70 package version %s, staged_at %d is at or before the last applied watermark %d — stale/rollback replay?", version, int64(stagedAt), highestAppliedStagedAt())
+		return
+	}
 
 	// Check if we already have this version ACKed
 	existing, _ := os.ReadFile(AckVersionFile)
 	if strings.TrimSpace(string(existing)) == version {
-		// Already ACKed — but check if remote added activate_at that we don't have yet
-		if activateAt, ok := pkg["activate_at"].(float64); ok && activateAt > 0 {
+		// Already ACKed — but check if remote added activate_at that we don't
+		// have yet. Deliberately NOT gated on fleetPackageFresh below: that's
+		// a staging-time freshness bound, and an operator who stages then
+		// activates more than expires_at later must not have that
+		// legitimate, already-authenticated activation silently dropped just
+		// because the ORIGINAL staging now looks "expired." activate_at
+		// itself is separately bounds-checked (activateAtInBounds).
+		if activateAt, ok := pkg["activate_at"].(float64); ok && activateAt > 0 && activationAcceptable(int64(activateAt), time.Now()) {
 			local := getPendingConfig()
 			if local != nil {
 				var localPkg map[string]interface{}
 				if json.Unmarshal(local, &localPkg) == nil {
 					if _, has := localPkg["activate_at"]; !has {
-						savePendingConfig(pkg)
-						log.Printf("fleet: activation received for version %s (at %d)", version, int64(activateAt))
+						pkg["activate_at"] = localActivateAt(int64(activateAt), time.Now())
+						if err := savePendingConfig(pkg); err != nil {
+							log.Printf("fleet: failed to save pending config with activate_at for version %s: %v", version, err)
+						} else {
+							log.Printf("fleet: activation received for version %s (at %d)", version, int64(activateAt))
+						}
 					}
 				}
 			}
@@ -426,14 +639,34 @@ func fleetProcessPackage(data []byte) {
 		return
 	}
 
-	// Save as pending config
-	savePendingConfig(pkg)
+	// A genuinely new version this node hasn't seen/ACKed yet — apply the
+	// staging-time freshness bound here (not above), so it only ever gates
+	// first-time acceptance of a package, never a later, still-in-bounds
+	// activation of one already accepted.
+	if !fleetPackageFresh(pkg, time.Now()) {
+		log.Printf("fleet: rejecting slot 70 package version %s, expired", version)
+		return
+	}
+
+	// Save as pending config. Check the error and stop here rather than
+	// falling through to ACK below: a node that failed to actually persist
+	// the pending package must not ACK it anyway -- that would count toward
+	// the fleet's ack-quorum gate (ackStatus, admin.go) while this node has
+	// nothing pending to actually activate later.
+	if err := savePendingConfig(pkg); err != nil {
+		log.Printf("fleet: failed to save pending config for version %s: %v", version, err)
+		return
+	}
 
 	// Sync profiles from the staging node so all nodes share the same view
 	fleetSyncProfiles(pkg)
 
-	// Write ACK
-	os.WriteFile(AckVersionFile, []byte(version), 0644)
+	// Write ACK -- same reasoning: don't broadcast/report an ACK for a
+	// version whose local ack-version record failed to actually write.
+	if err := os.WriteFile(AckVersionFile, []byte(version), 0644); err != nil {
+		log.Printf("fleet: failed to write local ack version %s: %v", version, err)
+		return
+	}
 	log.Printf("fleet: ACKed config version %s", version)
 
 	// Broadcast ACK via multicast for fast propagation
@@ -481,13 +714,32 @@ func fleetSyncProfiles(pkg map[string]interface{}) {
 	log.Printf("fleet: synced profiles from staged package")
 }
 
+// fleetMcastSendActivation seals the activation trigger the same way slot 70
+// itself is sealed, under its own distinct AAD label ("70-mcast" — not "70",
+// even though this activates a slot-70-staged package: a distinct label
+// costs nothing and means a real slot-70 config envelope can never even be
+// tried against this path or vice versa, on top of the type/pkg_id checks
+// below that already prevent it in practice) so a bare unauthenticated
+// multicast packet can no longer force an activation — this closes the
+// injection path where any device on br0 (mesh member or not, since br0
+// bridges bat0 and this listener's own firewall only filters TCP 80/5201,
+// not UDP 17070) could previously just craft {"type":"fleet_activate",...}
+// directly and skip both the normal 60s window and the ACK-quorum gate.
 func fleetMcastSendActivation(version string, activateAt int64) {
+	conf := loadKVFile(MeshConfFile)
+	password := conf["admin_password"]
+	if password == "" {
+		log.Printf("fleet: refusing to send mcast activation, admin_password is empty")
+		return
+	}
 	addr, err := net.ResolveUDPAddr("udp4", fleetMcastAddr)
 	if err != nil {
+		log.Printf("fleet mcast: resolve error: %v", err)
 		return
 	}
 	conn, err := net.DialUDP("udp4", nil, addr)
 	if err != nil {
+		log.Printf("fleet mcast: dial error: %v", err)
 		return
 	}
 	defer conn.Close()
@@ -496,8 +748,19 @@ func fleetMcastSendActivation(version string, activateAt int64) {
 		"version":     version,
 		"activate_at": activateAt,
 	}
-	data, _ := json.Marshal(msg)
-	conn.Write(data)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("fleet mcast: marshal error: %v", err)
+		return
+	}
+	envelope, err := fleetSeal("70-mcast", data, password, conf["mesh_ssid"])
+	if err != nil {
+		log.Printf("fleet mcast: seal error: %v", err)
+		return
+	}
+	if _, err := conn.Write(envelope); err != nil {
+		log.Printf("fleet mcast: write error: %v", err)
+	}
 }
 
 func fleetMcastSendAck(version string) {
@@ -555,40 +818,83 @@ func fleetMcastListener() {
 		if err != nil {
 			continue
 		}
-		var msg map[string]interface{}
-		if json.Unmarshal(buf[:n], &msg) != nil {
+		raw := append([]byte(nil), buf[:n]...)
+
+		var probe map[string]interface{}
+		if json.Unmarshal(raw, &probe) != nil {
 			continue
 		}
-		msgType, _ := msg["type"].(string)
-		if msgType == "fleet_stage" {
-			fleetProcessPackage(buf[:n])
-		} else if msgType == "fleet_ack" {
-			mac, _ := msg["mac"].(string)
-			version, _ := msg["version"].(string)
+
+		if msgType, _ := probe["type"].(string); msgType == "fleet_ack" {
+			// Deliberately left unauthenticated by design: fleet_ack rides
+			// the already-unauthenticated identity/telemetry channel (same
+			// trust level as mesh-registry's own gossip). A forged ACK CAN
+			// satisfy the non-force Activate gate's ack count (ackStatus,
+			// admin.go, merges this map in) — it is not a no-op — but it
+			// can't by itself trigger an activation, and it can't cause
+			// anything to actually be applied: that still requires a fully
+			// authenticated sealed package on slot 70/71 (or the mcast
+			// fleet_activate path below, which is itself now sealed).
+			mac, _ := probe["mac"].(string)
+			version, _ := probe["version"].(string)
 			if mac != "" && version != "" {
 				fleetAcksMu.Lock()
 				fleetAcks[normMAC(mac)] = version
 				fleetAcksMu.Unlock()
 			}
-		} else if msgType == "fleet_activate" {
-			version, _ := msg["version"].(string)
-			activateAt, _ := msg["activate_at"].(float64)
-			if version != "" && activateAt > 0 {
-				local := getPendingConfig()
-				if local != nil {
-					var localPkg map[string]interface{}
-					if json.Unmarshal(local, &localPkg) == nil {
-						localVer, _ := localPkg["version"].(string)
-						if localVer == version {
-							if _, has := localPkg["activate_at"]; !has {
-								localPkg["activate_at"] = activateAt
-								savePendingConfig(localPkg)
-								log.Printf("fleet: mcast activation for version %s", version)
-							}
-						}
-					}
-				}
-			}
+			continue
 		}
+
+		// Everything else must be a sealed v2 envelope. The legacy plaintext
+		// "fleet_stage" injection path has been removed entirely — nothing
+		// in this repo ever legitimately sent it, so there was no
+		// compatibility reason to keep accepting it, and it required no
+		// mesh membership at all to exploit (br0 bridges bat0, and this
+		// listener's own multicast port is unfiltered by
+		// manet-ui-firewall.sh, which only covers TCP 80/443/5201).
+		conf := loadKVFile(MeshConfFile)
+		password := conf["admin_password"]
+		if password == "" {
+			continue
+		}
+		pt, err := fleetOpen("70-mcast", raw, password, conf["mesh_ssid"])
+		if err != nil {
+			logRejectV1Once("70-mcast", "")
+			continue
+		}
+
+		var msg map[string]interface{}
+		if json.Unmarshal(pt, &msg) != nil {
+			continue
+		}
+		if msgType, _ := msg["type"].(string); msgType != "fleet_activate" {
+			continue
+		}
+		version, _ := msg["version"].(string)
+		activateAt, _ := msg["activate_at"].(float64)
+		if version == "" || activateAt <= 0 || !activationAcceptable(int64(activateAt), time.Now()) {
+			continue
+		}
+		local := getPendingConfig()
+		if local == nil {
+			continue
+		}
+		var localPkg map[string]interface{}
+		if json.Unmarshal(local, &localPkg) != nil {
+			continue
+		}
+		localVer, _ := localPkg["version"].(string)
+		if localVer != version {
+			continue
+		}
+		if _, has := localPkg["activate_at"]; has {
+			continue
+		}
+		localPkg["activate_at"] = localActivateAt(int64(activateAt), time.Now())
+		if err := savePendingConfig(localPkg); err != nil {
+			log.Printf("fleet: failed to save pending config after mcast activation: %v", err)
+			continue
+		}
+		log.Printf("fleet: mcast activation for version %s", version)
 	}
 }

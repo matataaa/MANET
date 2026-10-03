@@ -23,14 +23,22 @@ import (
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
 
+// maxJSONBody caps readBody. Every JSON request the UI sends is a few KiB;
+// without a cap, one oversized POST (several routes read the body before
+// checking auth) is buffered whole into memory. Applet uploads have their
+// own, larger limit (maxUploadSize).
+const maxJSONBody = 1 << 20
+
 func readBody(r *http.Request) map[string]interface{} {
 	m := make(map[string]interface{})
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, maxJSONBody))
 	if err != nil || len(body) == 0 {
 		return m
 	}
@@ -134,6 +142,18 @@ func apiPeer(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Invalid IP"})
 		return
 	}
+	if !isMeshPeerIP(peerIP, loadKVFile(MeshConfFile)) {
+		writeJSON(w, 403, map[string]interface{}{"ok": false, "error": "Peer must be a mesh node address"})
+		return
+	}
+	if subPath != "" && !strings.HasPrefix(subPath, "/api/") {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Only /api/ paths can be proxied"})
+		return
+	}
+	if strings.HasPrefix(subPath, "/api/peer/") {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Proxy requests cannot be chained"})
+		return
+	}
 
 	if subPath == "" {
 		data := getPeerLocalData(peerIP, 2*time.Second)
@@ -147,8 +167,67 @@ func apiPeer(w http.ResponseWriter, r *http.Request) {
 	peerProxyRequest(w, r, peerIP, subPath)
 }
 
+// isMeshPeerIP reports whether ip is an address inside this mesh's
+// ipv4_network. /api/peer only proxies to mesh nodes: it used to dial any
+// address over HTTPS, an open proxy into whatever network the node sits on
+// (reachable from a gateway's uplink LAN too). A bare network without a
+// prefix length (older images) is taken as /24, like mesh-manager does.
+func isMeshPeerIP(ipStr string, conf map[string]string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil || ip.To4() == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
+		return false
+	}
+	network := confGet(conf, "ipv4_network", "10.30.2.0/24")
+	if !strings.Contains(network, "/") {
+		network += "/24"
+	}
+	_, cidr, err := net.ParseCIDR(network)
+	return err == nil && cidr.Contains(ip)
+}
+
+func peerProxyURL(peerIP, path, rawQuery string) string {
+	u := "https://" + peerIP + path
+	if rawQuery != "" {
+		u += "?" + rawQuery
+	}
+	return u
+}
+
+// peerProxyAuthToken carries the user's login across to the peer: when the
+// request to this node has a live login session, the proxied request gets a
+// fleet peer token bound to peerIP and the API domain, which the peer
+// accepts as authenticated (proxiedAPIRequestAuthenticated). Only a session
+// counts here, never a relayed token, and mintFleetPeerToken returns "" on a
+// node without require_auth=y, so an open node can't relay unauthenticated
+// callers into a locked one. The fleet shares one admin password, so a
+// login on any node already proves the same thing.
+func peerProxyAuthToken(r *http.Request, peerIP string) string {
+	if required, authenticated := sessionAuthState(r); !required || !authenticated {
+		return ""
+	}
+	return mintFleetPeerToken(peerIP, FleetPeerAuthDomainAPI)
+}
+
+// copyPeerHeaders copies the peer's response headers, except Set-Cookie: a
+// peer's session cookie must never be set on this node's origin, where it
+// would replace the browser's session with this node.
+func copyPeerHeaders(dst, src http.Header) {
+	for k, vals := range src {
+		if http.CanonicalHeaderKey(k) == "Set-Cookie" {
+			continue
+		}
+		for _, v := range vals {
+			dst.Add(k, v)
+		}
+	}
+}
+
 func peerProxyRequest(w http.ResponseWriter, r *http.Request, peerIP, path string) {
-	targetURL := fmt.Sprintf("https://%s%s", peerIP, path)
+	if r.ContentLength > maxJSONBody {
+		writeJSON(w, 413, map[string]interface{}{"ok": false, "error": "Request body too large"})
+		return
+	}
+	targetURL := peerProxyURL(peerIP, path, r.URL.RawQuery)
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
@@ -156,12 +235,15 @@ func peerProxyRequest(w http.ResponseWriter, r *http.Request, peerIP, path strin
 		},
 	}
 
-	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
+	proxyReq, err := http.NewRequest(r.Method, targetURL, http.MaxBytesReader(w, r.Body, maxJSONBody))
 	if err != nil {
 		writeJSON(w, 502, map[string]interface{}{"ok": false, "error": "proxy request failed"})
 		return
 	}
 	proxyReq.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+	if token := peerProxyAuthToken(r, peerIP); token != "" {
+		proxyReq.Header.Set(FleetPeerAuthHeader, token)
+	}
 	proxyReq.ContentLength = r.ContentLength
 
 	resp, err := client.Do(proxyReq)
@@ -171,11 +253,7 @@ func peerProxyRequest(w http.ResponseWriter, r *http.Request, peerIP, path strin
 	}
 	defer resp.Body.Close()
 
-	for k, vals := range resp.Header {
-		for _, v := range vals {
-			w.Header().Add(k, v)
-		}
-	}
+	copyPeerHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 }
@@ -184,7 +262,11 @@ func apiVoice(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		body := readBody(r)
 		action := jsonStr(body, "action", "")
-		if action == "volume" {
+		// Keying the radio is what every EUD user does (the Android app
+		// has no login), and /ws/voice already lets anyone on the mesh
+		// transmit; volume is a local comfort setting. Reconfiguring or
+		// restarting the voice service stays admin-only.
+		if action == "volume" || action == "ptt_on" || action == "ptt_off" {
 			apiVoiceConfig(w, r, body)
 			return
 		}
@@ -225,6 +307,14 @@ func apiVoiceConfig(w http.ResponseWriter, r *http.Request, body map[string]inte
 		if micVol == "" && spkVol == "" {
 			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "no volume specified"})
 			return
+		}
+		// Reachable without a login, so nothing but a 0-100 level may
+		// reach mesh.conf.
+		for _, v := range []string{micVol, spkVol} {
+			if n, err := strconv.Atoi(v); v != "" && (err != nil || n < 0 || n > 100) {
+				writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "volume must be 0-100"})
+				return
+			}
 		}
 		volUpdates := map[string]string{}
 		if micVol != "" {
@@ -320,7 +410,7 @@ WantedBy=multi-user.target
 }
 
 func apiAdminStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, assembleAdminStatus())
+	writeJSON(w, 200, assembleAdminStatus(isAuthed(r)))
 }
 
 // apiUpdateStatus returns node-update's own status file verbatim — the
@@ -350,19 +440,39 @@ func apiUpdateStatus(w http.ResponseWriter, r *http.Request) {
 func apiUpdateNow(w http.ResponseWriter, r *http.Request) {
 	body := readBody(r)
 	channel := jsonStr(body, "channel", "")
-	if channel != "software" && channel != "overlay" && channel != "both" {
-		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, or both"})
+	if !validUpdateChannel(channel) {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, both, or check"})
 		return
 	}
-	if err := os.WriteFile(UpdateTriggerFile, []byte(channel), 0644); err != nil {
+	if err := triggerLocalUpdate(channel); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": err.Error()})
 		return
 	}
-	if _, err := runCmd(5*time.Second, "pkill", "-USR1", "-x", "node-update"); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to signal node-update: " + err.Error()})
-		return
-	}
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
+// validUpdateChannel accepts the trigger words node-update understands:
+// software, overlay and both apply what is available; check only re-detects
+// (no cooldown, never applies) so the UI shows fresh versions.
+func validUpdateChannel(channel string) bool {
+	switch channel {
+	case "software", "overlay", "both", "check":
+		return true
+	}
+	return false
+}
+
+// triggerLocalUpdate hands channel to this node's node-update: the trigger
+// file its SIGUSR1 handler reads, then the signal (systemctl reload is
+// already SIGHUP, the cooldown-limited periodic recheck).
+func triggerLocalUpdate(channel string) error {
+	if err := os.WriteFile(UpdateTriggerFile, []byte(channel), 0644); err != nil {
+		return err
+	}
+	if _, err := runCmd(5*time.Second, "pkill", "-USR1", "-x", "node-update"); err != nil {
+		return fmt.Errorf("failed to signal node-update: %v", err)
+	}
+	return nil
 }
 
 // apiForceUpdate broadcasts a fleet-wide update trigger — every node picks
@@ -374,13 +484,26 @@ func apiUpdateNow(w http.ResponseWriter, r *http.Request) {
 func apiForceUpdate(w http.ResponseWriter, r *http.Request) {
 	body := readBody(r)
 	channel := jsonStr(body, "channel", "")
-	if channel != "software" && channel != "overlay" && channel != "both" {
-		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, or both"})
+	if !validUpdateChannel(channel) {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, both, or check"})
 		return
 	}
-	if !broadcastUpdatePackage(channel) {
+	triggeredAt, ok := broadcastUpdatePackage(channel)
+	if !ok {
 		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to broadcast update trigger"})
 		return
+	}
+	// Peers act on the broadcast; this node skips its own alfred entry
+	// (parseAlfredBest/ownMACs), so trigger it here directly. The ack is a
+	// second guard against acting on that copy. node-update applies a channel
+	// only when it has an update for it, so this is safe on a node that is
+	// already up to date.
+	if err := triggerLocalUpdate(channel); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "broadcast sent, but this node: " + err.Error()})
+		return
+	}
+	if err := writeFileFsync(FleetUpdateAckFile, []byte(strconv.FormatInt(triggeredAt, 10))); err != nil {
+		log.Printf("fleet: failed to record own update trigger: %v", err)
 	}
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
 }
@@ -471,6 +594,7 @@ func apiFleetPreferences(w http.ResponseWriter, r *http.Request) {
 			for k, v := range m {
 				prefs.MeshConfig[k] = fmt.Sprintf("%v", v)
 			}
+			dropEmptySecrets(prefs.MeshConfig)
 		}
 	}
 	if np, ok := body["node_profiles"]; ok {
@@ -493,6 +617,7 @@ func apiFleetPreferences(w http.ResponseWriter, r *http.Request) {
 							fp.Config[k] = fmt.Sprintf("%v", v)
 						}
 					}
+					dropEmptySecrets(fp.Config)
 					prefs.Profiles[pid] = fp
 				}
 			}
@@ -905,9 +1030,9 @@ var saveableKeys = map[string]bool{
 	"node_hostname": true, "eud": true, "lan_ap_ssid": true, "lan_ap_key": true,
 	"lan_ap_channel": true, "lan_ap_bw": true,
 	"max_euds_per_node": true, "mesh_ssid": true, "mesh_key": true,
-	"ipv4_network": true, "regulatory_domain": true, "halow_regulatory_domain": true, "halow_bw": true, "halow_channel": true, "mesh_5ghz_bw": true, "mesh_5ghz_channel": true,
+	"ipv4_network": true, "regulatory_domain": true, "halow_bw": true, "halow_channel": true, "halow_duty_cycle": true, "halow_txpower_dbm": true, "mesh_5ghz_bw": true, "mesh_5ghz_channel": true,
 	"acs":             true,
-	"battery_monitor": true, "admin_password": true, "require_auth": true,
+	"battery_monitor": true, "admin_password": true, "require_auth": true, "ui_uplink_access": true, "ssh_uplink_access": true,
 	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
 	"multicast_mode":   true,
 	"voice_mic_volume": true, "voice_speaker_volume": true,
@@ -918,6 +1043,7 @@ var saveableKeys = map[string]bool{
 	"eud_bandwidth": true,
 	"qos_enabled":   true, "qos_voice_band": true, "qos_cot_band": true, "qos_chat_band": true,
 	"auto_update": true, "update_url": true, "auto_update_overlay": true, "auto_update_min_mbps": true,
+	"update_allow_unsigned": true,
 	"gps": true, "gps_source": true, "gps_static_lat": true, "gps_static_lon": true, "gps_static_alt": true,
 	"callsign": true, "cot_type": true, "cot_team": true, "cot_role": true, "cot_icon": true,
 }
@@ -926,60 +1052,64 @@ var saveableKeys = map[string]bool{
 // and any future admin UI. Keys with no entry here still show up in
 // apiConfigKeys, just without a description.
 var keyDescriptions = map[string]string{
-	"node_hostname":           "Hostname prefix for this node (full hostname adds mesh SSID + MAC suffix)",
-	"eud":                     "Enable End User Device access (WiFi AP / wired bridge)",
-	"lan_ap_ssid":             "SSID for the EUD-facing WiFi access point",
-	"lan_ap_key":              "WPA2-PSK passphrase for the EUD-facing WiFi access point",
-	"lan_ap_channel":          "Channel for the EUD-facing WiFi access point",
-	"lan_ap_bw":               "Channel bandwidth for the EUD-facing WiFi access point",
-	"max_euds_per_node":       "Maximum number of EUD clients this node will serve",
-	"mesh_ssid":               "Mesh network name shared by all nodes",
-	"mesh_key":                "SAE (WPA3) passphrase for the mesh backhaul",
-	"ipv4_network":            "Base IPv4 CIDR the mesh allocates node addresses from",
-	"regulatory_domain":       "Wireless regulatory domain (country code)",
-	"halow_regulatory_domain": "HaLow-specific regulatory domain override, independent of the WiFi regulatory_domain (e.g. MM8108 hardware can run HaLow on a different domain than the 2.4/5GHz radios). Empty = inherit regulatory_domain.",
-	"halow_bw":                "802.11ah HaLow channel bandwidth — EU domain supports 1MHz only; changing regulatory domain/bandwidth changes the on-air channel, so roll out to all HaLow nodes together, not one at a time",
-	"halow_channel":           "802.11ah HaLow channel (empty = Auto, domain/bandwidth default)",
-	"mesh_5ghz_bw":            "5GHz mesh channel width: 20 (deterministic peering, default), 40 or 80 (higher throughput — 40 requires the patched wpa_supplicant and silently falls back to 20 without it; 80 without the patch can mismatch primary channel between nodes) — fleet-wide, never mixed per node",
-	"mesh_5ghz_channel":       "5GHz mesh channel number to pin the static-mode (acs=n) data channel to — valid: 36, 40, 44, 48, 149, 153, 157, 161, 165 (last five US-only, illegal under ETSI); unrecognized/absent falls back to the default lobby channel; has no effect when acs=y",
-	"acs":                     "5GHz/2.4GHz mesh channel selection mode: n (default) pins static channels, y runs automatic channel selection/election — live, applies within one 15s node-manager tick, no restart needed",
-	"battery_monitor":         "Enable Waveshare UPS HAT battery monitoring",
-	"admin_password":          "Password gating write/control API access when require_auth is set",
-	"require_auth":            "Require admin_password for control/config endpoints",
-	"gateway":                 "Enable gateway election and internet uplink for the mesh",
-	"gateway_nat":             "Enable NAT/masquerade on the elected gateway node",
-	"gateway_mss_clamp":       "Enable TCP MSS clamping on the gateway uplink",
-	"gateway_bandwidth":       "Uplink bandwidth cap advertised by the gateway",
-	"multicast_mode":          "Mesh multicast handling: flood or optimized (IGMP snooping)",
-	"voice_mic_volume":        "PTT microphone input gain",
-	"voice_speaker_volume":    "PTT speaker output volume",
-	"voice_channel":           "Default PTT voice channel",
-	"voice_rx_channels":       "Additional PTT channels to receive on",
-	"voice_ptt_mode":          "Hardware PTT trigger mode",
-	"voice_gain":              "PTT audio gain applied before encoding",
-	"voice_enabled":           "Enable the PTT voice service",
-	"voice_beep_tx_start":     "Play a beep when PTT transmission starts",
-	"voice_beep_rx_end":       "Play a beep when incoming PTT transmission ends",
-	"dns_servers":             "Upstream DNS servers for .mesh resolution fallthrough",
-	"eud_bandwidth":           "Bandwidth cap applied to connected EUD clients",
-	"qos_enabled":             "Enable tc prio QoS bands on br0",
-	"qos_voice_band":          "QoS priority band assigned to voice traffic",
-	"qos_cot_band":            "QoS priority band assigned to CoT traffic",
-	"qos_chat_band":           "QoS priority band assigned to chat/bulk traffic",
-	"auto_update":             "Enable automatic OTA tools tarball updates",
-	"update_url":              "URL node-update polls for tarball updates",
-	"auto_update_overlay":     "Enable automatic overlay (no-rollback) updates",
-	"auto_update_min_mbps":    "Minimum measured bandwidth required before an auto-update proceeds",
-	"gps":                     "Enable GPS (gpsd) on this node",
-	"gps_source":              "GPS source: receiver (gpsd) or static",
-	"gps_static_lat":          "Static latitude reported when gps_source=static",
-	"gps_static_lon":          "Static longitude reported when gps_source=static",
-	"gps_static_alt":          "Static altitude reported when gps_source=static",
-	"callsign":                "Callsign used in CoT position reports",
-	"cot_type":                "CoT type code broadcast for this node's position",
-	"cot_team":                "CoT team/affiliation for this node's position",
-	"cot_role":                "CoT role for this node's position",
-	"cot_icon":                "CoT icon override for this node's position",
+	"node_hostname":        "Hostname prefix for this node (full hostname adds mesh SSID + MAC suffix)",
+	"eud":                  "Enable End User Device access (WiFi AP / wired bridge)",
+	"lan_ap_ssid":          "SSID for the EUD-facing WiFi access point",
+	"lan_ap_key":           "WPA2-PSK passphrase for the EUD-facing WiFi access point",
+	"lan_ap_channel":       "Channel for the EUD-facing WiFi access point",
+	"lan_ap_bw":            "Channel bandwidth for the EUD-facing WiFi access point",
+	"max_euds_per_node":    "Maximum number of EUD clients this node will serve",
+	"mesh_ssid":            "Mesh network name shared by all nodes",
+	"mesh_key":             "SAE (WPA3) passphrase for the mesh backhaul",
+	"ipv4_network":         "Base IPv4 CIDR the mesh allocates node addresses from",
+	"regulatory_domain":    "Country code (e.g. US, NL) for all radios: the Wi-Fi radios use it directly, HaLow uses the EU plan for EU countries and the same country otherwise. Applies at the next reboot.",
+	"halow_bw":             "802.11ah HaLow channel bandwidth — EU domain supports 1MHz only; changing regulatory domain/bandwidth changes the on-air channel, so roll out to all HaLow nodes together, not one at a time",
+	"halow_channel":        "802.11ah HaLow channel (empty = Auto, domain/bandwidth default)",
+	"halow_duty_cycle":     "HaLow duty cycling: off (no airtime limit) or auto (the driver's regional limit: none in US, 10%/2.8% in EU). Empty = off on the EU plan, auto elsewhere. Applies at the next reboot. Off in EU exceeds the ETSI 863-868 MHz duty-cycle rules.",
+	"halow_txpower_dbm":    "HaLow TX power request and driver cap in dBm (1-30). Empty = per-bandwidth default (24/24/22/20 dBm for 1/2/4/8 MHz). The Morse regulatory table (EU 16 dBm EIRP, US 30) and the board's BCF still cap it; the radio reports what it actually uses. Applies at the next reboot.",
+	"mesh_5ghz_bw":         "5GHz mesh channel width: 20 (deterministic peering, default), 40 or 80 (higher throughput — 40 requires the patched wpa_supplicant and silently falls back to 20 without it; 80 without the patch can mismatch primary channel between nodes) — fleet-wide, never mixed per node",
+	"mesh_5ghz_channel":    "5GHz mesh channel number to pin the static-mode (acs=n) data channel to — valid: 36, 40, 44, 48, 149, 153, 157, 161, 165 (last five US-only, illegal under ETSI); unrecognized/absent falls back to the default lobby channel; has no effect when acs=y",
+	"acs":                  "5GHz/2.4GHz mesh channel selection mode: n (default) pins static channels, y runs automatic channel selection/election — live, applies within one 15s node-manager tick, no restart needed",
+	"battery_monitor":      "Enable Waveshare UPS HAT battery monitoring",
+	"admin_password":       "Password gating write/control API access when require_auth is set",
+	"require_auth":         "Require admin_password for control/config endpoints",
+	"ui_uplink_access":     "Allow the web UI (HTTPS) from this node's uplink network, e.g. a monitoring workstation on a gateway's LAN: y/n (default n, mesh side only)",
+	"ssh_uplink_access":    "Allow SSH from this node's uplink network, e.g. lab troubleshooting from the LAN: y/n (default n, mesh side only)",
+	"gateway":              "Enable gateway election and internet uplink for the mesh",
+	"gateway_nat":          "Enable NAT/masquerade on the elected gateway node",
+	"gateway_mss_clamp":    "Enable TCP MSS clamping on the gateway uplink",
+	"gateway_bandwidth":    "Uplink bandwidth cap advertised by the gateway",
+	"multicast_mode":       "Mesh multicast handling: flood or optimized (IGMP snooping)",
+	"voice_mic_volume":     "PTT microphone input gain",
+	"voice_speaker_volume": "PTT speaker output volume",
+	"voice_channel":        "Default PTT voice channel",
+	"voice_rx_channels":    "Additional PTT channels to receive on",
+	"voice_ptt_mode":       "Hardware PTT trigger mode",
+	"voice_gain":           "PTT audio gain applied before encoding",
+	"voice_enabled":        "Enable the PTT voice service",
+	"voice_beep_tx_start":  "Play a beep when PTT transmission starts",
+	"voice_beep_rx_end":    "Play a beep when incoming PTT transmission ends",
+	"dns_servers":          "Upstream DNS servers for .mesh resolution fallthrough",
+	"eud_bandwidth":        "Bandwidth cap applied to connected EUD clients",
+	"qos_enabled":          "Enable tc prio QoS bands on br0",
+	"qos_voice_band":       "QoS priority band assigned to voice traffic",
+	"qos_cot_band":         "QoS priority band assigned to CoT traffic",
+	"qos_chat_band":        "QoS priority band assigned to chat/bulk traffic",
+	"auto_update":          "Enable automatic OTA tools tarball updates",
+	"update_url":           "URL node-update polls for tarball updates",
+	"auto_update_overlay":  "Enable automatic overlay (no-rollback) updates",
+	"update_allow_unsigned": "Install OTA packages whose signature is missing or invalid: y/n (default n; lab use only)",
+	"auto_update_min_mbps": "Minimum measured bandwidth required before an auto-update proceeds",
+	"gps":                  "Enable GPS (gpsd) on this node",
+	"gps_source":           "GPS source: receiver (gpsd) or static",
+	"gps_static_lat":       "Static latitude reported when gps_source=static",
+	"gps_static_lon":       "Static longitude reported when gps_source=static",
+	"gps_static_alt":       "Static altitude reported when gps_source=static",
+	"callsign":             "Callsign used in CoT position reports",
+	"cot_type":             "CoT type code broadcast for this node's position",
+	"cot_team":             "CoT team/affiliation for this node's position",
+	"cot_role":             "CoT role for this node's position",
+	"cot_icon":             "CoT icon override for this node's position",
 }
 
 func apiConfigKeys(w http.ResponseWriter, r *http.Request) {
@@ -1014,16 +1144,31 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updates := make(map[string]string)
-	var saved []string
 	for k, v := range configMap {
 		if saveableKeys[k] {
 			updates[k] = fmt.Sprintf("%v", v)
-			saved = append(saved, k)
 		}
 	}
+	// An empty string for a secret key must never be interpreted as "set
+	// this secret to blank" -- only as "this field was left untouched,"
+	// typically because the caller's form was populated from a redacted
+	// (unauthenticated) /api/admin/status response before they logged in.
+	// See dropEmptySecrets's doc comment (admin.go) for the full incident
+	// this guards against.
+	dropEmptySecrets(updates)
 
 	if len(updates) == 0 {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "No valid keys"})
+		return
+	}
+
+	var saved []string
+	for k := range updates {
+		saved = append(saved, k)
+	}
+
+	if err := validateConfigUpdates(updates); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": err.Error()})
 		return
 	}
 
@@ -1038,8 +1183,6 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	_, bwSubmitted := updates["halow_bw"]
 	_, chSubmitted := updates["halow_channel"]
 	_, rdSubmitted := updates["regulatory_domain"]
-	_, hrdSubmitted := updates["halow_regulatory_domain"]
-	rdSubmitted = rdSubmitted || hrdSubmitted
 	if bwSubmitted || chSubmitted || rdSubmitted {
 		effective := make(map[string]string, len(existingConf)+len(updates))
 		for k, v := range existingConf {
@@ -1091,6 +1234,19 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 
 	applied := make(map[string]interface{})
 	conf := loadKVFile(MeshConfFile)
+
+	// admin_password is now the fleet encryption key (see fleetcrypto.go) --
+	// changing it via a per-node LOCAL save (as opposed to a fleet-wide
+	// Stage + Activate push) silently splits this node onto a different key
+	// than the rest of the mesh: it will fail to seal/open any subsequent
+	// slot 70/71 package until every other node receives the identical
+	// change. Log it prominently and surface it back to the caller so the
+	// UI can warn the operator, rather than let this happen invisibly.
+	var warnings []string
+	if newPW, ok := updates["admin_password"]; ok && newPW != existingConf["admin_password"] {
+		log.Printf("admin: WARNING - admin_password changed via local /api/admin/save; this node now derives a DIFFERENT fleet crypto key than the rest of the mesh until every other node receives this exact change via a fleet-wide Stage+Activate push")
+		warnings = append(warnings, "admin_password changed locally — this node now uses a different fleet encryption key than the rest of the mesh until this same change is pushed fleet-wide via Stage + Activate")
+	}
 
 	// Apply hostname. Skip when no prefix is configured — falling back to
 	// the "node" default here is how nodes ended up renamed to node-<mac>.
@@ -1190,6 +1346,23 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Region, HaLow duty cycle and HaLow power: module options and radio
+	// configs. Idempotent, so it runs on every save that carries one of
+	// them (config.js always sends them).
+	_, dutySubmitted := updates["halow_duty_cycle"]
+	_, powerSubmitted := updates["halow_txpower_dbm"]
+	if rdSubmitted || bwSubmitted || dutySubmitted || powerSubmitted {
+		changed, err := applyRadioConfigFiles(conf)
+		if err != nil {
+			log.Printf("radio config: %v", err)
+			warnings = append(warnings, err.Error())
+		}
+		if len(changed) > 0 {
+			applied["radio_reboot_required"] = true
+			warnings = append(warnings, "Region / HaLow duty cycle / HaLow power written to the radio module options; reboot this node for the radios to use them")
+		}
+	}
+
 	// Apply mesh key/SSID changes to wpa_supplicant configs. Narrow
 	// trigger, mirroring mesh_5ghz_channel's guard above: config.js
 	// resends every field on every save, not just edited ones, so without
@@ -1205,6 +1378,11 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 	if updates["multicast_mode"] != "" {
 		applyMulticastMode(updates["multicast_mode"])
 		applied["multicast_applied"] = true
+	}
+
+	if uplinkAccessChanged(updates, existingConf) {
+		runUIFirewall()
+		applied["ui_firewall_applied"] = true
 	}
 
 	// Apply voice volume
@@ -1339,7 +1517,7 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		exec.Command("/usr/local/bin/mesh-hook", args...).Run()
 	}()
 
-	writeJSON(w, 200, map[string]interface{}{"ok": true, "saved": saved, "applied": applied})
+	writeJSON(w, 200, map[string]interface{}{"ok": true, "saved": saved, "applied": applied, "warnings": warnings})
 }
 
 func apiAdminStage(w http.ResponseWriter, r *http.Request) {
@@ -1354,33 +1532,112 @@ func apiAdminStage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Invalid config format"})
 		return
 	}
+	// See dropEmptySecrets's doc comment (admin.go): an empty secret value
+	// must never be interpreted as "blank this out," only as "this field
+	// was left untouched" (e.g. the staging form was populated from a
+	// redacted, pre-login /api/admin/status response).
+	dropEmptySecretsAny(configMap)
 
 	currentConf := loadKVFile(MeshConfFile)
+	if currentConf["admin_password"] == "" {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "admin_password must be set on this node before a fleet config can be securely staged"})
+		return
+	}
+
+	now := time.Now()
+	if now.Year() < 2025 {
+		// These boards have no RTC. Staging while the local clock looks
+		// unset would produce a staged_at that, once applied, becomes this
+		// node's new highestAppliedStagedAt watermark (see fleetreplay.go) —
+		// permanently poisoning it (e.g. far in the past, or worse, wildly
+		// wrong in a way that later looks like every subsequent legitimate
+		// push is a rollback). Refuse outright rather than risk creating a
+		// bad watermark that then requires SSH on every node to recover
+		// from.
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "local clock looks unset (system time is before 2025) — refusing to stage until the clock is correct"})
+		return
+	}
+
 	strConf := make(map[string]string)
 	for k, v := range configMap {
 		strConf[k] = fmt.Sprintf("%v", v)
 	}
+	if err := validateConfigUpdates(strConf); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
 
 	version := makeConfigVersion(strConf)
 
-	dangerous := strConf["mesh_ssid"] != currentConf["mesh_ssid"] ||
-		strConf["mesh_key"] != currentConf["mesh_key"] ||
-		strConf["ipv4_network"] != confGet(currentConf, "ipv4_network", "10.30.2.0/24")
+	// Reuses the exact same fleetDangerousKeys list AND comparison function
+	// apiAdminActivate's real safety gate (and assembleAdminStatus's
+	// ack_status) use -- previously this was a separately hardcoded 3-key
+	// check (missing admin_password), so staging an admin_password rotation
+	// could momentarily show dangerous:false in the immediate stage
+	// response before ack_status caught up a few seconds later. The actual
+	// Activate-time gate was never affected; this only fixes the stage-time
+	// UI signal to match it.
+	dangerous := len(dangerousKeyChanges(configMap, currentConf)) > 0
 
 	prefs := loadFleetPreferences()
 
+	pkgID, err := newPkgID()
+	if err != nil {
+		log.Printf("fleet: failed to generate pkg_id for stage: %v", err)
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "internal error generating package id"})
+		return
+	}
+
+	// staged_at must be strictly greater than the highest staged_at this
+	// node has ever actually applied — never merely time.Now().Unix() on
+	// its own. A clock a few seconds slow, or two stages within the same
+	// wall-clock second, would otherwise produce a staged_at at or below
+	// the watermark, and every node (including this one) would reject the
+	// freshly-staged package outright as a rollback replay (fleetProcessPackage).
+	stagedAt := now.Unix()
+	if wm := highestAppliedStagedAt(); wm >= stagedAt {
+		stagedAt = wm + 1
+	}
+
+	// NOTE: this ordering is security-load-bearing for admin_password
+	// rotation. fleetSaveAndStage() in fleet.js calls /api/admin/preferences
+	// (fleet mesh-config prefs only) and then THIS endpoint — it never calls
+	// /api/admin/save first. So the package below is always sealed
+	// (broadcastConfigPackage, admin.go) under the admin_password that is
+	// CURRENTLY on disk, and a new password travels to every other node only
+	// inside this ciphertext. If that frontend ordering ever changes (a
+	// local save of the new password before staging), a rotation would
+	// silently seal itself under the password it's trying to replace.
 	pkg := map[string]interface{}{
 		"version":       version,
 		"config":        configMap,
 		"profiles":      prefs.Profiles,
 		"node_profiles": prefs.NodeProfiles,
 		"staged_by":     getMyHostname(),
-		"staged_at":     time.Now().Unix(),
+		"staged_at":     stagedAt,
+		"pkg_id":        pkgID,
+		"sender_mac":    getMyMAC(),
+		"expires_at":    now.Add(1 * time.Hour).Unix(),
 	}
 
-	savePendingConfig(pkg)
-	os.WriteFile(AckVersionFile, []byte(version), 0644)
-	broadcastConfigPackage(pkg)
+	if !broadcastConfigPackage(pkg) {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to seal/broadcast staged config (admin_password unset, or alfred error) — check logs"})
+		return
+	}
+	// Check both writes before declaring success: if either fails, this
+	// node has already broadcast a package it can't locally track as
+	// pending/ACKed — better to surface that loudly than silently proceed
+	// as if staging fully succeeded (mirrors apiAdminActivate's pattern).
+	if err := savePendingConfig(pkg); err != nil {
+		log.Printf("admin: failed to save pending config after staging broadcast: %v", err)
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "staged config was broadcast but failed to save locally — check logs"})
+		return
+	}
+	if err := os.WriteFile(AckVersionFile, []byte(version), 0644); err != nil {
+		log.Printf("admin: failed to write local ack version after staging: %v", err)
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "staged config was broadcast but failed to record local ACK — check logs"})
+		return
+	}
 	go fleetMcastSendAck(version)
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "version": version, "dangerous": dangerous})
@@ -1399,33 +1656,63 @@ func apiAdminActivate(w http.ResponseWriter, r *http.Request) {
 	var pkg map[string]interface{}
 	json.Unmarshal(pending, &pkg)
 
+	version := jsonStr(pkg, "version", "")
+
 	if !force {
-		version := jsonStr(pkg, "version", "")
-		registry := parseRegistry()
-		var notAcked []string
-		for _, rn := range registry {
-			if rn["CONFIG_ACK_VERSION"] != version {
-				name := rn["HOSTNAME"]
-				if name == "" {
-					name = rn["IPV4_ADDRESS"]
-				}
-				notAcked = append(notAcked, name)
-			}
-		}
-		if len(notAcked) > 0 {
+		// ackStatus is the SAME merged registry+local-ack+multicast, ACTIVE-
+		// filtered computation assembleAdminStatus uses for the UI's
+		// Activate-button state — see admin.go for why using two different
+		// computations here used to let the UI show 4/4 while this gate
+		// still rejected.
+		acked, total, missing := ackStatus(version)
+		if total > 0 && acked < total {
 			writeJSON(w, 400, map[string]interface{}{
 				"ok":    false,
-				"error": fmt.Sprintf("%d nodes have not ACKed: %s", len(notAcked), strings.Join(notAcked, ", ")),
+				"error": fmt.Sprintf("%d nodes have not ACKed: %s", len(missing), strings.Join(missing, ", ")),
 			})
 			return
+		}
+
+		// Even with full ACK from every ACTIVE node, a push that changes the
+		// fleet crypto key or partitions mesh membership/addressing must not
+		// silently orphan a node that's currently OFFLINE — it can come back
+		// unable to open any future fleet package (or rejoin the mesh at
+		// all) under the new value, with no operator visibility. Use the
+		// same dangerousKeyChanges/offlineNodeNames pair assembleAdminStatus
+		// already surfaces in ack_status, so the UI and this gate agree.
+		if configRaw, ok := pkg["config"].(map[string]interface{}); ok {
+			if changedKeys := dangerousKeyChanges(configRaw, loadKVFile(MeshConfFile)); len(changedKeys) > 0 {
+				if offline := offlineNodeNames(); len(offline) > 0 {
+					writeJSON(w, 400, map[string]interface{}{
+						"ok": false,
+						"error": fmt.Sprintf("this push changes %s while %d node(s) are offline, risking orphaning them: %s — use force to proceed anyway",
+							strings.Join(changedKeys, ", "), len(offline), strings.Join(offline, ", ")),
+						"dangerous_keys": changedKeys,
+						"offline_nodes":  offline,
+					})
+					return
+				}
+			}
 		}
 	}
 
 	activateAt := time.Now().Add(60 * time.Second).Unix()
 	pkg["activate_at"] = activateAt
-	savePendingConfig(pkg)
-	broadcastConfigPackage(pkg)
-	version := jsonStr(pkg, "version", "")
+
+	// Check broadcastConfigPackage's return before persisting anything
+	// locally: it can fail (seal error, alfred error, or admin_password
+	// unset), and if it does, this node must NOT be left believing
+	// activation is in progress while the rest of the fleet never received
+	// it — mirrors apiAdminStage's already-fixed pattern.
+	if !broadcastConfigPackage(pkg) {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to seal/broadcast activation (admin_password unset, or alfred error) — check logs; this node has NOT been marked to activate"})
+		return
+	}
+	if err := savePendingConfig(pkg); err != nil {
+		log.Printf("admin: failed to save pending config after activation broadcast: %v", err)
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "activation was broadcast but failed to save locally — check logs"})
+		return
+	}
 	go fleetMcastSendActivation(version, activateAt)
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "activate_at": activateAt})
@@ -1810,22 +2097,16 @@ func apiTerminalExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var shellCmd string
+	proc := exec.Command("bash", "-l", "-c", cmd)
 	if target != "" {
-		if !validateTargetRE.MatchString(target) {
-			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Invalid target"})
+		// ssh joins its remote arguments with spaces for the remote shell,
+		// so the command has to arrive there as one quoted word.
+		var err error
+		proc, err = sshCommand(user, target, password, false, "bash -l -c "+shellQuote(cmd))
+		if err != nil {
+			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Invalid target or user"})
 			return
 		}
-		sshOpts := "-o StrictHostKeyChecking=no -o ConnectTimeout=5"
-		if password != "" {
-			shellCmd = fmt.Sprintf("sshpass -p %s ssh %s %s@%s bash -l -c %s",
-				shellQuote(password), sshOpts, shellQuote(user), shellQuote(target), shellQuote(cmd))
-		} else {
-			shellCmd = fmt.Sprintf("ssh %s %s@%s bash -l -c %s",
-				sshOpts, shellQuote(user), shellQuote(target), shellQuote(cmd))
-		}
-	} else {
-		shellCmd = fmt.Sprintf("bash -l -c %s", shellQuote(cmd))
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -1833,7 +2114,6 @@ func apiTerminalExec(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(200)
 
-	proc := exec.Command("bash", "-c", shellCmd)
 	proc.Stdout = w
 	proc.Stderr = w
 	flusher, _ := w.(http.Flusher)
@@ -1885,22 +2165,71 @@ func apiTerminalReboot(w http.ResponseWriter, r *http.Request) {
 
 // --- Auth ---
 
-func checkAuth(w http.ResponseWriter, r *http.Request) bool {
-	conf := loadKVFile(MeshConfFile)
-	ra := strings.ToLower(conf["require_auth"])
-	if ra != "y" && ra != "yes" && ra != "1" {
-		return true
+// isAuthed reports whether the request would pass checkAuth's gate, without
+// writing a response on failure. Used by read paths (like the admin status
+// endpoint) that need to redact secrets for an unauthenticated caller rather
+// than reject the whole request outright.
+//
+// DEPLOYMENT PREREQUISITE: MANET/provisioning/firstrun.sh.template
+// provisions require_auth=y, but nodes provisioned before that change still
+// carry require_auth=n. With require_auth=n, this function
+// returns true for EVERY caller unconditionally — nothing in this file gets
+// redacted and every /api/admin/* + /api/control/* endpoint is wide open to
+// anyone who can reach this node's HTTP port. require_auth=y (with a real
+// admin_password set) must be part of the cutover to this fleet-crypto
+// scheme on every node; it is a fleet configuration precondition, not
+// something this code can enforce itself.
+func isAuthed(r *http.Request) bool {
+	required, authenticated := authState(r)
+	return !required || authenticated
+}
+
+// authState reports whether this node requires a login and, if so, whether
+// the request is authenticated: a live session issued under the current
+// password, or an /api/ request relayed by another fleet node's /api/peer
+// proxy on behalf of a user logged in there.
+func authState(r *http.Request) (required, authenticated bool) {
+	required, authenticated = sessionAuthState(r)
+	if required && !authenticated && (proxiedAPIRequestAuthenticated(r) || cliTokenAuthenticated(r)) {
+		authenticated = true
 	}
-	pw := getProvisionedPassword(conf)
-	if pw == "" {
-		return true
-	}
-	cookie, err := r.Cookie(PerfAuthCookie)
-	if err != nil || cookie.Value != getPerfAuthToken() {
-		writeJSON(w, 401, map[string]interface{}{"ok": false, "error": "Authentication required"})
+	return required, authenticated
+}
+
+// proxiedAPIRequestAuthenticated accepts a fleet peer token minted for this
+// node under FleetPeerAuthDomainAPI, on /api/ paths only: the domain keeps
+// such a token from being replayed against the terminal or logs
+// websockets, which verify their own domains. As for those, the Host the
+// token is bound to must be one of this node's own addresses.
+func proxiedAPIRequestAuthenticated(r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/api/") {
 		return false
 	}
-	return true
+	token := r.Header.Get(FleetPeerAuthHeader)
+	if token == "" {
+		return false
+	}
+	return hostMatchesLocalAddr(r.Host) && verifyFleetPeerToken(token, r.Host, FleetPeerAuthDomainAPI)
+}
+
+// sessionAuthState is authState without the proxied-request path: whether
+// the request itself carries a live login session on this node.
+func sessionAuthState(r *http.Request) (required, authenticated bool) {
+	conf := loadKVFile(MeshConfFile)
+	ra := strings.ToLower(conf["require_auth"])
+	pw := getProvisionedPassword(conf)
+	if pw == "" || (ra != "y" && ra != "yes" && ra != "1") {
+		return false, false
+	}
+	return true, sessions.valid(sessionToken(r), pw)
+}
+
+func checkAuth(w http.ResponseWriter, r *http.Request) bool {
+	if isAuthed(r) {
+		return true
+	}
+	writeJSON(w, 401, map[string]interface{}{"ok": false, "error": "Authentication required"})
+	return false
 }
 
 func requireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -1912,44 +2241,111 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func apiAuthStatus(w http.ResponseWriter, r *http.Request) {
-	conf := loadKVFile(MeshConfFile)
-	ra := strings.ToLower(conf["require_auth"])
-	pw := getProvisionedPassword(conf)
-	required := pw != "" && (ra == "y" || ra == "yes" || ra == "1")
-	authenticated := !required
-	if required {
-		cookie, err := r.Cookie(PerfAuthCookie)
-		if err == nil && cookie.Value == getPerfAuthToken() {
-			authenticated = true
+// requireAuthOrPeerToken gates a route on EITHER a valid session cookie
+// (same as requireAuth) OR a valid, freshly-minted, target-bound
+// X-Manet-Fleet-Peer-Auth header (see verifyFleetPeerToken). It is a small
+// factory: each caller passes its own domain string (see
+// FleetPeerAuthDomainTerminal / FleetPeerAuthDomainLogs in config.go), so a
+// token minted for one route (e.g. /ws/terminal's server-to-server proxy
+// hop) cannot be replayed to authenticate a different route (e.g.
+// /ws/logs's) even though both derive from the same underlying fleet key.
+// It exists solely for server-to-server proxy hops (a node dialing a
+// target's own websocket route without a browser session) and must not be
+// used to gate any route that isn't itself such a proxy target -- it does
+// not set a cookie or otherwise widen session state, it only accepts an
+// alternative credential for the one handler it wraps.
+//
+// r.Host is sender-controlled (it's just the Host header the dialing node
+// chose to send) and by itself proves nothing -- so before trusting it as
+// the bound target, hostMatchesLocalAddr independently confirms r.Host
+// actually names one of THIS node's own addresses via net.InterfaceAddrs().
+// Only once that's confirmed does verifyFleetPeerToken's signature check
+// against r.Host mean anything.
+func requireAuthOrPeerToken(domain string) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if token := r.Header.Get(FleetPeerAuthHeader); token != "" {
+				if hostMatchesLocalAddr(r.Host) && verifyFleetPeerToken(token, r.Host, domain) {
+					next(w, r)
+					return
+				}
+			}
+			if !checkAuth(w, r) {
+				return
+			}
+			next(w, r)
 		}
 	}
+}
+
+func apiAuthStatus(w http.ResponseWriter, r *http.Request) {
+	required, authenticated := authState(r)
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, 200, map[string]interface{}{
 		"required":      required,
-		"authenticated": authenticated,
+		"authenticated": !required || authenticated,
 	})
 }
 
+// apiPerfAuth logs in with the admin password and issues a new session
+// cookie (see sessions.go), replacing any session the browser already had.
 func apiPerfAuth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]interface{}{"ok": false, "error": "POST required"})
+		return
+	}
+	addr := clientAddr(r)
+	if ok, wait := sessions.loginAllowed(addr); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
+		writeJSON(w, 429, map[string]interface{}{"ok": false, "error": "Too many failed logins, try again shortly"})
+		return
+	}
+
 	body := readBody(r)
 	password := jsonStr(body, "password", "")
 
 	conf := loadKVFile(MeshConfFile)
 	expected := getProvisionedPassword(conf)
-	if expected == "" || password != expected {
+	if expected == "" || !passwordMatches(password, expected) {
+		sessions.recordLoginFailure(addr)
 		writeJSON(w, 401, map[string]interface{}{"ok": false, "error": "Invalid password"})
 		return
 	}
 
-	token := getPerfAuthToken()
+	token, err := sessions.create(expected)
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "could not create session"})
+		return
+	}
+	sessions.revoke(sessionToken(r))
+	setSessionCookie(w, r, token, int(sessionLifetime.Seconds()))
+	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
+// apiLogout ends the session the request presents; other browsers stay
+// logged in.
+func apiLogout(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]interface{}{"ok": false, "error": "POST required"})
+		return
+	}
+	sessions.revoke(sessionToken(r))
+	setSessionCookie(w, r, "", -1)
+	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
+func setSessionCookie(w http.ResponseWriter, r *http.Request, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     PerfAuthCookie,
-		Value:    token,
+		Value:    value,
 		Path:     "/",
-		MaxAge:   PerfAuthMaxAge,
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteStrictMode,
 	})
-	writeJSON(w, 200, map[string]interface{}{"ok": true})
 }
 
 func setHostname(name string) {
@@ -1962,7 +2358,7 @@ func setHostname(name string) {
 		text := string(data)
 		hostRE := regexp.MustCompile(`(?m)^127\.0\.1\.1\s+.*$`)
 		if hostRE.MatchString(text) {
-			text = hostRE.ReplaceAllString(text, "127.0.1.1\t"+name)
+			text = hostRE.ReplaceAllLiteralString(text, "127.0.1.1\t"+name)
 		} else {
 			text += "\n127.0.1.1\t" + name
 		}
@@ -1974,11 +2370,43 @@ func setHostname(name string) {
 	}
 }
 
+var (
+	wpaSSIDRE = regexp.MustCompile(`ssid="[^"]*"`)
+	// 802.11s mesh mode only supports key_mgmt NONE or SAE — there is no
+	// PSK path for a mesh interface, so every wlan*.conf mesh network
+	// (2.4GHz, 5GHz, and HaLow's -s1g) uses sae_password, never psk.
+	wpaSAERE = regexp.MustCompile(`sae_password="[^"]*"`)
+)
+
+// rewriteWPAConf replaces the mesh SSID and (if key is non-empty) SAE
+// password in a wpa_supplicant config. The replacements are literal: with
+// ReplaceAllString a '$' in the value is expanded as a capture-group
+// reference, silently truncating e.g. "abc$def" to "abc". Callers must have
+// passed both values through configValueError first — quoting is not
+// escaped here because wpa_supplicant's quoted strings have no escapes.
+func rewriteWPAConf(text, ssid, key string) string {
+	text = wpaSSIDRE.ReplaceAllLiteralString(text, `ssid="`+ssid+`"`)
+	if key != "" {
+		text = wpaSAERE.ReplaceAllLiteralString(text, `sae_password="`+key+`"`)
+	}
+	return text
+}
+
 func applyWPAConfig(conf map[string]string) {
 	ssid := conf["mesh_ssid"]
 	key := conf["mesh_key"]
 	if ssid == "" {
 		return
+	}
+	// The save/stage/fleet paths validate before persisting, but mesh.conf
+	// may still hold a value written before that validation existed or by
+	// hand; leave the working supplicant configs alone rather than write a
+	// broken one.
+	for k, v := range map[string]string{"mesh_ssid": ssid, "mesh_key": key} {
+		if err := configValueError(k, v); err != nil {
+			log.Printf("wpa config not updated: %v", err)
+			return
+		}
 	}
 
 	wpaDir := "/etc/wpa_supplicant"
@@ -1986,12 +2414,6 @@ func applyWPAConfig(conf map[string]string) {
 	if err != nil {
 		return
 	}
-
-	ssidRE := regexp.MustCompile(`ssid="[^"]*"`)
-	// 802.11s mesh mode only supports key_mgmt NONE or SAE — there is no
-	// PSK path for a mesh interface, so every wlan*.conf mesh network
-	// (2.4GHz, 5GHz, and HaLow's -s1g) uses sae_password, never psk.
-	saeRE := regexp.MustCompile(`sae_password="[^"]*"`)
 
 	restartS1G := false
 	for _, entry := range entries {
@@ -2005,15 +2427,14 @@ func applyWPAConfig(conf map[string]string) {
 		if err != nil {
 			continue
 		}
-		text := string(data)
-		text = ssidRE.ReplaceAllString(text, fmt.Sprintf(`ssid="%s"`, ssid))
-		if key != "" {
-			text = saeRE.ReplaceAllString(text, fmt.Sprintf(`sae_password="%s"`, key))
-			if strings.Contains(name, "s1g") {
-				restartS1G = true
-			}
+		text := rewriteWPAConf(string(data), ssid, key)
+		if key != "" && strings.Contains(name, "s1g") {
+			restartS1G = true
 		}
-		os.WriteFile(path, []byte(text), 0644)
+		if err := writeFileFsync(path, []byte(text)); err != nil {
+			log.Printf("wpa config write failed: %s: %v", name, err)
+			continue
+		}
 		log.Printf("wpa config updated: %s", name)
 	}
 
@@ -2092,23 +2513,15 @@ func normalizeRegDomain(domain string) string {
 	return domain
 }
 
-// resolveHalowDomain resolves the effective HaLow regulatory domain for a
-// node, mirroring radio-setup.sh's halow_regulatory_domain fallback
-// (lines 391-392): halow_regulatory_domain takes precedence over the
-// general regulatory_domain, defaulting to "US" if neither is set. Any real
-// ISO country code that radio-setup.sh's uses_eu_halow_region() recognizes
-// as EU-band is normalized to the literal "EU" domain used by
-// halowChannelTable -- unlike the bash side, this only normalizes whichever
-// value actually won the precedence above; it does not also let a WiFi-side
-// regulatory_domain override an explicitly-set halow_regulatory_domain
-// (that's the separate, already-tracked regulatory_domain_wifi_halow_split
-// gap, not fixed here).
+// resolveHalowDomain is the HaLow plan for the node's country: "EU" for an
+// EU-plan country, otherwise the country itself. HaLow always follows
+// regulatory_domain, as upstream does: the Morse driver adopts the kernel's
+// Wi-Fi country whenever it has its own table for it, so a separate HaLow
+// region cannot be relied on. Any halow_regulatory_domain left in an old
+// mesh.conf is ignored. radio-setup.sh's resolve_halow_domain applies the
+// same rule; keep them in step.
 func resolveHalowDomain(conf map[string]string) string {
-	domain := confGet(conf, "halow_regulatory_domain", "")
-	if domain == "" {
-		domain = confGet(conf, "regulatory_domain", "US")
-	}
-	return normalizeRegDomain(domain)
+	return normalizeRegDomain(confGet(conf, "regulatory_domain", "US"))
 }
 
 // halowChannelTable is the ground-truth legal HaLow channel list per
@@ -2168,12 +2581,7 @@ func halowChannelCandidates(domain, bw string) []int {
 }
 
 // resolveMesh5GHzDomain resolves the effective regulatory domain for the
-// 5GHz mesh (WiFi) radio: reads the plain regulatory_domain key only,
-// defaulting to "US" if unset. Deliberately does NOT reuse
-// resolveHalowDomain/halow_regulatory_domain -- HaLow and 5GHz WiFi can
-// legitimately run different regulatory domains on the same node (e.g. an
-// MM8108 unit), so letting halow_regulatory_domain=US leak into this check
-// could unlock illegal 5GHz WiFi channels under a EU regulatory_domain.
+// 5GHz mesh (WiFi) radio from regulatory_domain, defaulting to "US" if unset.
 //
 // regulatory_domain holds a real ISO country code in provisioned config
 // (e.g. "HR", "NL"), not just the literal "EU" the web UI's select emits --
@@ -2375,7 +2783,8 @@ func apiHalowChannels(w http.ResponseWriter, r *http.Request) {
 func applyHalowBW(conf map[string]string) bool {
 	bw := effectiveHalowBW(conf)
 	regDomain := resolveHalowDomain(conf)
-	opClass, ch, chwidth, txMBM := halowBWParams(bw, regDomain)
+	opClass, ch, chwidth, _ := halowBWParams(bw, regDomain)
+	txMBM, _ := halowTxpowerMBM(conf)
 	if explicit := conf["halow_channel"]; explicit != "" {
 		ch = explicit
 	}
@@ -2489,13 +2898,13 @@ func applyHostapdConfig(conf map[string]string) {
 		if macSuffix != "" {
 			fullSSID += "-" + macSuffix
 		}
-		text = regexp.MustCompile(`(?m)^ssid=.*`).ReplaceAllString(text, "ssid="+fullSSID)
+		text = regexp.MustCompile(`(?m)^ssid=.*`).ReplaceAllLiteralString(text, "ssid="+fullSSID)
 	}
 	if apKey := conf["lan_ap_key"]; apKey != "" {
-		text = regexp.MustCompile(`(?m)^wpa_passphrase=.*`).ReplaceAllString(text, "wpa_passphrase="+apKey)
+		text = regexp.MustCompile(`(?m)^wpa_passphrase=.*`).ReplaceAllLiteralString(text, "wpa_passphrase="+apKey)
 	}
 	if apCh := conf["lan_ap_channel"]; apCh != "" {
-		text = regexp.MustCompile(`(?m)^channel=.*`).ReplaceAllString(text, "channel="+apCh)
+		text = regexp.MustCompile(`(?m)^channel=.*`).ReplaceAllLiteralString(text, "channel="+apCh)
 	}
 	if apBw := conf["lan_ap_bw"]; apBw != "" {
 		bwInt, _ := strconv.Atoi(apBw)

@@ -164,7 +164,19 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
 }
 
+// requirePost keeps actions off GET, so a link or <img> can't trigger them.
+func requirePost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]interface{}{"ok": false, "error": "POST required"})
+		return false
+	}
+	return true
+}
+
 func handleUp(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	mu.Lock()
 	c := cfg
 	mu.Unlock()
@@ -202,6 +214,9 @@ func handleUp(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleDown(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	out, err := runTS("down")
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"ok": false, "error": strings.TrimSpace(string(out))})

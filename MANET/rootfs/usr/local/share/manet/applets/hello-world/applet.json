@@ -9,7 +9,8 @@
     "binary": "hello-world",
     "port": 9820,
     "args": ["-port", "9820"],
-    "service": "hello-world.service"
+    "service": "hello-world.service",
+    "public": true
   },
   "frontend": {
     "entrypoint": "index.html"

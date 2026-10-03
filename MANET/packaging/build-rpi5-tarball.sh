@@ -40,8 +40,8 @@ install_tree "$ROOTFS/root" "$STAGE/root"
 # ALREADY RUNNING (as /usr/local/bin/provision-mesh.sh) at the moment this
 # tarball is extracted over /. Shipping it would overwrite the executing
 # script in place — bash reads scripts lazily by byte offset, so it can then
-# resume at a bogus offset. The rootfs copy is also a pre-rendered rpi5 build
-# (hardcoded max_euds_per_node), which would be wrong on any other board.
+# resume at a bogus offset. rootfs no longer carries a copy; this guards
+# against one coming back.
 rm -f "$STAGE/usr/local/bin/provision-mesh.sh"
 
 chmod -R a+rX "$STAGE/usr/local/bin"
@@ -132,34 +132,11 @@ install_file 0755 "$BINARIES/openvlm"             "$STAGE/usr/local/bin/openvlm"
 # ---------------------------------------------------------------------------
 #  networkd-dispatcher scripts (placed into .d/ subdirs)
 # ---------------------------------------------------------------------------
+# networkd-dispatcher hooks arrive with the rootfs/etc copy above, already in
+# their on-node layout (see rootfs/etc/networkd-dispatcher/README.md).
 NDDIR="$STAGE/etc/networkd-dispatcher"
-mkdir -p "$NDDIR"/{carrier,routable,off,no-carrier,degraded}.d
-
-cat > "$NDDIR/carrier.d/50-ethernet-detect" <<'EOF'
-#!/bin/bash
-set -euo pipefail
-
-/usr/local/bin/manet-uplink-dispatch.sh carrier "${IFACE:-}"
-
-if grep -qiE '^auto_update=(y|yes|1|true)[[:space:]]*$' /etc/mesh.conf 2>/dev/null && ping -c 1 -W 2 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1; then
-    systemctl reload node-update 2>/dev/null || true
-fi
-EOF
-
-cat > "$NDDIR/routable.d/50-manet-uplink" <<'EOF'
-#!/bin/bash
-set -euo pipefail
-
-/usr/local/bin/manet-uplink-dispatch.sh routable "${IFACE:-}"
-EOF
-
-install -m 0755 "$ROOTFS/etc/networkd-dispatcher/off" "$NDDIR/off.d/50-gateway-disable"
-install -m 0755 "$ROOTFS/etc/networkd-dispatcher/off" "$NDDIR/no-carrier.d/50-gateway-disable"
-install -m 0755 "$ROOTFS/etc/networkd-dispatcher/off" "$NDDIR/degraded.d/50-gateway-disable"
-chmod 0755 "$NDDIR/carrier.d/50-ethernet-detect" "$NDDIR/routable.d/50-manet-uplink"
-
-# Remove the flat networkd-dispatcher source files (they don't belong on the node)
-rm -f "$NDDIR"/{carrier,degraded,no-carrier,off,routable,README.md} 2>/dev/null || true
+chmod 0755 "$NDDIR"/*.d/*
+rm -f "$NDDIR/README.md"
 
 # ---------------------------------------------------------------------------
 #  Systemd enable symlinks

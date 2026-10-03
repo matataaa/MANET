@@ -55,7 +55,22 @@ git fetch upstream
 
 ## Last reviewed
 
-Upstream commit reviewed up to: `0f9280e` (2026-09-06) — "wording edits"
+Upstream commit reviewed up to: `fcd02c5` (2026-10-03) — "Describe gateway
+choice as fastest reachable internet" (release 0.559)
+
+**Note (2026-09-26):** upstream force-pushed `main` between the 2026-09-06
+pass and this one — `git fetch upstream` showed a *forced-update* in the
+reflog, and every SHA referenced below from before this date (`0f9280e`,
+`27b0298`, `a1c1f59`, `9824519`, etc.) is no longer an ancestor of
+`upstream/main` and won't resolve there anymore. The rewrite goes all the way
+back to a 2026-06-12 merge-base — the whole history since then was rebased,
+not just the tip. Content-wise it's a clean rebase (verified by diffing the
+old tip against the same-dated/same-message commit in the new history: only
+difference was `CLAUDE.md`/`AGENTS.md` being deleted — upstream scrubbed its
+own AI-agent-tooling files, alongside a broader doc-hygiene pass the
+2026-09-26 section below covers). Past review conclusions in this file still
+stand; just don't expect the cited SHAs to `git show` against
+`upstream/main` anymore.
 
 ### 2026-08-21 pass (up to `695ca46`)
 
@@ -218,6 +233,151 @@ progress bars, quoting fixes, build-stamp display, settings-page defaults) —
 the fork's own `windows.ps1`/`linux.sh`/`mac.sh` are independent
 implementations, not upstream's rpi-imager-wrapper GUI. US-spelling and
 version-bump-only commits.
+
+### 2026-09-26 pass (24 genuinely-new commits, content-identified across the
+force-push — see note above; SHAs below are the *new* upstream hashes)
+
+**Found a real, unfixed vulnerability class in our own fork, surfaced by
+upstream's `01dea5d` "Authenticate mesh admin commands":** upstream's mesh
+config apply/ACK/rollback pipeline used to broadcast admin/config changes
+over Alfred in plaintext with no authentication — any mesh member could
+forge a config push. `01dea5d` fixes it with AES-GCM + scrypt (new
+`manet_admin.py`, `manet-admin-setup.sh` installing `python3-cryptography`),
+encrypting/authenticating control packets with the shared `admin_password`,
+and notes older versions "included the admin password in readable config
+broadcasts."
+
+Checked our Go equivalent and **the fork has the same class of hole, not yet
+fixed**: `broadcastConfigPackage` (`MANET/src/manet-ctrl/admin.go:49-58`)
+JSON-marshals the config package straight to `alfred -s 70`, no signing, no
+encryption. On the receive side, `fleetPollAlfred`
+(`MANET/src/manet-ctrl/fleet.go:286-294`) reads `alfred -r 70`, picks the
+newest-`staged_at` entry, and feeds it straight to `fleetApplyConfig`
+(`fleet.go:83-229`) with **no origin check at all**. `fleetApplyConfig` will
+happily write anything in `saveableKeys` (`api.go:904-923`) to
+`/etc/mesh.conf` — which includes `admin_password` and `require_auth`
+themselves. So today, any device that joins the batman-adv mesh (which only
+needs `mesh_ssid`/`mesh_key`, not the admin password) can broadcast a forged
+type-70 Alfred payload and rewrite the admin password / disable auth /
+change gateway or radio config on every node. `requireAuth` only gates the
+HTTP staging side (a legitimate admin's own node); it does nothing for what
+other nodes accept over the mesh. **Not fixed this pass — flagging for a
+decision**, since porting upstream's approach means picking a crypto/KDF
+scheme and a rollout story for existing fleets (all nodes need the new
+dependency before anyone can push a change, per upstream's own upgrade note).
+
+**Other new commits, categorized:**
+
+- `cff714e` "Stop electing the lobby when jammed, score on occupancy" —
+  substantial rewrite of upstream's `channel-election.sh` ACS scoring:
+  switched from a single dBm noise threshold (never actually reached in the
+  field per the commit's own comment) to `occupancy% + capped noise penalty +
+  mean BSS weight`, added a disqualification quorum (`DISQUALIFY_QUORUM`,
+  ceil of ~34% of reporters must agree — one bad radio/connector can no
+  longer take a channel away from the whole mesh), switched max→median noise
+  aggregation, and replaced a per-channel `bc` shell-out with one `jq` pass
+  (previous version died in the flock subshell on one malformed report).
+  **Worth a real look**: our Go `node-manager`'s ACS was previously confirmed
+  to hard-error on absent scan data and handle solo-isolation quorum, but
+  this occupancy/quorum-based scoring is a different, more robust algorithm
+  than what we ported before — and we have an open live issue
+  ([[eud3_eud4_5ghz_primary_channel_mismatch]]) in the same subsystem. Not
+  yet checked against our Go scoring logic.
+- `253c008` "Fix chunk zero allocation tracking" — upstream's
+  `node-manager.sh` used to always coerce an unallocated IPv4 chunk to `0`
+  (indistinguishable from a legitimate chunk-0 allocation) when publishing
+  identity; fixed to read the chunk file fresh after IP management runs and
+  omit the address entirely when unallocated. Check whether the Go
+  `mesh-manager`'s identity-publish path has the same 0-vs-unallocated
+  ambiguity.
+- `9da0b7c` "Bound IPv4 startup discovery" — new `mesh-ip-startup.py`: at
+  boot, waits for `br0` link-local IPv6 + Alfred + this node's own
+  identity/telemetry publish, then observes BATMAN peers for 10s, extending
+  to 20s total if peers are present but haven't published identity yet,
+  before allocating. A remembered chunk in `/etc/mesh_ipv4_state` is reused
+  only if no peer has since claimed it. Worth checking whether the Go
+  `ipManager.run()` has an equivalent bounded startup wait or can race a
+  chunk claim immediately on boot before peers have had a chance to publish.
+- `75fcd5d` "Fix config rollback peer detection" — 108-line rewrite of
+  `mesh-config-rollback.sh` plus a 337-line new test file; peer-detection
+  logic for the safety-net rollback timer was buggy. Same architecture
+  boundary as the `/manage` apply/ACK/rollback pipeline noted in the
+  2026-09-01 pass (structural, Python vs our Go `manet-ctrl`/`fleet.go`) —
+  needs a manual read-and-port only if a matching rollback symptom shows up
+  live; not blindly portable.
+- `93785b0` + `4de7c29` "Drive the onboard LEDs from the recorded
+  provisioning verdict" — new `manet-led-status.sh` (98 lines) + a systemd
+  unit, genuinely new and small, not tied to the Python/Go rewrite boundary
+  (it's a small bash script + unit, the same shape as our own
+  `rootfs/usr/local/bin/*` + `rootfs/etc/systemd/system/*`). Plausibly
+  portable as-is if we want boot-time LED provisioning feedback; not
+  reviewed for exact GPIO/LED assumptions against our board support yet.
+- `4db070b` "low level voice bug fixes" — 1174-line rewrite of upstream's
+  `mesh-voice.py`. Same Python/GStreamer/Lyra vs our Go Opus `mesh-voice`
+  boundary as every prior pass — not portable, no action, consistent with
+  the still-open "worth a feature-by-feature comparison someday" item from
+  the 2026-09-01/09-06 passes.
+
+**Skipped as low value, consistent with prior passes:** the rest of this
+range is the Windows/Linux flasher continuing its rewrite (renamed to
+`flash-a-radio.sh`, self-bootstrapping, cached templates, "additional
+scripts" syntax-checking) and a large documentation restructuring — `README`
+rewrites "for users," a new `docs/node-tools-internals.md` /
+`docs/provisioning-internals.md` split, "prose tells" and "conversational
+voice" removed, US spelling, and `packaging/` dropped from git tracking
+entirely as "developer tooling." None of this is fork-relevant; our
+`provisioning/`, `packaging/`, and doc layout are independent and already
+serve the same purpose.
+
+### 2026-10-01 pass (covers `1d66e0b..299757f`, releases 0.550–0.556)
+
+Fast-forward, no force-push. Commit bodies are empty, so upstream's
+`docs/node-tools-internals.md` diff served as the changelog. Four real gaps
+in the fork, all since handled:
+1. `manet-ctrl` session cookie was a deterministic hash of the password
+   (no expiry, no logout, no rate limit). Fixed: mattronix/MANET#43.
+2. No HTTP body/header limits. Fixed: mattronix/MANET#44.
+3. `ethernet-autodetect.sh` treated "no DHCP lease in 20s" as a wired EUD,
+   bridging the mesh into a foreign LAN with rogue DHCP. Superseded by the
+   Ethernet port ownership redesign (mattronix/MANET#49).
+4. `applyWPAConfig` expanded `$` in SSID/key replacements. Fixed:
+   mattronix/MANET#42.
+
+Found alongside: tcp/443 UI reachable mesh-wide (fixed, `ui_uplink_access`)
+and `/api/peer` as an open proxy (fixed, mattronix/MANET#48).
+
+### 2026-10-03 pass (covers `299757f..fcd02c5`, releases 0.557–0.559)
+
+Fast-forward, no force-push. Three gaps in the fork:
+1. **Secrets in trace logs (fixed, branch `fix/trace-secrets-sae-watchdog`).**
+   `radio-setup.sh` traces (`set -x`) into `/var/log/radio-setup.log`; its
+   `mesh.conf` loop exported every value under trace (mesh key, admin and
+   user passwords, LAN AP key) and it echoed the SAE key outright.
+   `firstrun.sh.template` traced the radio password and the `mesh.conf`
+   writes into `/boot/firmware/{firstrun,provision}.log`, readable by anyone
+   holding the card. Same fix as upstream 0.558: tracing off around those
+   blocks.
+2. **`sae-watchdog.sh` restart loop (fixed, same branch).** With no enabled
+   mesh interface it ran `exit 0`; `Restart=always` + `RestartSec=5` reran it
+   every 5 s and each start pulled in `batman-enslave` (`Wants=`). Now waits
+   and rechecks every 15 s, as upstream 0.558 does.
+3. **Gateway choice follows batman's pick (open, needs design).**
+   `gateway-manager`'s `pollClient` routes to batman's `*` gateway, which
+   switches on one reading at a 5 Mbit/s margin, never falls back when that
+   gateway stops answering, and sees every gateway at the default 10/2
+   unless `gateway_bandwidth` is set. Upstream 0.559 scores
+   min(path throughput, announced bandwidth), switches only for ≥1.5× and
+   +2 Mbit/s sustained 60 s with a 5-minute hold, fails over after two
+   missed pings, and measures Ethernet uplinks with a 5 MB HTTPS download
+   (which also rejects captive portals). Worth porting to the Go
+   gateway-manager, but as its own feature.
+
+**Already covered or N/A:** EU HaLow 1 MHz only (fork's `config.js`
+already); runtime region apply (fork's own PR #50); `node-manager.sh`
+symlink selector (fork's Go `node-manager` re-reads `acs`); the shared
+`mesh-service-election.py` (fork has no MediaMTX/Mumble elections); 30 dBm
+mesh power (relies on upstream's kernel 6.18 driver ceiling removal);
+Python→jq cleanups; flasher automount hold (desktop-only, low priority).
 
 Update this line after each review pass so `git log upstream/main --oneline
 <last-reviewed-sha>..upstream/main` shows only what's new.

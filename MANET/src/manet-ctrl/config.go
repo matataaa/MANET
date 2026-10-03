@@ -2,40 +2,93 @@ package main
 
 import (
 	"bufio"
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
-	RegistryFile       = "/var/run/mesh_node_registry"
-	MeshConfFile       = "/etc/mesh.conf"
-	MeshStateFile      = "/etc/mesh_ipv4_state"
-	PendingConfFile    = "/var/run/mesh_pending_config.json"
-	GPSStatusFile      = "/run/gps_status.json"
-	BatteryFile        = "/run/battery_status.json"
-	AckVersionFile     = "/var/run/mesh_config_ack_version"
-	FleetPrefsFile     = "/var/run/fleet_preferences.json"
-	NoMeshIfFile       = "/var/lib/no_mesh_if"
-	APInterfaceFile    = "/var/lib/ap_interface"
-	UpdateStatusFile   = "/var/run/manet_update_status.json"
-	UpdateTriggerFile  = "/run/manet-update-trigger"
-	FleetUpdateAckFile = "/var/run/fleet_update_ack_ts"
-	RefreshMS          = 15000
-	PerfAuthCookie     = "manet_perf_auth"
-	PerfAuthMaxAge     = 15552000
+	RegistryFile      = "/var/run/mesh_node_registry"
+	MeshStateFile     = "/etc/mesh_ipv4_state"
+	GPSStatusFile     = "/run/gps_status.json"
+	BatteryFile       = "/run/battery_status.json"
+	NoMeshIfFile      = "/var/lib/no_mesh_if"
+	APInterfaceFile   = "/var/lib/ap_interface"
+	UpdateStatusFile  = "/var/run/manet_update_status.json"
+	UpdateTriggerFile = "/run/manet-update-trigger"
+	// FleetUpdateAckFile records the last slot-71 triggered_at this node has
+	// already acted on. Moved off tmpfs (was /var/run/fleet_update_ack_ts) now
+	// that slot 71 is authenticated -- a reboot must not lose this record,
+	// or a still-gossiping (now-authenticated, so no longer discardable as
+	// obviously bogus) old trigger could replay a fleet-wide update.
+	FleetUpdateAckFile = "/var/lib/manet_fleet_update_ack_ts"
+	// AppliedConfigFile persistently records the pkg_id of every fleet config
+	// package this node has actually applied (see fleetCheckActivation /
+	// recordPkgIDApplied), independent of AckVersionFile (which only tracks
+	// the last version number this node ACKed, lives on tmpfs, and is not
+	// itself a security control). Deliberately NOT AckVersionFile's path --
+	// mesh-registry/main.go reads that literal path and it is not part of
+	// this replay-protection design.
+	AppliedConfigFile = "/var/lib/manet_config_applied"
+	RefreshMS         = 15000
+	PerfAuthCookie    = "manet_perf_auth"
+	// FleetPeerAuthHeader carries a mintFleetPeerToken() value on a
+	// server-to-server proxy hop (e.g. handleTerminalProxy -> target's
+	// /ws/terminal, handleLogsProxy -> target's /ws/logs). It is checked as
+	// an alternative to a session cookie, scoped only to the route it's
+	// wrapped on -- see requireAuthOrPeerToken in api.go. The header name is
+	// shared across routes, but each route mints/verifies against its own
+	// domain string (see FleetPeerAuthDomainTerminal / FleetPeerAuthDomainLogs
+	// below), so a token captured for one route is not usable against
+	// another even though both derive from the same underlying fleet key.
+	// The token itself is a short-lived, target-bound HMAC (see
+	// mintFleetPeerToken/verifyFleetPeerToken below), not a static secret,
+	// so intercepting one grants at most fleetPeerTokenMaxSkew of replay
+	// against the one target and one route it was minted for.
+	FleetPeerAuthHeader = "X-Manet-Fleet-Peer-Auth"
+
+	// FleetPeerAuthDomainTerminal / FleetPeerAuthDomainLogs are the
+	// domain-separation strings passed to mintFleetPeerToken /
+	// verifyFleetPeerToken for each proxy route. Deliberately distinct
+	// values (not just distinct call sites) -- the domain string is part of
+	// the signed message (see fleetPeerTokenMAC), so a token minted for one
+	// route's domain fails verification against another route's domain even
+	// if replayed at the same target host within the same freshness window.
+	FleetPeerAuthDomainTerminal = "fleet-peer-terminal|v1"
+	FleetPeerAuthDomainLogs     = "fleet-peer-logs|v1"
+	// FleetPeerAuthDomainAPI covers /api/ requests relayed by another
+	// node's /api/peer proxy for a user logged in there (see
+	// peerProxyAuthToken / proxiedAPIRequestAuthenticated in api.go).
+	FleetPeerAuthDomainAPI = "fleet-peer-api|v1"
 )
 
 var (
 	HalowEUChannels      = []int{863500, 864500, 865500, 866500, 867500}
 	HalowUIToS1GChannel  = map[int]int{1: 1, 2: 3, 3: 5, 4: 7, 5: 9}
 	HalowBWTxPowerCapDBM = map[string]string{"1MHz": "24", "2MHz": "24", "4MHz": "22", "8MHz": "20"}
+)
+
+// MeshConfFile, PendingConfFile, AckVersionFile, and FleetPrefsFile are vars
+// (not consts) purely so tests can point them at a throwaway temp file
+// instead of the real /etc or /var/run path — production code never
+// reassigns them, and their default values are unchanged.
+// mesh-registry/main.go reads AckVersionFile's literal path from outside
+// this package; that string value is untouched.
+var (
+	MeshConfFile    = "/etc/mesh.conf"
+	PendingConfFile = "/var/run/mesh_pending_config.json"
+	AckVersionFile  = "/var/run/mesh_config_ack_version"
+	FleetPrefsFile  = "/var/run/fleet_preferences.json"
 )
 
 // --- JSON types matching frontend expectations ---
@@ -266,6 +319,28 @@ type AdminStatus struct {
 	ActiveNodes   int               `json:"active_nodes"`
 	MyHostname    string            `json:"my_hostname"`
 	Preferences   FleetPreferences  `json:"preferences"`
+	AckStatus     *AckStatusResult  `json:"ack_status,omitempty"`
+}
+
+// AckStatusResult is the one shared acked/total/missing computation used by
+// both assembleAdminStatus (what the UI displays) and apiAdminActivate's
+// non-force gate (what the server actually enforces) — see ackStatus in
+// admin.go. Before this, the two used different logic and could disagree.
+// DangerousKeys/OfflineNodes are populated together: DangerousKeys lists
+// which of admin_password/mesh_ssid/mesh_key/ipv4_network this pending push
+// actually changes, and OfflineNodes lists which registry nodes are not
+// ACTIVE right now (both computed regardless of ack count) — a non-force
+// Activate must be blocked whenever both are non-empty, since applying one
+// of those changes while a node is offline risks silently orphaning it. See
+// dangerousKeyChanges/offlineNodeNames in admin.go and apiAdminActivate's
+// gate in api.go, which must both use this same pair.
+type AckStatusResult struct {
+	Version       string   `json:"version"`
+	Acked         int      `json:"acked"`
+	Total         int      `json:"total"`
+	Missing       []string `json:"missing,omitempty"`
+	DangerousKeys []string `json:"dangerous_keys,omitempty"`
+	OfflineNodes  []string `json:"offline_nodes,omitempty"`
 }
 
 type AdminNode struct {
@@ -330,7 +405,63 @@ func loadKVFile(path string) map[string]string {
 // in place).
 var saveKVFileMu sync.Mutex
 
+// configValueError reports why value can't be stored under key, or nil.
+//
+// mesh.conf is line-oriented key=value with no escaping, so a CR/LF in any
+// value would end its line early and the remainder would be read back as
+// additional keys (e.g. "x\nrequire_auth=n").
+//
+// mesh_ssid/mesh_key are further limited to what every writer of the mesh
+// wpa_supplicant configs can represent: applyWPAConfig, radio-setup.sh and
+// manet-wlan-reconcile.sh all embed them unescaped inside ssid="..." /
+// sae_password="...", where a '"' or control character would end the
+// quoted string and let the rest be parsed as extra supplicant directives.
+// 802.11 caps an SSID at 32 bytes.
+func configValueError(key, value string) error {
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("%s must not contain line breaks", key)
+	}
+	switch key {
+	case "mesh_ssid", "mesh_key":
+		for _, c := range value {
+			if c == '"' || c < 0x20 || c == 0x7f {
+				return fmt.Errorf("%s must not contain quotes or control characters", key)
+			}
+		}
+		if key == "mesh_ssid" && len(value) > 32 {
+			return fmt.Errorf("mesh_ssid must be at most 32 bytes")
+		}
+	case "regulatory_domain":
+		return regionValueError(key, value)
+	case "halow_duty_cycle", "halow_txpower_dbm":
+		return halowOptionValueError(key, value)
+	}
+	return nil
+}
+
+// validateConfigUpdates returns the first configValueError in updates,
+// checking keys in sorted order so the reported error is deterministic.
+func validateConfigUpdates(updates map[string]string) error {
+	keys := make([]string, 0, len(updates))
+	for k := range updates {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if err := configValueError(k, updates[k]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func saveKVFile(path string, updates map[string]string) error {
+	for key, val := range updates {
+		if strings.ContainsAny(val, "\r\n") {
+			return fmt.Errorf("refusing to write %s: value contains a line break", key)
+		}
+	}
+
 	saveKVFileMu.Lock()
 	defer saveKVFileMu.Unlock()
 
@@ -362,11 +493,10 @@ func saveKVFile(path string, updates map[string]string) error {
 		}
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strings.Join(out, "\n")), 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// fsync'd: a fleet activation records its pkg_id as applied before it
+	// writes here, so a crash that loses an unsynced mesh.conf leaves the
+	// node on the old config with no way to re-apply (EUD4, 2026-10-02).
+	return writeFileFsync(path, []byte(strings.Join(out, "\n")))
 }
 
 func confGet(conf map[string]string, key, def string) string {
@@ -462,33 +592,172 @@ func parseAppletsBrief(s string) []AppletBrief {
 
 // --- Auth helpers ---
 
-func machineTokenSalt() string {
-	for _, path := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
-		data, err := os.ReadFile(path)
-		if err == nil {
-			s := strings.TrimSpace(string(data))
-			if s != "" {
-				return s
-			}
-		}
-	}
-	h, _ := os.Hostname()
-	return h
-}
-
 func getProvisionedPassword(conf map[string]string) string {
 	return conf["admin_password"]
 }
 
-func getPerfAuthToken() string {
+// fleetPeerTokenMaxSkew bounds how old (or how far in the future, to allow
+// for some clock drift between nodes) a fleet peer token's timestamp may be
+// before verifyFleetPeerToken rejects it. Mesh nodes run periodic time sync
+// (see MEMORY: "Upstream sync 2026-08-21 / PR #12" -- mesh time sync), so
+// 30s is generous relative to expected drift; if a fleet is ever seen with
+// worse clock skew than that, the fix is to fix the time sync, not to widen
+// this window (a wider window only weakens the replay protection this is
+// here for).
+const fleetPeerTokenMaxSkew = 30 * time.Second
+
+// fleetPeerTokenKey returns the shared secret behind fleet peer tokens, or
+// nil if this node is not eligible to mint/verify them. Gating on
+// require_auth here (mirroring isAuthed's own check) is deliberate and
+// load-bearing: a node provisioned with a real admin_password but
+// require_auth=n (firstrun.sh.template's default) would otherwise mint a
+// fully valid token for an unauthenticated caller, turning that one open
+// node into a relay that can reach every require_auth=y node in the fleet
+// with no password ever entered -- and, since the target of a proxy dial is
+// caller-controlled, hand the token itself to an arbitrary third party.
+//
+// The key is derived from deriveFleetKey (fleetcrypto.go's already
+// PBKDF2-hardened, 200000-iteration fleet-crypto key), via one more HMAC
+// with its own domain string -- deliberately NOT admin_password|mesh_ssid
+// directly. This fleet's peer TLS defaults to InsecureSkipVerify=true
+// (main.go), so an on-path mesh member (below admin level -- exactly the
+// threat model #36 was built for) can capture a token in transit; deriving
+// the peer-token key straight from the password would hand that attacker a
+// single unsalted HMAC key to brute-force admin_password at GPU speed,
+// undoing #36's PBKDF2 hardening entirely. Going through deriveFleetKey
+// means the same 200000-round cost applies here too, and since
+// deriveFleetKey caches its result, this costs nothing extra on the hot
+// path after the first call. admin_password and mesh_ssid are provisioned
+// identically across the fleet, so every node that IS eligible derives the
+// same key independently.
+func fleetPeerTokenKey() []byte {
 	conf := loadKVFile(MeshConfFile)
+	ra := strings.ToLower(conf["require_auth"])
+	if ra != "y" && ra != "yes" && ra != "1" {
+		return nil
+	}
 	pw := getProvisionedPassword(conf)
 	if pw == "" {
+		return nil
+	}
+	fk, err := deriveFleetKey(pw, conf["mesh_ssid"])
+	if err != nil {
+		return nil
+	}
+	m := hmac.New(sha256.New, fk)
+	m.Write([]byte("manet-fleet-peer-terminal-key|v1"))
+	return m.Sum(nil)
+}
+
+// fleetPeerTokenMAC computes the HMAC over a domain+timestamp+target-bound
+// message. Binding the target host into the signed message means a token
+// minted for one target cannot be replayed against a different one; binding
+// the domain string means a token minted for one route (e.g. the terminal
+// proxy) cannot be replayed against a different route (e.g. the logs proxy)
+// even against the same target and within the same freshness window --
+// callers must pass a distinct domain per route (see
+// FleetPeerAuthDomainTerminal / FleetPeerAuthDomainLogs in config.go's
+// consts).
+func fleetPeerTokenMAC(key []byte, ts int64, targetHost, domain string) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(fmt.Sprintf("%s|%d|%s", domain, ts, targetHost)))
+	return mac.Sum(nil)
+}
+
+// mintFleetPeerTokenAt builds a "<unix-ts>|<hex-hmac>" token for targetHost
+// under the given domain, at the given timestamp, or "" if this node isn't
+// eligible to mint one (see fleetPeerTokenKey). Split out from
+// mintFleetPeerToken so tests can mint an already-expired, but otherwise
+// validly-signed, token to exercise verifyFleetPeerToken's expiry check for
+// real.
+func mintFleetPeerTokenAt(ts int64, targetHost, domain string) string {
+	key := fleetPeerTokenKey()
+	if len(key) == 0 {
 		return ""
 	}
-	salt := machineTokenSalt()
-	h := sha256.Sum256([]byte(fmt.Sprintf("%s|perf-local|v1|%s", pw, salt)))
-	return fmt.Sprintf("%x", h)
+	mac := fleetPeerTokenMAC(key, ts, targetHost, domain)
+	return fmt.Sprintf("%d|%x", ts, mac)
+}
+
+// mintFleetPeerToken mints a fleet peer token for targetHost under domain,
+// timestamped now. Used only to authenticate a server-to-server proxy hop
+// (e.g. handleTerminalProxy, handleLogsProxy) -- not a general auth token.
+// domain must match the one the receiving end verifies against (see
+// requireAuthOrPeerToken).
+func mintFleetPeerToken(targetHost, domain string) string {
+	return mintFleetPeerTokenAt(time.Now().Unix(), targetHost, domain)
+}
+
+// verifyFleetPeerToken checks a token received on the receiving end of a
+// proxy hop (requireAuthOrPeerToken) against targetHost -- which must be the
+// *receiving* node's own address as the client addressed it (r.Host), since
+// that's what the token was bound to at mint time -- and against domain,
+// which must match the route's own domain string (a token minted for a
+// different route's domain will not verify here even for the same
+// targetHost). Note: this function only checks the signature and freshness
+// of the token against the CLAIMED targetHost -- it does not itself verify
+// that targetHost is actually this node's address. That check is
+// hostMatchesLocalAddr, which the caller (requireAuthOrPeerToken) must run
+// first: the Host header is sender-controlled, so without that separate
+// check, "binding" to it would be a comment claiming protection that
+// doesn't exist.
+func verifyFleetPeerToken(token, targetHost, domain string) bool {
+	key := fleetPeerTokenKey()
+	if len(key) == 0 || token == "" {
+		return false
+	}
+	tsStr, macHex, ok := strings.Cut(token, "|")
+	if !ok {
+		return false
+	}
+	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil {
+		return false
+	}
+	now := time.Now().Unix()
+	maxSkew := int64(fleetPeerTokenMaxSkew / time.Second)
+	if ts < now-maxSkew || ts > now+maxSkew {
+		return false
+	}
+	got, err := hex.DecodeString(macHex)
+	if err != nil {
+		return false
+	}
+	want := fleetPeerTokenMAC(key, ts, targetHost, domain)
+	return hmac.Equal(got, want)
+}
+
+// hostMatchesLocalAddr reports whether hostport (typically a request's
+// r.Host, e.g. "10.30.2.181", "10.30.2.181:8443", or "[fe80::1]:8443")
+// names one of this node's own network addresses, per
+// net.InterfaceAddrs(). This is what actually enforces the fleet peer
+// token's target binding -- the sender's Host header is otherwise
+// self-reported and unverified.
+func hostMatchesLocalAddr(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i] // strip IPv6 zone, if present
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok || !ipNet.IP.Equal(ip) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // --- Network helpers ---

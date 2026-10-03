@@ -1,4 +1,8 @@
 // Config tab: view/edit node mesh.conf (local or remote via direct fetch)
+// CFG_SECRET_FIELD_KEYS mirrors the Go side's fleetSecretKeys (admin.go) --
+// an empty value for any of these must never be submitted as "set this
+// secret to blank," only skipped as "field left untouched." See configSave.
+const CFG_SECRET_FIELD_KEYS = ['admin_password', 'mesh_key', 'lan_ap_key'];
 let configInitialized = false;
 let configEditing = false;
 let configData = null;
@@ -53,6 +57,26 @@ function configPopulateTargets() {
   sel.value = current;
 }
 
+// configStartEditGated mirrors fleetStartEditGated (fleet.js): if auth is
+// required and the operator hasn't logged in yet, run the login flow first
+// and re-fetch fresh (unredacted) configData BEFORE ever entering edit mode
+// -- this is what stops the edit form from ever getting populated with
+// blanked-out secret fields from a pre-login /api/admin/status response. If
+// the operator cancels the login prompt, this simply never proceeds. The
+// server-side guards (dropEmptySecrets et al.) are what actually prevent
+// damage even if this gate is bypassed; this is purely about not showing
+// misleading blank fields in the first place.
+async function configStartEditGated() {
+  if (_authRequired && !_authenticated) {
+    await new Promise(function(resolve) {
+      authShowLogin(function() { resolve(); });
+    });
+    await configFetch();
+  }
+  configEditing = true;
+  configRender();
+}
+
 async function configFetch() {
   try {
     var base = configBaseUrl();
@@ -102,11 +126,13 @@ function configRenderView(panel, cfg) {
       { label: 'Mesh Key', key: 'mesh_key', masked: true },
       { label: 'IPv4 Network', key: 'ipv4_network' },
       { label: 'Regulatory Domain', key: 'regulatory_domain' },
-      { label: 'HaLow Regulatory Domain', key: 'halow_regulatory_domain', fmt: function(v) { return v || 'Inherit'; } },
+      { label: 'HaLow Plan', key: 'halow_regulatory_domain', fmt: function(v) { return (v || '?') + ' (from Regulatory Domain)'; } },
       { label: 'HaLow Bandwidth', key: 'halow_bw' },
+      { label: 'HaLow Duty Cycle', key: 'halow_duty_cycle', fmt: function(v) { return v || 'Default'; } },
+      { label: 'HaLow TX Power', key: 'halow_txpower_dbm', fmt: function(v) { return v ? v + ' dBm' : 'Default'; } },
       { label: 'HaLow Channel', key: 'halow_channel', fmt: function(v) {
         if (!v) return 'Auto';
-        var domain = cfg.halow_regulatory_domain || cfg.regulatory_domain || 'US';
+        var domain = halowPlanFor(cfg.regulatory_domain || 'US');
         var startKHz = { US: 902000, EU: 863000 }[domain];
         var ch = parseInt(v, 10);
         if (startKHz && !isNaN(ch)) return v + ' (' + ((startKHz + ch * 500) / 1000) + ' MHz)';
@@ -125,6 +151,7 @@ function configRenderView(panel, cfg) {
       { label: 'Auto Update', key: 'auto_update', yesno: true },
       { label: 'Update URL', key: 'update_url' },
       { label: 'Auto Update Overlay', key: 'auto_update_overlay', yesno: true },
+      { label: 'Allow Unsigned Updates', key: 'update_allow_unsigned', yesno: true },
       { label: 'Auto Update Min Bandwidth', key: 'auto_update_min_mbps', fmt: function(v) { return (v || '10') + ' Mbit'; } },
     ]},
     { title: 'GPS / CoT', fields: [
@@ -159,6 +186,8 @@ function configRenderView(panel, cfg) {
     { title: 'Access', fields: [
       { label: 'Admin Key', key: 'admin_password', masked: true },
       { label: 'Require Auth', key: 'require_auth', fmt: function(v) { return (v||'').toLowerCase() === 'y' ? 'Yes' : 'No'; } },
+      { label: 'UI From Uplink', key: 'ui_uplink_access', fmt: function(v) { return (v||'').toLowerCase() === 'y' ? 'Allowed' : 'Mesh only'; } },
+      { label: 'SSH From Uplink', key: 'ssh_uplink_access', fmt: function(v) { return (v||'').toLowerCase() === 'y' ? 'Allowed' : 'Mesh only'; } },
     ]},
     { title: 'Voice', voice: true, fields: [
       { label: 'Voice Enabled', key: 'voice_enabled', yesno: true },
@@ -212,10 +241,7 @@ function configRenderView(panel, cfg) {
   html += '</div>';
   panel.innerHTML = html;
 
-  document.getElementById('cfg-edit-btn').addEventListener('click', () => {
-    configEditing = true;
-    configRender();
-  });
+  document.getElementById('cfg-edit-btn').addEventListener('click', configStartEditGated);
   configWireUpdateButtons();
 
   qosFetch();
@@ -256,6 +282,7 @@ function configRenderUpdateBanner(cfg) {
     html += '<div class="fleet-actions">';
     if (swAvail) html += '<button class="fleet-btn fleet-btn-primary" id="cfg-update-now-sw-btn">Update MANET</button>';
     if (ovAvail) html += '<button class="fleet-btn fleet-btn-danger" id="cfg-update-now-ov-btn">Update Kernel/Drivers</button>';
+    if (swAvail && ovAvail) html += '<button class="fleet-btn fleet-btn-danger" id="cfg-update-now-both-btn">Update Both</button>';
     html += '</div>';
   }
   html += '</div>';
@@ -291,6 +318,8 @@ function configWireUpdateButtons() {
   if (swBtn) swBtn.addEventListener('click', function() { configUpdateNow('software', swBtn); });
   var ovBtn = document.getElementById('cfg-update-now-ov-btn');
   if (ovBtn) ovBtn.addEventListener('click', function() { configUpdateNow('overlay', ovBtn); });
+  var bothBtn = document.getElementById('cfg-update-now-both-btn');
+  if (bothBtn) bothBtn.addEventListener('click', function() { configUpdateNow('both', bothBtn); });
   var rebootBtn = document.getElementById('cfg-reboot-now-btn');
   if (rebootBtn) rebootBtn.addEventListener('click', function() { configRebootNow(rebootBtn); });
 }
@@ -420,7 +449,7 @@ function configConfirm(msg, opts, onConfirm) {
 
 function configUpdateNow(channel, btn) {
   var st = configUpdateStatus || {};
-  var channelLabel = channel === 'overlay' ? 'Kernel/Drivers' : 'MANET';
+  var channelLabel = channel === 'overlay' ? 'Kernel/Drivers' : channel === 'both' ? 'MANET + Kernel/Drivers' : 'MANET';
 
   var mbps = st.uplink_mbps || 0;
   var uplinkType = st.uplink_type || 'unknown';
@@ -428,7 +457,7 @@ function configUpdateNow(channel, btn) {
   var belowThreshold = uplinkType !== 'wired' && mbps < minMbps;
 
   var msg = 'Update ' + channelLabel + ' now? This downloads the update and reboots this node once applied.';
-  if (channel === 'overlay') {
+  if (channel !== 'software') {
     msg += ' The Kernel/Drivers channel updates kernel/firmware — there is no rollback if it fails to boot.';
   }
   if (belowThreshold) {
@@ -437,7 +466,7 @@ function configUpdateNow(channel, btn) {
       'Consider using a higher-bandwidth connection (Ethernet, WiFi mesh, or 8MHz HaLow) if available. ' + msg;
   }
 
-  configConfirm(msg, { label: 'Update ' + channelLabel, danger: belowThreshold || channel === 'overlay' }, async function() {
+  configConfirm(msg, { label: 'Update ' + channelLabel, danger: belowThreshold || channel !== 'software' }, async function() {
     // Disable immediately — before the request even resolves — so a
     // second click during the network round-trip can't fire a duplicate
     // trigger. The status poll below takes over showing real progress
@@ -467,15 +496,19 @@ function configRenderEdit(panel, cfg) {
     { label: 'Mesh SSID', key: 'mesh_ssid', type: 'text' },
     { label: 'Mesh Key', key: 'mesh_key', type: 'password' },
     { label: 'IPv4 Network', key: 'ipv4_network', type: 'text' },
-    { label: 'Regulatory Domain', key: 'regulatory_domain', type: 'select', options: ['US', 'EU', 'JP', 'AU'] },
-    { label: 'HaLow Regulatory Domain', key: 'halow_regulatory_domain', type: 'select', options: [
-      {v:'',l:'Inherit from Regulatory Domain'},'US','EU','JP','AU'
-    ], hint: 'Overrides the regulatory domain for the HaLow radio specifically, independent of the WiFi Regulatory Domain above (e.g. an MM8108 unit can run HaLow on a different domain than its 2.4/5GHz radios). Empty = inherit.' },
+    { label: 'Regulatory Domain', key: 'regulatory_domain', type: 'select', options: WIFI_REG_DOMAINS,
+      hint: 'Country for all radios (a real country code; EU is not one). Wi-Fi uses it directly; HaLow uses the EU plan for EU countries and the same country otherwise. Applies after a reboot.' },
     { label: 'HaLow Bandwidth', key: 'halow_bw', type: 'select', options: [
       {v:'1MHz',l:'1 MHz'},{v:'2MHz',l:'2 MHz'},{v:'4MHz',l:'4 MHz'},{v:'8MHz',l:'8 MHz'}
     ], hint: 'Primary channel width for 802.11ah mesh. EU supports 1MHz only. Narrower = longer range.' },
     { label: 'HaLow Channel', key: 'halow_channel', type: 'channel-halow',
       hint: 'Explicit HaLow channel for the current regulatory domain/bandwidth. Auto (default) picks the standard channel for that combination.' },
+    { label: 'HaLow Duty Cycle', key: 'halow_duty_cycle', type: 'select', options: [
+      {v:'',l:'Default (off on EU plan, auto elsewhere)'},{v:'off',l:'Off (no airtime limit)'},{v:'auto',l:'Auto (regional limit)'}
+    ], hint: 'Auto applies the Morse regional limit: none in US, 10% (AP) / 2.8% (station) in EU. Off in EU exceeds the ETSI 863-868 MHz rules. Applies after a reboot.' },
+    { label: 'HaLow TX Power', key: 'halow_txpower_dbm', type: 'select', options:
+      [{v:'',l:'Default (24/24/22/20 dBm for 1/2/4/8 MHz)'}].concat(Array.from({length: 30}, (_, i) => ({v: String(30 - i), l: (30 - i) + ' dBm'}))),
+      hint: 'Request and driver cap. The regional table (US 30, EU 16 dBm EIRP) and the board calibration (BCF) still limit it; the Hardware tab shows what the radio reports. Applies after a reboot.' },
     { label: '5GHz Mesh Channel Mode', key: 'acs', type: 'select', options: [
       {v:'n',l:'Static (pinned channel)'},{v:'y',l:'Automatic (ACS)'}
     ], hint: 'Static pins the 5GHz (and 2.4GHz) mesh to a fixed channel — deterministic, recommended. Automatic elects a channel via scanning/consensus across the fleet. Live — applies within one 15s tick, no restart needed.' },
@@ -537,19 +570,22 @@ function configRenderEdit(panel, cfg) {
     { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Checks for a new release every 6h, and immediately when this setting is saved' },
     { label: 'Update URL', key: 'update_url', type: 'text', hint: 'Base URL for OTA tarball server (blank = disabled)' },
     { label: 'Auto Update Overlay (kernel/firmware)', key: 'auto_update_overlay', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Updates the kernel/modules/firmware. No rollback if a bad overlay fails to boot — test on one node before enabling fleet-wide. Off by default.' },
+    { label: 'Allow Unsigned Updates', key: 'update_allow_unsigned', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes (lab only)'}], hint: 'Install update packages even when their signature is missing or wrong. Anyone who can serve this node an update could then run code on it. Off by default.' },
     { label: 'Auto Update Min Bandwidth (Mbit)', key: 'auto_update_min_mbps', type: 'text', hint: 'Automatic apply is skipped below this link speed. Manual "Update Now" and fleet-wide force update ignore it (with a warning).' },
     { section: 'Gateway' },
     { label: 'Gateway Enabled', key: 'gateway', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}], hint: 'Allow this node to act as a mesh gateway' },
     { label: 'NAT Masquerade', key: 'gateway_nat', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'MSS Clamping', key: 'gateway_mss_clamp', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Bandwidth', key: 'gateway_bandwidth', type: 'select', options: [
-      {v:'',l:'Auto (batman default)'},{v:'2M/2M',l:'2M/2M'},{v:'5M/5M',l:'5M/5M'},{v:'10M/10M',l:'10M/10M'},
+      {v:'',l:'Auto (measured on Ethernet, else 10/2)'},{v:'2M/2M',l:'2M/2M'},{v:'5M/5M',l:'5M/5M'},{v:'10M/10M',l:'10M/10M'},
       {v:'20M/20M',l:'20M/20M'},{v:'50M/50M',l:'50M/50M'},{v:'100M/100M',l:'100M/100M'}
     ] },
     { label: 'DNS Servers', key: 'dns_servers', type: 'text', hint: 'Comma-separated (e.g. 8.8.8.8,8.8.4.4)' },
     { section: 'Access' },
     { label: 'Admin Key', key: 'admin_password', type: 'password' },
     { label: 'Require Auth', key: 'require_auth', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Require admin password for write operations' },
+    { label: 'UI From Uplink', key: 'ui_uplink_access', type: 'select', options: [{v:'n',l:'No (mesh only)'},{v:'y',l:'Yes'}], hint: 'Allow this node\'s web UI from its uplink network, e.g. a monitoring workstation on a gateway\'s LAN' },
+    { label: 'SSH From Uplink', key: 'ssh_uplink_access', type: 'select', options: [{v:'n',l:'No (mesh only)'},{v:'y',l:'Yes'}], hint: 'Allow SSH to this node from its uplink network, e.g. lab troubleshooting from the LAN or reaching a node whose mesh is down' },
     { section: 'Voice' },
     { label: 'Voice Enabled', key: 'voice_enabled', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}],
       hint: 'Off stops this node\'s local mic/speaker and physical PTT button. Browser-based web PTT is unaffected either way.' },
@@ -584,6 +620,12 @@ function configRenderEdit(panel, cfg) {
     html += '</div>';
     if (f.type === 'select') {
       html += '<select class="cfg-input" id="cfg-f-' + f.key + '">';
+      // Keep a stored value the list doesn't offer, as fleet.js does:
+      // otherwise the first option is selected and every save writes it.
+      const known = f.options.map(opt => typeof opt === 'object' ? opt.v : opt);
+      if (curVal !== '' && !known.includes(curVal)) {
+        html += '<option value="' + escHtml(curVal) + '" selected>' + escHtml(curVal) + ' (current)</option>';
+      }
       f.options.forEach(opt => {
         const val = typeof opt === 'object' ? opt.v : opt;
         const label = typeof opt === 'object' ? opt.l : opt;
@@ -609,7 +651,13 @@ function configRenderEdit(panel, cfg) {
         ' oninput="document.getElementById(\'cfg-rv-' + f.key + '\').textContent=this.value+\'%\'">' +
         '<span class="cfg-range-val" id="cfg-rv-' + f.key + '">' + escHtml(rangeVal) + '%</span></div>';
     } else {
-      html += '<input class="cfg-input" type="' + f.type + '" id="cfg-f-' + f.key + '" value="' + escHtml(curVal) + '">';
+      // A blank password-type field could mean "genuinely unset" or "this
+      // came from a redacted /api/admin/status response" (see
+      // configSave's empty-secret skip below) -- show an explicit
+      // placeholder so leaving it blank clearly reads as "leave unchanged,"
+      // not "set to empty."
+      var cfgPlaceholder = f.type === 'password' && curVal === '' ? ' placeholder="(unchanged)"' : '';
+      html += '<input class="cfg-input" type="' + f.type + '" id="cfg-f-' + f.key + '" value="' + escHtml(curVal) + '"' + cfgPlaceholder + '>';
       if (f.preview) html += '<div class="cfg-hostname-preview" id="cfg-hostname-preview"></div>';
     }
     html += '</div>';
@@ -666,15 +714,12 @@ function configRenderEdit(panel, cfg) {
   async function configRefreshHalowChannels() {
     const chEl = document.getElementById('cfg-f-halow_channel');
     const domainEl = document.getElementById('cfg-f-regulatory_domain');
-    const halowRegDomainEl = document.getElementById('cfg-f-halow_regulatory_domain');
     const bwEl = document.getElementById('cfg-f-halow_bw');
     if (!chEl || !domainEl || !bwEl) return;
 
-    // halow_regulatory_domain overrides regulatory_domain when set, mirroring
-    // resolveHalowDomain's server-side precedence — this only decides what
-    // the picker narrows against client-side; the server still validates
-    // for real on save.
-    const resolvedDomain = (halowRegDomainEl && halowRegDomainEl.value) ? halowRegDomainEl.value : domainEl.value;
+    // The HaLow plan follows the country, as resolveHalowDomain does on the
+    // server; this only narrows the picker, the server validates on save.
+    const resolvedDomain = halowPlanFor(domainEl.value);
 
     const allowedBw = HALOW_BW_BY_DOMAIN[resolvedDomain] || HALOW_BW_OPTIONS.map(o => o.v);
     const currentBw = bwEl.value;
@@ -688,22 +733,16 @@ function configRenderEdit(panel, cfg) {
     await refreshChannelSelect(chEl, url, current);
   }
   const halowDomainEl = document.getElementById('cfg-f-regulatory_domain');
-  const halowRegDomainSelectEl = document.getElementById('cfg-f-halow_regulatory_domain');
   const halowBwEl = document.getElementById('cfg-f-halow_bw');
   if (halowDomainEl) halowDomainEl.addEventListener('change', configRefreshHalowChannels);
-  if (halowRegDomainSelectEl) halowRegDomainSelectEl.addEventListener('change', configRefreshHalowChannels);
   if (halowBwEl) halowBwEl.addEventListener('change', configRefreshHalowChannels);
   configRefreshHalowChannels();
 
   // 5GHz Pinned Channel's option list isn't static either — legal channels
   // depend on Regulatory Domain (same table fleet.js's picker uses via
   // /api/mesh5ghz/channels), so it's rebuilt on load and whenever that
-  // field changes. Deliberately reads plain regulatory_domain only, NOT
-  // halow_regulatory_domain — HaLow and 5GHz WiFi can run different
-  // domains on the same node (e.g. MM8108), so reusing HaLow's resolved
-  // domain here could show/accept a channel illegal for the actual WiFi
-  // domain. Channel candidates don't vary by bandwidth for 5GHz (unlike
-  // HaLow), so no bw param is sent.
+  // field changes. Channel candidates don't vary by bandwidth for 5GHz
+  // (unlike HaLow), so no bw param is sent.
   async function configRefreshMesh5GHzChannels() {
     const chEl = document.getElementById('cfg-f-mesh_5ghz_channel');
     const domainEl = document.getElementById('cfg-f-regulatory_domain');
@@ -761,16 +800,22 @@ async function configSave() {
   }
 
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','eud_bandwidth','mesh_ssid','mesh_key',
-    'ipv4_network','regulatory_domain','halow_regulatory_domain','halow_bw','halow_channel','acs','mesh_5ghz_bw','mesh_5ghz_channel','multicast_mode','battery_monitor','admin_password','require_auth',
+    'ipv4_network','regulatory_domain','halow_bw','halow_channel','halow_duty_cycle','halow_txpower_dbm','acs','mesh_5ghz_bw','mesh_5ghz_channel','multicast_mode','battery_monitor','admin_password','require_auth','ui_uplink_access','ssh_uplink_access',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
-    'auto_update','update_url','auto_update_overlay','auto_update_min_mbps',
+    'auto_update','update_url','auto_update_overlay','auto_update_min_mbps','update_allow_unsigned',
     'gps','gps_source','gps_static_lat','gps_static_lon','gps_static_alt','callsign','cot_type','cot_team','cot_role','cot_icon',
     'voice_mic_volume','voice_speaker_volume','voice_channel',
     'voice_beep_tx_start','voice_beep_rx_end','voice_gain','voice_enabled'];
   const config = {};
   meshFields.forEach(f => {
     const el = document.getElementById('cfg-f-' + f);
-    if (el) config[f] = el.value;
+    if (!el) return;
+    // Never submit an empty secret value as "blank this out" -- almost
+    // certainly means the field was populated from a redacted (pre-login)
+    // /api/admin/status response and never actually touched. The server
+    // independently guards against this too (dropEmptySecrets, admin.go).
+    if (CFG_SECRET_FIELD_KEYS.indexOf(f) !== -1 && el.value === '') return;
+    config[f] = el.value;
   });
 
   var chVal = (document.getElementById('cfg-f-voice_channel') || {}).value || '1';
@@ -796,6 +841,9 @@ async function configSave() {
     if (meshResult.ok && voiceResult.ok) {
       configEditing = false;
       configFetch();
+      if (Array.isArray(meshResult.warnings) && meshResult.warnings.length) {
+        notify('Warning', meshResult.warnings.join(' '), {type:'warning', duration:15000});
+      }
     } else {
       const errors = [];
       if (!meshResult.ok) errors.push('Mesh: ' + (meshResult.error || 'unknown'));

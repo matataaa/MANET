@@ -2,12 +2,15 @@
 Description=MANET Ethernet Hotplug Auto Detection
 After=systemd-networkd.service batman-enslave.service
 Wants=systemd-networkd.service
-ConditionPathExists=/usr/local/bin/manet-uplink-dispatch.sh
+ConditionPathExists=/usr/local/bin/ethernet-autodetect.sh
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/manet-uplink-dispatch.sh reconcile
-TimeoutStartSec=45
+# Detects the built-in port's role at boot (gateway / wired EUD / attached
+# network); later plug-ins arrive through the networkd-dispatcher carrier
+# hook. Up to 20s waiting for a lease plus a gateway promotion.
+ExecStart=/usr/local/bin/ethernet-autodetect.sh --hotplug
+TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target

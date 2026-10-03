@@ -190,10 +190,11 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 
   var PROXY = '/api/applets/mesh-chat/proxy';
 
+  // Quotes too: results also land inside "..." attributes, and names/ids
+  // arrive from any mesh member over unauthenticated multicast.
   function esc(s) {
-    var d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   function fmtSize(b) {
@@ -226,7 +227,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 
   function fileUrl(msg) {
     if (!msg.file) return '#';
-    return PROXY + '/files/' + msg.file.id;
+    return PROXY + '/files/' + encodeURIComponent(msg.file.id);
   }
 
   function recipLabel(msg) {

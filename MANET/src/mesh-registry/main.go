@@ -29,6 +29,14 @@ const (
 	appletsDir   = "/usr/local/share/manet/applets"
 	meshIfFile   = "/var/lib/mesh_if"
 	interval     = 15 * time.Second
+
+	// myChunkFile is mesh-manager's own record of the IPv4 chunk it has
+	// actually claimed (main.go's myChunkFile const there) — the single
+	// source of truth for "what chunk did this node claim". It holds just
+	// the bare chunk number, and is removed entirely when this node holds no
+	// chunk (e.g. after losing a chunk tie-break), so a missing/unreadable
+	// file correctly yields "" here rather than a stale value.
+	myChunkFile = "/var/run/my_ipv4_chunk"
 )
 
 type NodeInfo struct {
@@ -126,6 +134,7 @@ func collectLocal() NodeInfo {
 		MAC:                    mac,
 		MACAddresses:           allMACs,
 		IPv4:                   ip,
+		IPv4Chunk:              getIPv4Chunk(),
 		Uptime:                 uptime,
 		Battery:                battery,
 		CPULoad:                cpu,
@@ -499,6 +508,18 @@ func getIPv4() string {
 	return ""
 }
 
+// getIPv4Chunk reports the IPv4 chunk this node has actually claimed, per
+// mesh-manager's own persisted record (see myChunkFile above). Returns ""
+// if this node currently holds no chunk (file absent) or the file can't be
+// read.
+func getIPv4Chunk() string {
+	data, err := os.ReadFile(myChunkFile)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
 func getUptimeSeconds() string {
 	data, err := os.ReadFile("/proc/uptime")
 	if err != nil {
@@ -770,10 +791,26 @@ func getDirectNeighbors() string {
 	if err != nil {
 		return ""
 	}
+	return parseDirectNeighbors(string(out))
+}
+
+// neighborMaxLastSeen drops batman neighbors not heard from recently. batman
+// keeps a neighbor in `batctl n` well after its link has gone, and peers
+// draw every published neighbor as a direct link on their dashboards.
+// manet-ctrl applies the same 60s cutoff to its own neighbor list.
+const neighborMaxLastSeen = 60.0
+
+// parseDirectNeighbors turns `batctl n` output into the published
+// DIRECT_NEIGHBORS value: MAC[=speed[=iface]] entries, comma-separated.
+// Rows look like: 0c:bf:74:00:2b:ee    0.432s (        8.5) [     wlan2]
+func parseDirectNeighbors(out string) string {
 	var entries []string
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 3 && strings.Contains(fields[0], ":") {
+			if lastSeen, err := strconv.ParseFloat(strings.TrimSuffix(fields[1], "s"), 64); err == nil && lastSeen > neighborMaxLastSeen {
+				continue
+			}
 			entry := fields[0]
 			if len(fields) >= 4 {
 				speed := strings.Trim(fields[3], "()")

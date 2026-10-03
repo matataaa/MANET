@@ -54,6 +54,13 @@ func main() {
 		fmt.Println(Version)
 		return
 	}
+	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "ota-") {
+		if err := otaCommand(os.Args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	log.SetFlags(log.Ldate | log.Ltime)
 	log.SetPrefix("[node-update] ")
@@ -102,11 +109,15 @@ func main() {
 				timer.Reset(defaultInterval)
 			case syscall.SIGUSR1:
 				t := readAndClearTrigger()
-				if !t.software && !t.overlay {
+				if !t.software && !t.overlay && !t.checkOnly {
 					log.Println("SIGUSR1: no trigger file, ignoring")
 					continue
 				}
-				log.Printf("SIGUSR1: manual update requested (software=%v overlay=%v)", t.software, t.overlay)
+				if t.checkOnly {
+					log.Println("SIGUSR1: update check requested")
+				} else {
+					log.Printf("SIGUSR1: manual update requested (software=%v overlay=%v)", t.software, t.overlay)
+				}
 				runChecks(board, t)
 				timer.Reset(defaultInterval)
 			default:
@@ -123,6 +134,10 @@ func main() {
 type trigger struct {
 	software bool
 	overlay  bool
+	// checkOnly re-detects both channels now (the UI's "Check for
+	// Updates"): no SIGHUP cooldown, and nothing is applied, not even by
+	// the auto_update flags.
+	checkOnly bool
 }
 
 func readAndClearTrigger() trigger {
@@ -138,6 +153,8 @@ func readAndClearTrigger() trigger {
 		return trigger{overlay: true}
 	case "both":
 		return trigger{software: true, overlay: true}
+	case "check":
+		return trigger{checkOnly: true}
 	}
 	return trigger{}
 }
@@ -207,6 +224,9 @@ func runChecks(board string, manual trigger) {
 	}
 
 	writeStatus(status)
+	if manual.checkOnly {
+		return
+	}
 
 	autoUpdate := isAffirmative(confValue("auto_update"), true)
 	autoUpdateOverlay := isAffirmative(confValue("auto_update_overlay"), false)
@@ -218,17 +238,18 @@ func runChecks(board string, manual trigger) {
 	// other channel was silently skipped for the cycle. That meant a
 	// manual/fleet "both" trigger only ever actually applied software,
 	// with overlay dropped unless auto_update_overlay also happened to be
-	// on. Both can apply in the same cycle now; applySoftware/applyOverlay
-	// each end in scheduleReboot(), and calling that twice is harmless —
-	// the later call just reschedules the pending shutdown, so this is
-	// still at most one reboot, not two.
+	// on. Both can apply in the same cycle now, and the single reboot is
+	// scheduled only after both are done: scheduling it as soon as software
+	// was installed let the jittered shutdown (as short as 1-2 minutes)
+	// kill an overlay download still running over a slow HaLow link.
+	applied := false
 	switch {
 	case manual.software && swAvailable:
 		log.Printf("manual update: release v%s -> v%s", swLocal, swRemote)
-		applySoftware(baseURL, board, swRemote, &status)
+		applied = applySoftware(baseURL, board, swRemote, &status)
 	case swAvailable && autoUpdate && gateOK:
 		log.Printf("auto update: release v%s -> v%s", swLocal, swRemote)
-		applySoftware(baseURL, board, swRemote, &status)
+		applied = applySoftware(baseURL, board, swRemote, &status)
 	case swAvailable && autoUpdate && !gateOK:
 		log.Printf("release v%s available but uplink (%.1f Mbps, %s) is below the bandwidth gate — skipping automatic apply", swRemote, uplinkMbps, uplinkType)
 	}
@@ -236,12 +257,16 @@ func runChecks(board string, manual trigger) {
 	switch {
 	case manual.overlay && ovAvailable:
 		log.Printf("manual overlay update: v%s -> v%s", ovLocal, ovRemote)
-		applyOverlay(baseURL, board, ovRemote, &status)
+		applied = applyOverlay(baseURL, board, ovRemote, &status) || applied
 	case ovAvailable && autoUpdateOverlay && gateOK:
 		log.Printf("auto overlay update: v%s -> v%s", ovLocal, ovRemote)
-		applyOverlay(baseURL, board, ovRemote, &status)
+		applied = applyOverlay(baseURL, board, ovRemote, &status) || applied
 	case ovAvailable && autoUpdateOverlay && !gateOK:
 		log.Printf("overlay v%s available but uplink (%.1f Mbps, %s) is below the bandwidth gate — skipping automatic apply", ovRemote, uplinkMbps, uplinkType)
+	}
+
+	if applied {
+		scheduleReboot(&status)
 	}
 }
 
@@ -350,9 +375,9 @@ func detectSoftware(baseURL string) (local, remote string, available bool, err e
 }
 
 // applySoftware downloads, extracts, and records the given already-detected
-// release, then schedules a reboot. Callers (automatic or manual) have
-// already decided this should happen.
-func applySoftware(baseURL, board, remoteVerStr string, status *updateStatus) {
+// release, and reports whether it did. Callers (automatic or manual) have
+// already decided this should happen; runChecks schedules the reboot.
+func applySoftware(baseURL, board, remoteVerStr string, status *updateStatus) bool {
 	status.Phase = "downloading software"
 	writeStatus(*status)
 
@@ -361,7 +386,15 @@ func applySoftware(baseURL, board, remoteVerStr string, status *updateStatus) {
 		log.Printf("download failed: %v", err)
 		status.Phase = "idle"
 		writeStatus(*status)
-		return
+		return false
+	}
+
+	if err := checkOTASignature(tarballURL, tarballPath, remoteVerStr); err != nil {
+		log.Printf("software update refused: %v", err)
+		os.Remove(tarballPath)
+		status.Phase = "idle"
+		writeStatus(*status)
+		return false
 	}
 
 	status.Phase = "extracting software"
@@ -377,7 +410,7 @@ func applySoftware(baseURL, board, remoteVerStr string, status *updateStatus) {
 		os.Remove(tarballPath)
 		status.Phase = "idle"
 		writeStatus(*status)
-		return
+		return false
 	}
 	os.Remove(tarballPath)
 
@@ -393,7 +426,7 @@ func applySoftware(baseURL, board, remoteVerStr string, status *updateStatus) {
 	}
 	log.Printf("updated to release v%s", remoteVerStr)
 
-	scheduleReboot(status)
+	return true
 }
 
 // detectOverlay checks the SBC overlay channel (kernel, modules, firmware)
@@ -414,8 +447,8 @@ func detectOverlay(baseURL, board string) (local, remote string, available bool,
 }
 
 // applyOverlay downloads, extracts, and records the given already-detected
-// overlay, then schedules a reboot.
-func applyOverlay(baseURL, board, remoteVerStr string, status *updateStatus) {
+// overlay, and reports whether it did; runChecks schedules the reboot.
+func applyOverlay(baseURL, board, remoteVerStr string, status *updateStatus) bool {
 	status.Phase = "downloading overlay"
 	writeStatus(*status)
 
@@ -424,7 +457,15 @@ func applyOverlay(baseURL, board, remoteVerStr string, status *updateStatus) {
 		log.Printf("overlay download failed: %v", err)
 		status.Phase = "idle"
 		writeStatus(*status)
-		return
+		return false
+	}
+
+	if err := checkOTASignature(overlayURL, overlayTarballPath, remoteVerStr); err != nil {
+		log.Printf("overlay update refused: %v", err)
+		os.Remove(overlayTarballPath)
+		status.Phase = "idle"
+		writeStatus(*status)
+		return false
 	}
 
 	status.Phase = "extracting overlay"
@@ -436,7 +477,7 @@ func applyOverlay(baseURL, board, remoteVerStr string, status *updateStatus) {
 		os.Remove(overlayTarballPath)
 		status.Phase = "idle"
 		writeStatus(*status)
-		return
+		return false
 	}
 	os.Remove(overlayTarballPath)
 
@@ -445,7 +486,7 @@ func applyOverlay(baseURL, board, remoteVerStr string, status *updateStatus) {
 	}
 	log.Printf("updated overlay to v%s", remoteVerStr)
 
-	scheduleReboot(status)
+	return true
 }
 
 // scheduleReboot asks the kernel to reboot after a random delay rather than

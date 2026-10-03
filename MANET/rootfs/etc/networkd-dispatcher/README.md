@@ -1,18 +1,17 @@
-# Networkd-dispatcher scripts
+# networkd-dispatcher hooks
 
-This directory contains the scripts that are triggered by networkd-dispatcher
-when an ethernet or USB tether interface changes state.
+Installed as-is under `/etc/networkd-dispatcher/` (image builds and the tools
+tarball both ship this tree).
 
-### 1. carrier
-* activated when an interface gets carrier
-* calls manet-uplink-dispatch.sh to decide gateway or wired EUD behavior
+The built-in Ethernet port (`end0`) is owned by `ethernet-autodetect.sh`. It
+decides once per physical connection between gateway, wired EUD and an
+attached network, and records the role in `/run/manet-eth-role`. Gateway
+setup itself is owned by `manet-uplink-dispatch.sh`, which also handles USB
+uplinks and tethers and never touches a port bridged into br0.
 
-### 2. off
-* cleanup script that returns the node to a baseline when no ethernet connection is present
-
-### 3. no-carrier / degraded
-* same cleanup path as off for partially removed links
-
-### 4. routable
-* activated when networkd reports the interface as routable
-* reconciles gateway/NAT state after DHCP or route changes
+| Hook | end0 | other interfaces |
+|---|---|---|
+| `carrier.d/50-ethernet-detect` | `ethernet-autodetect.sh --hotplug` | `manet-uplink-dispatch.sh carrier` |
+| `off.d/50-gateway-disable`, `no-carrier.d/50-gateway-disable` | `ethernet-autodetect.sh --unplug` | `manet-uplink-dispatch.sh off/no-carrier` |
+| `degraded.d/50-gateway-disable` | `manet-uplink-dispatch.sh degraded` (nothing torn down while carrier is present) | same |
+| `routable.d/50-manet-uplink` | `manet-uplink-dispatch.sh routable` | same |

@@ -4,6 +4,7 @@ var topoSim = null;
 var topoZoom = null;
 var topoTooltip = null;
 var topoNodeMap = {};
+var topoMacHost = {}; // any node MAC -> short name ("EUD3"), for "via" in tooltips
 var topoInitialized = false;
 var topoStreamAbort = null;
 var topoStreamType = null;
@@ -77,8 +78,8 @@ function topoInit(container) {
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#ef4444" stroke-width="2.5"/></svg><span>&lt;2 Mbps</span></div>' +
     '<div class="topo-legend-title" style="margin-top:6px">ROUTE</div>' +
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#00d4cf" stroke-width="3.5"/></svg><span>GW Route</span></div>' +
-    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="1.5" stroke-dasharray="6,3"/></svg><span>Multi-hop</span></div>' +
-    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="1.5" stroke-dasharray="3,5"/></svg><span>Inferred</span></div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="1.5" stroke-dasharray="1,4" stroke-linecap="round"/></svg><span>Routed hop</span></div>' +
+    '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="1.5" stroke-dasharray="10,6" opacity="0.6"/></svg><span>Multi-hop, path unknown</span></div>' +
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="4,6" opacity="0.4"/></svg><span>Stale</span></div>' +
     '<div class="topo-legend-title" style="margin-top:6px">RADIO</div>' +
     '<div class="topo-legend-row"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#9aa4b2" stroke-width="2.5"/></svg><span>WiFi mesh</span></div>' +
@@ -178,13 +179,31 @@ function topoUpdate(data) {
 
   topoNodeMap = {};
   nodes.forEach(function(n) { topoNodeMap[n.id] = n; });
+  topoMacHost = {};
+  nodes.forEach(function(n) {
+    (n.all_macs || []).concat(n.mac ? [n.mac] : []).forEach(function(m) {
+      topoMacHost[m] = (n.hostname || n.id).split('-')[0];
+    });
+  });
 
   var nodeIds = new Set(nodes.map(function(n) { return n.id; }));
   var staleIds = new Set(nodes.filter(function(n) { return n.stale; }).map(function(n) { return n.id; }));
-  var links = (data.edges || []).filter(function(e) {
+  var allLinks = (data.edges || []).filter(function(e) {
     return nodeIds.has(e.source) && nodeIds.has(e.target);
   }).map(function(e) {
     return { source: e.source, target: e.target, type: e.type, tq: e.tq, throughput: e.throughput, gw_route: e.gw_route, iface: e.iface };
+  });
+  // A multihop edge runs from this node straight to a node it only reaches
+  // through another one (the route itself is in the tooltip). Drawn
+  // alongside the real hops it makes this node look linked to everything,
+  // so it is only kept when nothing else reaches that node, e.g. when the
+  // next hop isn't a known node.
+  var reachedByHop = new Set();
+  allLinks.forEach(function(l) {
+    if (l.type !== 'multihop') { reachedByHop.add(l.source); reachedByHop.add(l.target); }
+  });
+  var links = allLinks.filter(function(l) {
+    return l.type !== 'multihop' || !reachedByHop.has(l.target);
   });
 
   // Status bar
@@ -220,8 +239,8 @@ function topoUpdate(data) {
     .attr('stroke-dasharray', function(d) {
       var s = d.source.id || d.source, t = d.target.id || d.target;
       if (staleIds.has(s) || staleIds.has(t)) return '4,6';
-      if (d.type === 'inferred') return '3,5';
-      if (d.type === 'multihop') return '6,3';
+      if (d.type === 'inferred') return '1,4';
+      if (d.type === 'multihop') return '10,6';
       if (d.type === 'unknown') return '2,6';
       // 'direct' links are solid by default (no route-type pattern to
       // show) — free to use a dash pattern here to mark HaLow vs solid
@@ -233,9 +252,11 @@ function topoUpdate(data) {
       if (d.type === 'direct' && isHalowIface(d.iface)) return '3,3';
       return null;
     })
+    .attr('stroke-linecap', function(d) { return d.type === 'inferred' ? 'round' : null; })
     .attr('stroke-opacity', function(d) {
       var s = d.source.id || d.source, t = d.target.id || d.target;
       if (staleIds.has(s) || staleIds.has(t)) return 0.35;
+      if (d.type === 'multihop') return 0.6;
       return 1;
     })
     .attr('filter', function(d) {
@@ -427,6 +448,10 @@ function topoUpdate(data) {
       }
       if (!d.is_me && d.best_link && d.best_link.iface) {
         html += '<div class="tt-row"><span class="tt-label">Radio</span>' + (isHalowIface(d.best_link.iface) ? 'HaLow' : 'WiFi') + ' (' + escHtml(d.best_link.iface) + ')</div>';
+      }
+      if (!d.is_me && d.best_link && d.best_link.nexthop && (d.all_macs || []).indexOf(d.best_link.nexthop) === -1) {
+        var via = topoMacHost[d.best_link.nexthop] || d.best_link.nexthop;
+        html += '<div class="tt-row"><span class="tt-label">Route</span>via ' + escHtml(via) + '</div>';
       }
       if (!d.is_me && d.tq != null) html += '<div class="tt-row"><span class="tt-label">TQ</span>' + d.tq + ' (' + tqPct(d.tq) + '%)</div>';
       if (d.hop_count) html += '<div class="tt-row"><span class="tt-label">Hops</span>' + d.hop_count + '</div>';

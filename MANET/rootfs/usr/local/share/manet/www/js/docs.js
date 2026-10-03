@@ -88,7 +88,7 @@ DOCS_TABS.config = [
 '<tr><td>Cancel</td><td>Click <strong>Cancel</strong> to discard unsaved edits.</td></tr>',
 '</tbody></table>',
 '<p>The Config tab exposes these fields: hostname prefix, mesh SSID, mesh key, IPv4 network, regulatory domain, EUD mode, AP SSID, AP key, max EUDs per node, battery monitor, and admin password.</p>',
-'<p>Settings not exposed in the UI (e.g. <code>halow_regulatory_domain</code>) must be set via CLI or direct file edit.</p>',
+'<p>Settings not exposed in the UI must be set via CLI or direct file edit.</p>',
 
 '<h3>CLI Configuration</h3>',
 '<p>The <code>mesh</code> CLI tool and direct file editing provide full access to all settings, including those not available in the UI.</p>',
@@ -117,8 +117,8 @@ DOCS_TABS.config = [
 '<tr><td><code>mesh_ssid</code></td><td>string</td><td>Yes</td><td>SSID for the batman-adv mesh network. All nodes must share the same SSID and key to peer.</td></tr>',
 '<tr><td><code>mesh_key</code></td><td>string (8+ chars)</td><td>Yes</td><td>WPA3-SAE passphrase for mesh authentication.</td></tr>',
 '<tr><td><code>ipv4_network</code></td><td>CIDR (e.g. <code>10.30.2.0/24</code>)</td><td>Yes</td><td>IPv4 subnet for the mesh. Each node auto-assigns a unique IP within this range via mesh-manager.</td></tr>',
-'<tr><td><code>regulatory_domain</code></td><td><code>US</code>, <code>EU</code>, <code>JP</code>, <code>AU</code></td><td>Yes</td><td>WiFi regulatory domain. Sets allowed channels and TX power limits for standard WiFi radios.</td></tr>',
-'<tr><td><code>halow_regulatory_domain</code></td><td><code>US</code>, <code>EU</code>, <code>JP</code>, <code>AU</code></td><td>No</td><td>Regulatory domain for 802.11ah HaLow radios. Controls sub-1GHz channel plan and power limits.</td></tr>',
+'<tr><td><code>regulatory_domain</code></td><td>ISO country code (e.g. <code>US</code>, <code>NL</code>, <code>DE</code>; not <code>EU</code>)</td><td>Yes</td><td>Country for all radios. Wi-Fi uses it directly; HaLow uses the EU plan for EU countries and the same country otherwise. Applies after a reboot.</td></tr>',
+'<tr><td><code>halow_regulatory_domain</code></td><td>derived</td><td>No</td><td>Not a setting: the HaLow plan always follows <code>regulatory_domain</code> (the HaLow driver adopts the Wi-Fi country). Any value in mesh.conf is ignored.</td></tr>',
 '<tr><td><code>halow_bw</code></td><td><code>1MHz</code>, <code>2MHz</code>, <code>4MHz</code>, <code>8MHz</code></td><td>Yes</td><td>HaLow primary channel bandwidth. Narrower bandwidth increases range at the cost of throughput. Controls op_class and channel in wpa_supplicant S1G config.</td></tr>',
 '<tr><td><code>multicast_mode</code></td><td><code>flood</code>, <code>optimized</code></td><td>Yes</td><td>Multicast delivery mode. <strong>flood</strong> (default): sends all multicast to all peers. <strong>optimized</strong>: enables IGMP snooping on br0 for selective delivery.</td></tr>',
 '</tbody></table>',
@@ -139,7 +139,7 @@ DOCS_TABS.config = [
 '<tr><td><code>gateway</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Allow this node to act as a mesh gateway, providing internet access to other nodes.</td></tr>',
 '<tr><td><code>gateway_nat</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Enable NAT masquerade on the upstream interface so mesh traffic can reach the internet.</td></tr>',
 '<tr><td><code>gateway_mss_clamp</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Clamp TCP MSS to prevent fragmentation through the mesh-to-internet path.</td></tr>',
-'<tr><td><code>gateway_bandwidth</code></td><td>string (e.g. <code>10M/10M</code>)</td><td>Yes</td><td>Advertised bandwidth for batman-adv gateway selection. Empty = auto.</td></tr>',
+'<tr><td><code>gateway_bandwidth</code></td><td>string (e.g. <code>10M/10M</code>)</td><td>Yes</td><td>Download/upload bandwidth this gateway announces; nodes pick the gateway with the best mesh path and announced bandwidth. Empty = auto: measured on an Ethernet uplink (5 MB HTTPS test, which also rejects captive portals), else 10/2 Mbit/s. A set value overrides the measurement.</td></tr>',
 '<tr><td><code>dns_servers</code></td><td>comma-separated IPs</td><td>Yes</td><td>Upstream DNS servers written to <code>/etc/resolv.conf</code>. Used by dnsmasq for forwarding EUD queries. Default: <code>8.8.8.8,8.8.4.4</code>. Changing this restarts dnsmasq.</td></tr>',
 '</tbody></table>',
 
@@ -155,6 +155,7 @@ DOCS_TABS.config = [
 '<tr><td><code>update_url</code></td><td>URL string</td><td>Yes</td><td>Base URL for the OTA update server, shared by both channels below. Leave empty to disable OTA entirely.</td></tr>',
 '<tr><td><code>auto_update_overlay</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Apply the SBC overlay (kernel/modules/firmware) update automatically — separate from <code>auto_update</code> and off by default. No rollback if a bad overlay fails to boot; test on one node before enabling fleet-wide. Fetches <code>{url}/{board}-overlay-version.txt</code> and, if newer, <code>{url}/{board}-sbc-overlay.tar.gz</code>. Default: <code>n</code>.</td></tr>',
 '<tr><td><code>auto_update_min_mbps</code></td><td>Number</td><td>Yes</td><td>Minimum current link throughput required for <em>automatic</em> apply (either channel) — below this, availability is still recorded but the node waits rather than downloading. A wired/gateway uplink always passes. Manual "Update Now" and fleet-wide force update bypass this (with a warning shown first). Default: <code>10</code>.</td></tr>',
+'<tr><td><code>update_allow_unsigned</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Every update tarball must come with a valid <code>.sig</code> made with a release key in <code>/usr/local/share/manet/ota-keys/</code>; that is what makes serving updates over plain http (e.g. from a gateway off-grid) safe. <code>y</code> installs packages whose signature is missing or invalid anyway: lab use only. Default: <code>n</code>.</td></tr>',
 '</tbody></table>',
 '<p>When an update is available, a persistent banner appears on this node\'s Settings page with an <strong>Update Now</strong> button — it stays until acted on. Clicking it shows the current link speed against <code>auto_update_min_mbps</code> (with a time/bandwidth warning if it\'s below threshold) before applying, regardless of the <code>auto_update</code>/<code>auto_update_overlay</code> flags. Fleet Control shows the same banner fleet-wide with a <strong>Force Update All Nodes</strong> button, which warns once for the whole fleet and then applies to every node with an update available. See <code>docs/AUTO_UPDATE.md</code> in the repo for the full write-up.</p>',
 
@@ -162,6 +163,8 @@ DOCS_TABS.config = [
 '<table class="docs-table"><thead><tr><th>Key</th><th>Values</th><th>UI</th><th>Description</th></tr></thead><tbody>',
 '<tr><td><code>admin_password</code></td><td>string</td><td>Yes</td><td>Password for admin operations (config staging/activation).</td></tr>',
 '<tr><td><code>require_auth</code></td><td>y / n</td><td>Yes</td><td>Require admin password for write operations. Default: n (disabled).</td></tr>',
+'<tr><td><code>ui_uplink_access</code></td><td>y / n</td><td>Yes</td><td>Allow this node\'s web UI (HTTPS) from its uplink network, e.g. a monitoring workstation on a gateway\'s LAN. Default: n (mesh side only).</td></tr>',
+'<tr><td><code>ssh_uplink_access</code></td><td>y / n</td><td>Yes</td><td>Allow SSH (port 22) from this node\'s uplink network, e.g. lab troubleshooting from the LAN or reaching a node whose mesh side is down. Default: n (mesh side only).</td></tr>',
 '</tbody></table>',
 
 '<h4>Voice</h4>',
@@ -238,7 +241,8 @@ DOCS_TABS.api = [
 '<h3>Authentication</h3>',
 '<table class="docs-table"><thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead><tbody>',
 '<tr><td>GET</td><td><code>/api/auth/status</code></td><td>Whether auth is required and whether the current session is authenticated</td></tr>',
-'<tr><td>POST</td><td><code>/api/perf-auth</code></td><td>Submit admin password, receive session cookie for authenticated access</td></tr>',
+'<tr><td>POST</td><td><code>/api/perf-auth</code></td><td>Submit admin password, receive a session cookie valid for 48 hours on this node. Five failed attempts per client (thirty per node) within a minute return 429</td></tr>',
+'<tr><td>POST</td><td><code>/api/logout</code></td><td>End the current session; other devices stay logged in</td></tr>',
 '</tbody></table>',
 
 '<h3>Performance Testing</h3>',
@@ -278,7 +282,7 @@ DOCS_TABS.api = [
 '<tr><td>POST</td><td><code>/api/applets/{name}/config</code></td><td>Auth. Write key=value pairs to the applet\'s declared config file</td></tr>',
 '<tr><td>GET</td><td><code>/api/applets/{name}/config-page</code></td><td>Serve the applet\'s config HTML page</td></tr>',
 '<tr><td>GET</td><td><code>/api/applets/{name}/frontend[/path]</code></td><td>Serve applet frontend static files (index.html, JS, CSS)</td></tr>',
-'<tr><td>*</td><td><code>/api/applets/{name}/proxy[/path]</code></td><td>Reverse proxy to the applet backend (HTTP and WebSocket). Supports GET, POST, DELETE.</td></tr>',
+'<tr><td>*</td><td><code>/api/applets/{name}/proxy[/path]</code></td><td>Reverse proxy to the applet backend (HTTP and WebSocket). Supports GET, POST, DELETE. Requires login unless the applet sets <code>backend.public: true</code> in applet.json (also gates its <code>/logs</code> and <code>/config</code> reads).</td></tr>',
 '<tr><td>DELETE</td><td><code>/api/applets/{name}</code></td><td>Auth. Uninstall — stops service, runs post-remove hook, removes event hooks and files, reloads systemd</td></tr>',
 '</tbody></table>',
 
@@ -398,7 +402,7 @@ DOCS_TABS.services = [
 
 DOCS_TABS.cli = [
 '<h2>MESH CLI</h2>',
-'<p>The <code>mesh</code> command-line tool is installed at <code>/usr/local/bin/mesh</code>. It talks to the local manet-ctrl API and can be used from the Terminal tab, over SSH, or on the console.</p>',
+'<p>The <code>mesh</code> command-line tool is installed at <code>/usr/local/bin/mesh</code>. It talks to the local manet-ctrl API and can be used from the Terminal tab, over SSH, or on the console. Read commands work for any user; write commands (and reading secrets) need root: <code>sudo mesh ...</code>.</p>',
 
 '<h3>Commands</h3>',
 '<table class="docs-table"><thead><tr><th>Command</th><th>Description</th></tr></thead><tbody>',
@@ -411,6 +415,15 @@ DOCS_TABS.cli = [
 '<tr><td><code>mesh radio info</code></td><td>Radio interfaces — driver, channel, TX power, MCS, addresses</td></tr>',
 '<tr><td><code>mesh radio txpower &lt;iface&gt; &lt;dbm&gt;</code></td><td>Set TX power on an interface</td></tr>',
 '<tr><td><code>mesh radio interface &lt;iface&gt; up|down</code></td><td>Bring a radio interface up or down</td></tr>',
+'<tr><td><code>mesh radio channels [halow|5ghz]</code></td><td>Legal channels for this node\'s region</td></tr>',
+'<tr><td><code>mesh radio halow &lt;channel|auto&gt; [bw]</code></td><td>Set the HaLow channel (and bandwidth)</td></tr>',
+'<tr><td><code>mesh radio 5ghz &lt;channel|default&gt;</code></td><td>Pin the 5GHz mesh channel</td></tr>',
+'<tr><td><code>mesh password admin|mesh-key|ap-key</code></td><td>Change a password (prompted). Admin password and mesh key are staged fleet-wide</td></tr>',
+'<tr><td><code>mesh fleet status|set|activate|cancel</code></td><td>Stage settings (<code>key=value</code>) for every node, check acknowledgements, apply</td></tr>',
+'<tr><td><code>mesh update status|now</code></td><td>OTA update state; apply software/overlay now</td></tr>',
+'<tr><td><code>mesh service start|stop|restart &lt;name&gt;</code></td><td>Control a service</td></tr>',
+'<tr><td><code>mesh hostname &lt;prefix&gt;</code></td><td>Set the hostname prefix</td></tr>',
+'<tr><td><code>mesh version</code></td><td>Software release and manet-ctrl version</td></tr>',
 '<tr><td><code>mesh gps</code></td><td>GPS fix status and coordinates</td></tr>',
 '<tr><td><code>mesh services</code></td><td>List all services with status, category, enabled state</td></tr>',
 '<tr><td><code>mesh perf ping &lt;target&gt;</code></td><td>Ping a peer node (10 packets)</td></tr>',

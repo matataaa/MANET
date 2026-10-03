@@ -78,7 +78,10 @@ if [ -x /usr/local/bin/manet-provision-status.sh ]; then
     ln -sf /usr/local/bin/manet-provision-status.sh /etc/update-motd.d/50-manet-provision
 fi
 
-# This loop reads the stored setup variables to set the current config
+# This loop reads the stored setup variables to set the current config.
+# mesh.conf holds the mesh key and passwords, and set -x would copy every
+# value into /var/log/radio-setup.log, so tracing is off while they're handled.
+{ set +x; } 2>/dev/null
 while IFS= read -r line; do
     # Skip empty lines
     if [[ -z "$line" ]]; then
@@ -98,6 +101,7 @@ while IFS= read -r line; do
         echo "Checking config: $sanitized_key"
     fi
 done < <(cat /etc/mesh.conf)
+set -x
 
 # Look up the current physical interface name for a logical name.
 # During provisioning, logical names (wlan0/1/2) may not yet match kernel names.
@@ -155,6 +159,75 @@ has_morse_netdev() {
     return 1
 }
 
+uses_eu_halow_region() {
+    case "$1" in
+        AT|BE|BG|HR|CY|CZ|DK|EE|FI|FR|DE|GR|HU|IE|IT|LV|LT|LU|MT|NL|PL|PT|RO|SK|SI|ES|SE|GB|CH|NO)
+            return 0 ;;
+    esac
+    return 1
+}
+
+# HaLow plan for country $1: "EU" for an EU-plan country, otherwise the
+# country itself. HaLow always follows regulatory_domain (as upstream does):
+# the Morse driver adopts the kernel's Wi-Fi country whenever it has its own
+# table for it, so a separate HaLow region cannot be relied on. Any
+# halow_regulatory_domain in mesh.conf is ignored. Must match
+# resolveHalowDomain in manet-ctrl (api.go).
+resolve_halow_domain() {
+    if uses_eu_halow_region "$1"; then echo "EU"; else echo "$1"; fi
+}
+
+# Whether HaLow duty cycling is turned off. halow_duty_cycle=off/auto from
+# mesh.conf decides; unset keeps the old rule: off on the EU plan (whose
+# Morse regulatory rule would otherwise cap airtime at 10%/2.8%), the
+# driver's automatic regional value elsewhere (100% for US).
+halow_duty_cycle_off() {
+    case "${halow_duty_cycle:-}" in
+        off) return 0 ;;
+        auto) return 1 ;;
+        *) [[ "$1" == "EU" ]] ;;
+    esac
+}
+
+# Write /etc/modprobe.d/morse.conf for HaLow domain $1. Used by both the
+# pre-modprobe pass and the late pass, so the late one can no longer drop
+# the SPI power options the first one wrote. manet-ctrl (region.go) edits
+# the country, duty-cycle and tx_max_power_mbm lines after provisioning;
+# keep the line formats in sync with it.
+write_morse_conf() {
+    local domain="$1" bcf="" spi_clock="" usb=0 conf=/etc/modprobe.d/morse.conf
+    has_usb_morse_device && usb=1
+    # Preserve hardware-specific SPI options written by firstrun. USB MM81xx
+    # adapters auto-select BCF by board type; forcing an SPI BCF breaks probe.
+    if [ -f "$conf" ] && [ "$usb" -eq 0 ]; then
+        bcf=$(grep -oP '(?<=bcf=)\S+' "$conf" | head -1)
+        spi_clock=$(grep -oP '(?<=spi_clock_speed=)\S+' "$conf" | head -1)
+    fi
+    if [ "$usb" -eq 0 ]; then
+        bcf="${bcf:-bcf_fgh100mhaamd.bin}"
+        spi_clock="${spi_clock:-15000000}"
+    fi
+    {
+        echo "options morse enable_mcast_whitelist=0 enable_mcast_rate_control=1"
+        echo "options morse country=$domain"
+        # Field nodes run mains/battery-banked: disable every chip power-save
+        # mode (params verified on the SPI MM6108 v1.16.4 driver only; the
+        # USB MM81xx param set differs).
+        [ "$usb" -eq 0 ] && echo "options morse enable_ps=0 enable_dynamic_ps_offload=N enable_twt=N"
+        # Driver TX cap: halow_txpower_dbm when set, else the 24 dBm design
+        # target on SPI and the driver default (22 dBm) on USB. The Morse
+        # regulatory table and the BCF still cap below this.
+        if [[ "${halow_txpower_dbm:-}" =~ ^[0-9]+$ ]]; then
+            echo "options morse tx_max_power_mbm=${halow_txpower_dbm}00"
+        elif [ "$usb" -eq 0 ]; then
+            echo "options morse tx_max_power_mbm=2400"
+        fi
+        [ -n "$bcf" ] && echo "options morse bcf=$bcf"
+        [ -n "$spi_clock" ] && echo "options morse spi_clock_speed=$spi_clock"
+        halow_duty_cycle_off "$domain" && echo "options morse enable_auto_duty_cycle=0 enable_auto_mpsw=0"
+    } > "$conf"
+}
+
 echo "Installing morse driver"
 mkdir -p /lib/modules/$(uname -r)/extra/morse
 
@@ -182,39 +255,10 @@ chmod +x /usr/local/bin/*
 # board-specific SPI BCF options that break USB MM81xx probe.
 EARLY_REGULATORY_DOMAIN=$(grep "^regulatory_domain=" /etc/mesh.conf 2>/dev/null | cut -d'=' -f2)
 EARLY_REGULATORY_DOMAIN=${EARLY_REGULATORY_DOMAIN:-US}
-EARLY_HALOW_REGULATORY_DOMAIN=$(grep "^halow_regulatory_domain=" /etc/mesh.conf 2>/dev/null | cut -d'=' -f2)
-EARLY_HALOW_REGULATORY_DOMAIN=${EARLY_HALOW_REGULATORY_DOMAIN:-$EARLY_REGULATORY_DOMAIN}
-case "$EARLY_REGULATORY_DOMAIN" in
-    AT|BE|BG|HR|CY|CZ|DK|EE|FI|FR|DE|GR|HU|IE|IT|LV|LT|LU|MT|NL|PL|PT|RO|SK|SI|ES|SE|GB|CH|NO)
-        EARLY_HALOW_REGULATORY_DOMAIN="EU"
-        ;;
-esac
+EARLY_HALOW_REGULATORY_DOMAIN=$(resolve_halow_domain "$EARLY_REGULATORY_DOMAIN")
 
 echo "options cfg80211 ieee80211_regdom=$EARLY_REGULATORY_DOMAIN" > /etc/modprobe.d/cfg80211.conf
-EARLY_MORSE_BCF=""
-EARLY_MORSE_SPI_CLOCK=""
-if [ -f /etc/modprobe.d/morse.conf ] && ! has_usb_morse_device; then
-    EARLY_MORSE_BCF=$(grep -oP '(?<=bcf=)\S+' /etc/modprobe.d/morse.conf | head -1)
-    EARLY_MORSE_SPI_CLOCK=$(grep -oP '(?<=spi_clock_speed=)\S+' /etc/modprobe.d/morse.conf | head -1)
-fi
-echo "options morse enable_mcast_whitelist=0 enable_mcast_rate_control=1" > /etc/modprobe.d/morse.conf
-echo "options morse country=$EARLY_HALOW_REGULATORY_DOMAIN" >> /etc/modprobe.d/morse.conf
-# Field nodes run mains/battery-banked: disable every chip power-save mode and
-# lift the driver TX cap to the 24 dBm design target (params verified on the
-# SPI MM6108 v1.16.4 driver only; USB MM81xx param set differs).
-if ! has_usb_morse_device; then
-    echo "options morse enable_ps=0 enable_dynamic_ps_offload=N enable_auto_duty_cycle=N enable_twt=N" >> /etc/modprobe.d/morse.conf
-    echo "options morse tx_max_power_mbm=2400" >> /etc/modprobe.d/morse.conf
-fi
-if [[ -z "$EARLY_MORSE_BCF" ]] && ! has_usb_morse_device; then
-    EARLY_MORSE_BCF="bcf_fgh100mhaamd.bin"
-    EARLY_MORSE_SPI_CLOCK="${EARLY_MORSE_SPI_CLOCK:-1500000}"
-fi
-[[ -n "$EARLY_MORSE_BCF" ]] && echo "options morse bcf=$EARLY_MORSE_BCF" >> /etc/modprobe.d/morse.conf
-[[ -n "$EARLY_MORSE_SPI_CLOCK" ]] && echo "options morse spi_clock_speed=$EARLY_MORSE_SPI_CLOCK" >> /etc/modprobe.d/morse.conf
-if [[ "$EARLY_HALOW_REGULATORY_DOMAIN" == "EU" ]]; then
-    echo "options morse enable_auto_duty_cycle=0 enable_auto_mpsw=0" >> /etc/modprobe.d/morse.conf
-fi
+write_morse_conf "$EARLY_HALOW_REGULATORY_DOMAIN"
 
 if has_usb_morse_device && ! has_morse_netdev; then
     modprobe -r morse 2>/dev/null || true
@@ -228,9 +272,10 @@ modprobe morse
 
 echo "Applying settings..."
 sleep 0.5
+{ set +x; } 2>/dev/null   # mesh key and passwords follow: keep them out of the trace log
 if [[ -n "$mesh_key" ]]; then
     KEY=$mesh_key
-    echo " > Using SAE Key: $KEY"
+    echo " > Using the SAE key from mesh.conf"
     sleep 0.5
 fi
 
@@ -266,6 +311,7 @@ if [[ -n "$new_user_password" ]]; then
 elif [[ -n "$radio_password" ]]; then
     echo "radio:$radio_password" | chpasswd
 fi
+set -x
 passwd -u radio 2>/dev/null || true
 mkdir -p /home/radio/.ssh /etc/ssh/sshd_config.d
 chmod 700 /home/radio/.ssh
@@ -388,8 +434,6 @@ EOF
 
 REGULATORY_DOMAIN=$(grep "^regulatory_domain=" /etc/mesh.conf 2>/dev/null | cut -d'=' -f2)
 REGULATORY_DOMAIN=${REGULATORY_DOMAIN:-US}  # Default to US if not found
-HALOW_REGULATORY_DOMAIN=$(grep "^halow_regulatory_domain=" /etc/mesh.conf 2>/dev/null | cut -d'=' -f2)
-HALOW_REGULATORY_DOMAIN=${HALOW_REGULATORY_DOMAIN:-$REGULATORY_DOMAIN}
 REG=$REGULATORY_DOMAIN
 
 # 5GHz mesh channel width. Default 20MHz (safe/deterministic — see ACS.md
@@ -431,22 +475,7 @@ fi
 
 echo REGDOMAIN=$REGULATORY_DOMAIN > /etc/default/crda
 
-uses_eu_halow_region() {
-    local domain="$1"
-
-    case "$domain" in
-        AT|BE|BG|HR|CY|CZ|DK|EE|FI|FR|DE|GR|HU|IE|IT|LV|LT|LU|MT|NL|PL|PT|RO|SK|SI|ES|SE|GB|CH|NO)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-if [ -z "$HALOW_REGULATORY_DOMAIN" ] || uses_eu_halow_region "$REGULATORY_DOMAIN"; then
-    HALOW_REGULATORY_DOMAIN="EU"
-fi
+HALOW_REGULATORY_DOMAIN=$(resolve_halow_domain "$REGULATORY_DOMAIN")
 
 # cfg80211 regdomain for the 2.4/5 GHz (mt7915) radios — use the real ISO
 # country code (e.g. HR). The Morse HaLow phy is self-managed and applies
@@ -1168,6 +1197,7 @@ ActivationPolicy=manual
 EOF
 
     # Get configuration from mesh.conf
+    { set +x; } 2>/dev/null   # lan_ap_key follows: keep it out of the trace log
     while IFS= read -r line; do
         [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
         key="${line%%=*}"
@@ -1179,6 +1209,7 @@ EOF
             ipv4_network) IPV4_NETWORK="$value" ;;
         esac
     done < /etc/mesh.conf
+    set -x
 
     # Calculate DHCP pool based on max EUDs
     CALC_OUTPUT=$(manet-ipcalc.sh "$IPV4_NETWORK" 2>/dev/null)
@@ -1468,6 +1499,9 @@ EOF
             S1G_MBCA=0
             ;;
     esac
+    # halow_txpower_dbm replaces the per-bandwidth request (same value as the
+    # tx_max_power_mbm cap write_morse_conf writes).
+    [[ "${halow_txpower_dbm:-}" =~ ^[0-9]+$ ]] && S1G_TXPOWER="${halow_txpower_dbm}00"
 
 cat << EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-s1g.conf
 country="$S1G_COUNTRY"
@@ -1547,30 +1581,7 @@ done
 # === MORSE / HALOW MODULE OPTIONS ===
 # ============================================================================
 echo "options cfg80211 ieee80211_regdom=$CFG80211_REGDOM" > /etc/modprobe.d/cfg80211.conf
-
-# Preserve hardware-specific SPI modprobe options that were written by firstrun.
-# USB MM81xx adapters auto-select BCF by board type; forcing SPI BCF breaks probe.
-MORSE_BCF=""
-MORSE_SPI_CLOCK=""
-if [ -f /etc/modprobe.d/morse.conf ] && ! has_usb_morse_device; then
-    MORSE_BCF=$(grep -oP '(?<=bcf=)\S+' /etc/modprobe.d/morse.conf | head -1)
-    MORSE_SPI_CLOCK=$(grep -oP '(?<=spi_clock_speed=)\S+' /etc/modprobe.d/morse.conf | head -1)
-fi
-
-echo "options morse enable_mcast_whitelist=0 enable_mcast_rate_control=1" > /etc/modprobe.d/morse.conf
-echo "options morse country=$HALOW_REGULATORY_DOMAIN" >> /etc/modprobe.d/morse.conf
-
-if [[ -z "$MORSE_BCF" ]] && ! has_usb_morse_device; then
-    MORSE_BCF="bcf_fgh100mhaamd.bin"
-    MORSE_SPI_CLOCK="${MORSE_SPI_CLOCK:-1500000}"
-fi
-[[ -n "$MORSE_BCF" ]]       && echo "options morse bcf=$MORSE_BCF" >> /etc/modprobe.d/morse.conf
-[[ -n "$MORSE_SPI_CLOCK" ]] && echo "options morse spi_clock_speed=$MORSE_SPI_CLOCK" >> /etc/modprobe.d/morse.conf
-
-
-if [[ "$HALOW_REGULATORY_DOMAIN" == "EU" ]]; then
-    echo "options morse enable_auto_duty_cycle=0 enable_auto_mpsw=0" >> /etc/modprobe.d/morse.conf
-fi
+write_morse_conf "$HALOW_REGULATORY_DOMAIN"
 
 # ============================================================================
 # === SYSTEM SERVICE SETUP ===
@@ -1762,30 +1773,10 @@ systemctl enable node-manager.service
 systemctl daemon-reload
 systemctl enable --now nftables.service
 
-# Install scripts for auto gateway management (skip if source files are gone — already provisioned)
-if [ -d /root/networkd-dispatcher ]; then
-    cp /root/networkd-dispatcher/off /etc/networkd-dispatcher/off.d/50-gateway-disable
-    cp /root/networkd-dispatcher/off /etc/networkd-dispatcher/no-carrier.d/50-gateway-disable
-    cp /root/networkd-dispatcher/off /etc/networkd-dispatcher/degraded.d/50-gateway-disable
-    cp /root/networkd-dispatcher/carrier /etc/networkd-dispatcher/carrier.d/50-ethernet-detect
-fi
+# networkd-dispatcher hooks and ethernet-autodetect.service ship in the rootfs
+# overlay (see rootfs/etc/networkd-dispatcher/README.md); only fix modes here.
 chmod -R 755 /etc/networkd-dispatcher
 
-cat <<- EOF > /etc/systemd/system/ethernet-autodetect.service
-[Unit]
-Description=MANET Ethernet Hotplug Auto Detection
-After=systemd-networkd.service batman-enslave.service
-Wants=systemd-networkd.service
-ConditionPathExists=/usr/local/bin/ethernet-autodetect.sh
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/ethernet-autodetect.sh --hotplug
-TimeoutStartSec=45
-
-[Install]
-WantedBy=multi-user.target
-EOF
 systemctl enable ethernet-autodetect.service
 
 [ -f /root/regulatory.db ] && cp /root/regulatory.db /lib/firmware/

@@ -1113,6 +1113,12 @@ func handleFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	localPath := filepath.Join(filesDir(), name)
 	if _, err := os.Stat(localPath); err == nil {
+		// Anyone on the mesh can upload, and manet-ctrl serves this on the
+		// node UI's own origin: an HTML/SVG upload opened by a logged-in
+		// admin would otherwise run script with their session. sandbox
+		// still lets images, video and text display.
+		w.Header().Set("Content-Security-Policy", "sandbox")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		http.ServeFile(w, r, localPath)
 		return
 	}
