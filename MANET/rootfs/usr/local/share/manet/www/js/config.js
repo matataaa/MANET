@@ -282,6 +282,7 @@ function configRenderUpdateBanner(cfg) {
     html += '<div class="fleet-actions">';
     if (swAvail) html += '<button class="fleet-btn fleet-btn-primary" id="cfg-update-now-sw-btn">Update MANET</button>';
     if (ovAvail) html += '<button class="fleet-btn fleet-btn-danger" id="cfg-update-now-ov-btn">Update Kernel/Drivers</button>';
+    if (swAvail && ovAvail) html += '<button class="fleet-btn fleet-btn-danger" id="cfg-update-now-both-btn">Update Both</button>';
     html += '</div>';
   }
   html += '</div>';
@@ -317,6 +318,8 @@ function configWireUpdateButtons() {
   if (swBtn) swBtn.addEventListener('click', function() { configUpdateNow('software', swBtn); });
   var ovBtn = document.getElementById('cfg-update-now-ov-btn');
   if (ovBtn) ovBtn.addEventListener('click', function() { configUpdateNow('overlay', ovBtn); });
+  var bothBtn = document.getElementById('cfg-update-now-both-btn');
+  if (bothBtn) bothBtn.addEventListener('click', function() { configUpdateNow('both', bothBtn); });
   var rebootBtn = document.getElementById('cfg-reboot-now-btn');
   if (rebootBtn) rebootBtn.addEventListener('click', function() { configRebootNow(rebootBtn); });
 }
@@ -446,7 +449,7 @@ function configConfirm(msg, opts, onConfirm) {
 
 function configUpdateNow(channel, btn) {
   var st = configUpdateStatus || {};
-  var channelLabel = channel === 'overlay' ? 'Kernel/Drivers' : 'MANET';
+  var channelLabel = channel === 'overlay' ? 'Kernel/Drivers' : channel === 'both' ? 'MANET + Kernel/Drivers' : 'MANET';
 
   var mbps = st.uplink_mbps || 0;
   var uplinkType = st.uplink_type || 'unknown';
@@ -454,7 +457,7 @@ function configUpdateNow(channel, btn) {
   var belowThreshold = uplinkType !== 'wired' && mbps < minMbps;
 
   var msg = 'Update ' + channelLabel + ' now? This downloads the update and reboots this node once applied.';
-  if (channel === 'overlay') {
+  if (channel !== 'software') {
     msg += ' The Kernel/Drivers channel updates kernel/firmware — there is no rollback if it fails to boot.';
   }
   if (belowThreshold) {
@@ -463,7 +466,7 @@ function configUpdateNow(channel, btn) {
       'Consider using a higher-bandwidth connection (Ethernet, WiFi mesh, or 8MHz HaLow) if available. ' + msg;
   }
 
-  configConfirm(msg, { label: 'Update ' + channelLabel, danger: belowThreshold || channel === 'overlay' }, async function() {
+  configConfirm(msg, { label: 'Update ' + channelLabel, danger: belowThreshold || channel !== 'software' }, async function() {
     // Disable immediately — before the request even resolves — so a
     // second click during the network round-trip can't fire a duplicate
     // trigger. The status poll below takes over showing real progress
