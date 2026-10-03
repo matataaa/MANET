@@ -82,17 +82,16 @@ machine that already has one:
 packaging/fetch-cm4-overlay.sh <path-to-cm4-install.tar.gz>
 ```
 
-The original upstream source is
-`https://www.colorado-governor.com/manet/cm4-install.tar.gz` — an externally
-hosted tarball not published in the very-srs/MANET GitHub repo. Fetching from
-it is opt-in via `packaging/fetch-cm4-overlay.sh --from-url`; the script never
-reaches the network unless you ask it to. It writes a `Bundled version` line into the generated
-`kernel-work/packages/cm4-sbc-overlay/VENDORED_FROM.md`. Copy that value
-verbatim into `MANET/rootfs/etc/manet_version.txt`, then rebuild the tools
-tarball. That file has no lightweight version endpoint of its own (the
-version only lives inside the tarball) — to check for an update without
-downloading the full ~46MB, compare the current `curl -sI` `Last-Modified`
-header against the value already recorded in `VENDORED_FROM.md`.
+Upstream publishes `cm4-install.tar.gz` and its `.sha256` on the
+very-srs/MANET GitHub releases (`gh release list -R very-srs/MANET`); the
+older `colorado-governor.com` host is no longer used. Fetching is opt-in via
+`UPSTREAM_TAG=<tag> packaging/fetch-cm4-overlay.sh --from-url`, which checks
+the published checksum; the script never reaches the network unless you ask
+it to. Set `OVERLAY_DIR` to vendor somewhere other than
+`kernel-work/packages/cm4-sbc-overlay` (e.g. manet-releases'
+`inputs/cm4-sbc-overlay`). It writes a `Bundled version` line into the
+generated `VENDORED_FROM.md`. Copy that value verbatim into
+`MANET/rootfs/etc/manet_version.txt`, then rebuild the tools tarball.
 
 **RPi5**: the overlay comes from the `rpi5-sbc-overlay-current` GitHub
 release asset consumed by `.github/workflows/rpi5-release.yml`. There is no
