@@ -473,7 +473,7 @@ function configUpdateNow(channel, btn) {
     // once the daemon actually starts working.
     if (btn) btn.disabled = true;
     try {
-      var r = await fetch(configBaseUrl() + '/api/admin/update-now', {
+      var r = await authFetch(configBaseUrl() + '/api/admin/update-now', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channel: channel })

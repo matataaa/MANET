@@ -469,7 +469,7 @@ function fleetUpdateSelected(channel, btn) {
     btn.disabled = true;
     var results = await Promise.all(nodes.map(function(n) {
       var base = (LOCAL_DATA && n.ip === LOCAL_DATA.ip) ? '' : '/api/peer/' + n.ip;
-      return fetch(base + '/api/admin/update-now', {
+      return authFetch(base + '/api/admin/update-now', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channel: channel })
@@ -494,7 +494,7 @@ function fleetUpdateSelected(channel, btn) {
 async function fleetCheckUpdates(btn) {
   btn.disabled = true;
   try {
-    var r = await fetch('/api/admin/force-update', {
+    var r = await authFetch('/api/admin/force-update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel: 'check' })
@@ -536,7 +536,7 @@ function fleetForceUpdate(channel, btn) {
     // progress (via status.phase) as soon as it lands.
     btn.disabled = true;
     try {
-      var r = await fetch('/api/admin/force-update', {
+      var r = await authFetch('/api/admin/force-update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channel: channel })
