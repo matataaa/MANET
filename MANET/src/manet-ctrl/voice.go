@@ -321,9 +321,8 @@ func apiVoiceChannels(w http.ResponseWriter, r *http.Request) {
 		voiceGetChannels(w)
 		return
 	}
-	if !checkAuth(w, r) {
-		return
-	}
+	// No login: picking the talk/listen channel is an EUD user action
+	// (the Android app's channel picker), like keying PTT in apiVoice.
 	voiceSetChannels(w, r)
 }
 
