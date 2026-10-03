@@ -55,8 +55,8 @@ git fetch upstream
 
 ## Last reviewed
 
-Upstream commit reviewed up to: `1d66e0b` (2026-09-24) — "Report direct LED
-neighbors and tidy project wording"
+Upstream commit reviewed up to: `fcd02c5` (2026-10-03) — "Describe gateway
+choice as fastest reachable internet" (release 0.559)
 
 **Note (2026-09-26):** upstream force-pushed `main` between the 2026-09-06
 pass and this one — `git fetch upstream` showed a *forced-update* in the
@@ -328,6 +328,56 @@ voice" removed, US spelling, and `packaging/` dropped from git tracking
 entirely as "developer tooling." None of this is fork-relevant; our
 `provisioning/`, `packaging/`, and doc layout are independent and already
 serve the same purpose.
+
+### 2026-10-01 pass (covers `1d66e0b..299757f`, releases 0.550–0.556)
+
+Fast-forward, no force-push. Commit bodies are empty, so upstream's
+`docs/node-tools-internals.md` diff served as the changelog. Four real gaps
+in the fork, all since handled:
+1. `manet-ctrl` session cookie was a deterministic hash of the password
+   (no expiry, no logout, no rate limit). Fixed: mattronix/MANET#43.
+2. No HTTP body/header limits. Fixed: mattronix/MANET#44.
+3. `ethernet-autodetect.sh` treated "no DHCP lease in 20s" as a wired EUD,
+   bridging the mesh into a foreign LAN with rogue DHCP. Superseded by the
+   Ethernet port ownership redesign (mattronix/MANET#49).
+4. `applyWPAConfig` expanded `$` in SSID/key replacements. Fixed:
+   mattronix/MANET#42.
+
+Found alongside: tcp/443 UI reachable mesh-wide (fixed, `ui_uplink_access`)
+and `/api/peer` as an open proxy (fixed, mattronix/MANET#48).
+
+### 2026-10-03 pass (covers `299757f..fcd02c5`, releases 0.557–0.559)
+
+Fast-forward, no force-push. Three gaps in the fork:
+1. **Secrets in trace logs (fixed, branch `fix/trace-secrets-sae-watchdog`).**
+   `radio-setup.sh` traces (`set -x`) into `/var/log/radio-setup.log`; its
+   `mesh.conf` loop exported every value under trace (mesh key, admin and
+   user passwords, LAN AP key) and it echoed the SAE key outright.
+   `firstrun.sh.template` traced the radio password and the `mesh.conf`
+   writes into `/boot/firmware/{firstrun,provision}.log`, readable by anyone
+   holding the card. Same fix as upstream 0.558: tracing off around those
+   blocks.
+2. **`sae-watchdog.sh` restart loop (fixed, same branch).** With no enabled
+   mesh interface it ran `exit 0`; `Restart=always` + `RestartSec=5` reran it
+   every 5 s and each start pulled in `batman-enslave` (`Wants=`). Now waits
+   and rechecks every 15 s, as upstream 0.558 does.
+3. **Gateway choice follows batman's pick (open, needs design).**
+   `gateway-manager`'s `pollClient` routes to batman's `*` gateway, which
+   switches on one reading at a 5 Mbit/s margin, never falls back when that
+   gateway stops answering, and sees every gateway at the default 10/2
+   unless `gateway_bandwidth` is set. Upstream 0.559 scores
+   min(path throughput, announced bandwidth), switches only for ≥1.5× and
+   +2 Mbit/s sustained 60 s with a 5-minute hold, fails over after two
+   missed pings, and measures Ethernet uplinks with a 5 MB HTTPS download
+   (which also rejects captive portals). Worth porting to the Go
+   gateway-manager, but as its own feature.
+
+**Already covered or N/A:** EU HaLow 1 MHz only (fork's `config.js`
+already); runtime region apply (fork's own PR #50); `node-manager.sh`
+symlink selector (fork's Go `node-manager` re-reads `acs`); the shared
+`mesh-service-election.py` (fork has no MediaMTX/Mumble elections); 30 dBm
+mesh power (relies on upstream's kernel 6.18 driver ceiling removal);
+Python→jq cleanups; flasher automount hold (desktop-only, low priority).
 
 Update this line after each review pass so `git log upstream/main --oneline
 <last-reviewed-sha>..upstream/main` shows only what's new.

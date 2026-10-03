@@ -37,7 +37,9 @@ systemctl restart systemd-journald
 if ! id -u radio > /dev/null 2>&1; then
 	echo "Creating user 'radio'..."
 	useradd -m -s /bin/bash -G sudo,adm,dialout,cdrom,audio,video,plugdev,games,users,input,netdev,gpio,i2c,spi radio
+	{ set +x; } 2>/dev/null   # password follows: keep it out of the trace log
 	echo "radio:__RADIO_PW__" | chpasswd
+	set -x
 
 	# Set up SSH directory
 	mkdir -p /home/radio/.ssh
@@ -717,6 +719,9 @@ systemctl enable systemd-resolved
 
 
 #write out the config selections for future use
+# mesh_key, lan_ap_key and admin_password follow, and provision.log sits on
+# the FAT boot partition, readable by anyone holding the card: no tracing.
+{ set +x; } 2>/dev/null
 echo "mesh_key=__MESH_SAE_KEY__" > /etc/mesh.conf
 echo "mesh_ssid=__MESH_SSID__" >> /etc/mesh.conf
 echo "regulatory_domain=__REGULATORY_DOMAIN__" >> /etc/mesh.conf
@@ -753,6 +758,7 @@ echo "battery_monitor=y" >> /etc/mesh.conf
 # provisioner sets admin_password (generated when left blank); an empty one
 # leaves the node open regardless, see sessionAuthState in manet-ctrl.
 echo "require_auth=y" >> /etc/mesh.conf
+set -x
 
 
 # Disable the current script so it won't run again at next boot
