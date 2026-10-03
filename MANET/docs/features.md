@@ -124,10 +124,19 @@
 - `mesh radio info` — radio interfaces with driver, channel, TX power, MCS
 - `mesh radio txpower <iface> <dbm>` — set TX power on an interface
 - `mesh radio interface <iface> up|down` — bring a radio interface up or down
+- `mesh radio channels [halow|5ghz]` — legal channels for this node's region
+- `mesh radio halow <channel|auto> [bw]` / `mesh radio 5ghz <channel|default>` — set the HaLow / 5GHz mesh channel
+- `mesh password admin|mesh-key|ap-key` — change a password (prompted; admin and mesh key are staged fleet-wide)
+- `mesh fleet status|set|activate|cancel` — stage and apply settings across the whole fleet
+- `mesh update status|now` — OTA update state, apply now
+- `mesh service start|stop|restart <name>` — control a service
+- `mesh hostname <prefix>`, `mesh version`
 - `mesh gps` — GPS fix status and coordinates
 - `mesh services` — systemd service listing with status and category
 - `mesh perf ping <target>` — ping a peer node
 - `mesh reboot` — reboot the node
+
+Read commands work for any user. Write commands (and reading secrets) need root, `sudo mesh ...`: they authenticate with a token manet-ctrl keeps in the root-only `/run/manet-ctrl/cli-token`, so they work on nodes with `require_auth=y` without a password.
 
 ## Hardware Support
 

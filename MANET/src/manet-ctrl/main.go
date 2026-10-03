@@ -626,6 +626,9 @@ func main() {
 	// Static files (SPA fallback)
 	mux.HandleFunc("/", serveStatic(*webRoot))
 
+	if err := initCLIToken(); err != nil {
+		log.Printf("mesh CLI token: %v (CLI write commands will be refused)", err)
+	}
 	voiceInitChannels()
 	go fleetConfigWatcher()
 	go uiFirewallLoop()

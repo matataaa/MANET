@@ -2149,7 +2149,7 @@ func isAuthed(r *http.Request) bool {
 // proxy on behalf of a user logged in there.
 func authState(r *http.Request) (required, authenticated bool) {
 	required, authenticated = sessionAuthState(r)
-	if required && !authenticated && proxiedAPIRequestAuthenticated(r) {
+	if required && !authenticated && (proxiedAPIRequestAuthenticated(r) || cliTokenAuthenticated(r)) {
 		authenticated = true
 	}
 	return required, authenticated
