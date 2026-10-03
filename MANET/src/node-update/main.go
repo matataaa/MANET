@@ -109,11 +109,15 @@ func main() {
 				timer.Reset(defaultInterval)
 			case syscall.SIGUSR1:
 				t := readAndClearTrigger()
-				if !t.software && !t.overlay {
+				if !t.software && !t.overlay && !t.checkOnly {
 					log.Println("SIGUSR1: no trigger file, ignoring")
 					continue
 				}
-				log.Printf("SIGUSR1: manual update requested (software=%v overlay=%v)", t.software, t.overlay)
+				if t.checkOnly {
+					log.Println("SIGUSR1: update check requested")
+				} else {
+					log.Printf("SIGUSR1: manual update requested (software=%v overlay=%v)", t.software, t.overlay)
+				}
 				runChecks(board, t)
 				timer.Reset(defaultInterval)
 			default:
@@ -130,6 +134,10 @@ func main() {
 type trigger struct {
 	software bool
 	overlay  bool
+	// checkOnly re-detects both channels now (the UI's "Check for
+	// Updates"): no SIGHUP cooldown, and nothing is applied, not even by
+	// the auto_update flags.
+	checkOnly bool
 }
 
 func readAndClearTrigger() trigger {
@@ -145,6 +153,8 @@ func readAndClearTrigger() trigger {
 		return trigger{overlay: true}
 	case "both":
 		return trigger{software: true, overlay: true}
+	case "check":
+		return trigger{checkOnly: true}
 	}
 	return trigger{}
 }
@@ -214,6 +224,9 @@ func runChecks(board string, manual trigger) {
 	}
 
 	writeStatus(status)
+	if manual.checkOnly {
+		return
+	}
 
 	autoUpdate := isAffirmative(confValue("auto_update"), true)
 	autoUpdateOverlay := isAffirmative(confValue("auto_update_overlay"), false)

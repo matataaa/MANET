@@ -452,34 +452,35 @@ func parseAlfredBest(out []byte, myMAC, slot, tsField, password, meshSSID string
 // so the two package schemas never collide, sealed the same way slot 70 is
 // (see fleetSeal's slot-bound AAD — a slot 70 envelope can't be replayed
 // here and vice versa).
-func broadcastUpdatePackage(channel string) bool {
+func broadcastUpdatePackage(channel string) (triggeredAt int64, ok bool) {
 	conf := loadKVFile(MeshConfFile)
 	password := conf["admin_password"]
 	if password == "" {
 		log.Printf("fleet: refusing to broadcast slot 71 update trigger, admin_password is empty")
-		return false
+		return 0, false
 	}
+	triggeredAt = time.Now().Unix()
 	pkg := map[string]interface{}{
 		"channel":      channel,
-		"triggered_at": time.Now().Unix(),
+		"triggered_at": triggeredAt,
 	}
 	data, err := json.Marshal(pkg)
 	if err != nil {
 		log.Printf("fleet: failed to marshal update package: %v", err)
-		return false
+		return 0, false
 	}
 	envelope, err := fleetSeal("71", data, password, conf["mesh_ssid"])
 	if err != nil {
 		log.Printf("fleet: failed to seal update package: %v", err)
-		return false
+		return 0, false
 	}
 	cmd := exec.Command("alfred", "-s", "71")
 	cmd.Stdin = strings.NewReader(string(envelope))
 	if err := cmd.Run(); err != nil {
 		log.Printf("fleet: alfred -s 71 failed: %v", err)
-		return false
+		return 0, false
 	}
-	return true
+	return triggeredAt, true
 }
 
 func fleetPollUpdateAlfred() {
@@ -511,7 +512,7 @@ func fleetProcessUpdatePackage(data []byte) {
 	}
 	triggeredAt, _ := pkg["triggered_at"].(float64)
 	channel, _ := pkg["channel"].(string)
-	if triggeredAt <= 0 || (channel != "software" && channel != "overlay" && channel != "both") {
+	if triggeredAt <= 0 || !validUpdateChannel(channel) {
 		return
 	}
 
@@ -521,12 +522,8 @@ func fleetProcessUpdatePackage(data []byte) {
 	}
 
 	log.Printf("fleet: update trigger received (channel=%s, triggered_at=%d)", channel, int64(triggeredAt))
-	if err := os.WriteFile(UpdateTriggerFile, []byte(channel), 0644); err != nil {
-		log.Printf("fleet: failed to write update trigger: %v", err)
-		return
-	}
-	if _, err := runCmd(5*time.Second, "pkill", "-USR1", "-x", "node-update"); err != nil {
-		log.Printf("fleet: failed to signal node-update: %v", err)
+	if err := triggerLocalUpdate(channel); err != nil {
+		log.Printf("fleet: update trigger: %v", err)
 		return
 	}
 	// FleetUpdateAckFile is this node's persistent (non-tmpfs, see config.go)

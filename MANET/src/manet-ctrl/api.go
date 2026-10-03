@@ -440,19 +440,39 @@ func apiUpdateStatus(w http.ResponseWriter, r *http.Request) {
 func apiUpdateNow(w http.ResponseWriter, r *http.Request) {
 	body := readBody(r)
 	channel := jsonStr(body, "channel", "")
-	if channel != "software" && channel != "overlay" && channel != "both" {
-		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, or both"})
+	if !validUpdateChannel(channel) {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, both, or check"})
 		return
 	}
-	if err := os.WriteFile(UpdateTriggerFile, []byte(channel), 0644); err != nil {
+	if err := triggerLocalUpdate(channel); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": err.Error()})
 		return
 	}
-	if _, err := runCmd(5*time.Second, "pkill", "-USR1", "-x", "node-update"); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to signal node-update: " + err.Error()})
-		return
-	}
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
+}
+
+// validUpdateChannel accepts the trigger words node-update understands:
+// software, overlay and both apply what is available; check only re-detects
+// (no cooldown, never applies) so the UI shows fresh versions.
+func validUpdateChannel(channel string) bool {
+	switch channel {
+	case "software", "overlay", "both", "check":
+		return true
+	}
+	return false
+}
+
+// triggerLocalUpdate hands channel to this node's node-update: the trigger
+// file its SIGUSR1 handler reads, then the signal (systemctl reload is
+// already SIGHUP, the cooldown-limited periodic recheck).
+func triggerLocalUpdate(channel string) error {
+	if err := os.WriteFile(UpdateTriggerFile, []byte(channel), 0644); err != nil {
+		return err
+	}
+	if _, err := runCmd(5*time.Second, "pkill", "-USR1", "-x", "node-update"); err != nil {
+		return fmt.Errorf("failed to signal node-update: %v", err)
+	}
+	return nil
 }
 
 // apiForceUpdate broadcasts a fleet-wide update trigger — every node picks
@@ -464,13 +484,27 @@ func apiUpdateNow(w http.ResponseWriter, r *http.Request) {
 func apiForceUpdate(w http.ResponseWriter, r *http.Request) {
 	body := readBody(r)
 	channel := jsonStr(body, "channel", "")
-	if channel != "software" && channel != "overlay" && channel != "both" {
-		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, or both"})
+	if !validUpdateChannel(channel) {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, both, or check"})
 		return
 	}
-	if !broadcastUpdatePackage(channel) {
+	triggeredAt, ok := broadcastUpdatePackage(channel)
+	if !ok {
 		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to broadcast update trigger"})
 		return
+	}
+	// Act on it here at once rather than waiting for this node's own copy to
+	// come back through alfred, and ack it so that copy is ignored.
+	// parseAlfredBest's own-entry skip compares bat0's MAC with the source
+	// MAC alfred records (br0's), so it does not catch it. node-update applies
+	// a channel only when it has an update for it, so this is safe on a node
+	// that is already up to date.
+	if err := triggerLocalUpdate(channel); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "broadcast sent, but this node: " + err.Error()})
+		return
+	}
+	if err := writeFileFsync(FleetUpdateAckFile, []byte(strconv.FormatInt(triggeredAt, 10))); err != nil {
+		log.Printf("fleet: failed to record own update trigger: %v", err)
 	}
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
 }
