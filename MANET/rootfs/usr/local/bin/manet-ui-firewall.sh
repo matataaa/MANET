@@ -13,6 +13,10 @@
 #              workstation on the gateway's LAN).
 #   port 5201  the mesh subnet (peers run iperf3 clients against this node's
 #              daemon). Not the uplink.
+#   port 22    like 443: localhost and br0. Not the uplink LAN, unless
+#              ssh_uplink_access=y (e.g. lab troubleshooting from the LAN,
+#              or reaching a node whose mesh side is down). ssh-recovery.sh
+#              keeps password login on, so the uplink stays shut by default.
 #
 # Why source address and not interface: br0 bridges bat0, so a packet from a
 # remote node arrives on br0 exactly like one from a locally attached EUD.
@@ -30,7 +34,7 @@
 # Re-run whenever the DHCP range moves (mesh-ip-manager calls it after
 # rewriting the dnsmasq config), at manet-ctrl startup and every minute
 # after (which also restores the table if an nftables restart flushed it),
-# and when ui_uplink_access changes. Idempotent, and a no-op when nothing
+# and when ui_uplink_access or ssh_uplink_access changes. Idempotent, and a no-op when nothing
 # changed.
 # ==============================================================================
 
@@ -55,15 +59,16 @@ read_mesh_network() {
     awk -F= '$1 == "ipv4_network" {print $2; exit}' "$MESH_CONF" 2>/dev/null
 }
 
-read_uplink_access() {
-    case "$(awk -F= '$1 == "ui_uplink_access" {print tolower($2); exit}' "$MESH_CONF" 2>/dev/null)" in
+# read_flag <key>: y when mesh.conf sets <key> to a yes value, else n.
+read_flag() {
+    case "$(awk -F= -v k="$1" '$1 == k {print tolower($2); exit}' "$MESH_CONF" 2>/dev/null)" in
         y|yes|1|true) echo y ;;
         *) echo n ;;
     esac
 }
 
 apply_rules() {
-    local start="$1" end="$2" mesh_net="$3" uplink="$4"
+    local start="$1" end="$2" mesh_net="$3" uplink="$4" ssh_uplink="$5"
 
     $NFT delete table inet "$TABLE" 2>/dev/null || true
     $NFT add table inet "$TABLE" || return 1
@@ -88,6 +93,11 @@ apply_rules() {
         $NFT add rule inet "$TABLE" input tcp dport 443 drop
     fi
 
+    if [ "$ssh_uplink" != y ]; then
+        $NFT add rule inet "$TABLE" input iifname "br0" tcp dport 22 accept
+        $NFT add rule inet "$TABLE" input tcp dport 22 drop
+    fi
+
     if [ -n "$mesh_net" ]; then
         $NFT add rule inet "$TABLE" input tcp dport 5201 ip saddr "$mesh_net" accept
     fi
@@ -98,17 +108,18 @@ DHCP_START="" DHCP_END=""
 RANGE=$(read_dhcp_range)
 [ -n "$RANGE" ] && read -r DHCP_START DHCP_END <<< "$RANGE"
 MESH_NET=$(read_mesh_network)
-UPLINK=$(read_uplink_access)
-DESIRED="${DHCP_START}-${DHCP_END}|${MESH_NET}|uplink=${UPLINK}"
+UPLINK=$(read_flag ui_uplink_access)
+SSH_UPLINK=$(read_flag ssh_uplink_access)
+DESIRED="${DHCP_START}-${DHCP_END}|${MESH_NET}|uplink=${UPLINK}|ssh_uplink=${SSH_UPLINK}"
 
 if [ "$(cat "$STATE_FILE" 2>/dev/null)" = "$DESIRED" ] &&
    $NFT list table inet "$TABLE" >/dev/null 2>&1; then
     exit 0
 fi
 
-if apply_rules "$DHCP_START" "$DHCP_END" "$MESH_NET" "$UPLINK"; then
+if apply_rules "$DHCP_START" "$DHCP_END" "$MESH_NET" "$UPLINK" "$SSH_UPLINK"; then
     echo "$DESIRED" > "$STATE_FILE"
-    log "port 80 limited to ${DHCP_START:+${DHCP_START}-${DHCP_END} + }localhost${DHCP_START:- (no DHCP pool yet: unrestricted)}; 443 $([ "$UPLINK" = y ] && echo "open incl. uplink (ui_uplink_access=y)" || echo "mesh side only"); iperf3 to ${MESH_NET:-mesh only}"
+    log "port 80 limited to ${DHCP_START:+${DHCP_START}-${DHCP_END} + }localhost$([ -z "$DHCP_START" ] && echo " (no DHCP pool yet: unrestricted)"); 443 $([ "$UPLINK" = y ] && echo "open incl. uplink (ui_uplink_access=y)" || echo "mesh side only"); ssh $([ "$SSH_UPLINK" = y ] && echo "open incl. uplink (ssh_uplink_access=y)" || echo "mesh side only"); iperf3 to ${MESH_NET:-mesh only}"
 else
     log "ERROR: failed to install nftables rules"
     exit 1

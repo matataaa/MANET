@@ -243,7 +243,7 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	if updates["multicast_mode"] != "" {
 		applyMulticastMode(updates["multicast_mode"])
 	}
-	if _, ok := updates["ui_uplink_access"]; ok && updates["ui_uplink_access"] != existingConf["ui_uplink_access"] {
+	if uplinkAccessChanged(updates, existingConf) {
 		runUIFirewall()
 	}
 	if updates["voice_mic_volume"] != "" || updates["voice_speaker_volume"] != "" {

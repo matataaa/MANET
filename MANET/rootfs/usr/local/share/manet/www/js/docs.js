@@ -163,6 +163,7 @@ DOCS_TABS.config = [
 '<tr><td><code>admin_password</code></td><td>string</td><td>Yes</td><td>Password for admin operations (config staging/activation).</td></tr>',
 '<tr><td><code>require_auth</code></td><td>y / n</td><td>Yes</td><td>Require admin password for write operations. Default: n (disabled).</td></tr>',
 '<tr><td><code>ui_uplink_access</code></td><td>y / n</td><td>Yes</td><td>Allow this node\'s web UI (HTTPS) from its uplink network, e.g. a monitoring workstation on a gateway\'s LAN. Default: n (mesh side only).</td></tr>',
+'<tr><td><code>ssh_uplink_access</code></td><td>y / n</td><td>Yes</td><td>Allow SSH (port 22) from this node\'s uplink network, e.g. lab troubleshooting from the LAN or reaching a node whose mesh side is down. Default: n (mesh side only).</td></tr>',
 '</tbody></table>',
 
 '<h4>Voice</h4>',

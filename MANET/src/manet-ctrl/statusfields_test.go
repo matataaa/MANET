@@ -12,7 +12,7 @@ import (
 // each Config save silently set ui_uplink_access=n and locked the UI out of
 // a gateway's LAN. Every meshFields key must come back in current_config.
 func TestAdminStatusReturnsEveryConfigTabField(t *testing.T) {
-	withTempMeshConf(t, "ui_uplink_access=y\n")
+	withTempMeshConf(t, "ui_uplink_access=y\nssh_uplink_access=y\n")
 
 	js, err := os.ReadFile("../../rootfs/usr/local/share/manet/www/js/config.js")
 	if err != nil {
@@ -33,7 +33,9 @@ func TestAdminStatusReturnsEveryConfigTabField(t *testing.T) {
 			t.Errorf("config.js meshFields has %q but /api/admin/status does not return it", f[1])
 		}
 	}
-	if got := cfg["ui_uplink_access"]; got != "y" {
-		t.Errorf("ui_uplink_access = %q, want the stored y", got)
+	for _, k := range []string{"ui_uplink_access", "ssh_uplink_access"} {
+		if got := cfg[k]; got != "y" {
+			t.Errorf("%s = %q, want the stored y", k, got)
+		}
 	}
 }
