@@ -401,7 +401,7 @@ DOCS_TABS.services = [
 
 DOCS_TABS.cli = [
 '<h2>MESH CLI</h2>',
-'<p>The <code>mesh</code> command-line tool is installed at <code>/usr/local/bin/mesh</code>. It talks to the local manet-ctrl API and can be used from the Terminal tab, over SSH, or on the console.</p>',
+'<p>The <code>mesh</code> command-line tool is installed at <code>/usr/local/bin/mesh</code>. It talks to the local manet-ctrl API and can be used from the Terminal tab, over SSH, or on the console. Read commands work for any user; write commands (and reading secrets) need root: <code>sudo mesh ...</code>.</p>',
 
 '<h3>Commands</h3>',
 '<table class="docs-table"><thead><tr><th>Command</th><th>Description</th></tr></thead><tbody>',
@@ -414,6 +414,15 @@ DOCS_TABS.cli = [
 '<tr><td><code>mesh radio info</code></td><td>Radio interfaces — driver, channel, TX power, MCS, addresses</td></tr>',
 '<tr><td><code>mesh radio txpower &lt;iface&gt; &lt;dbm&gt;</code></td><td>Set TX power on an interface</td></tr>',
 '<tr><td><code>mesh radio interface &lt;iface&gt; up|down</code></td><td>Bring a radio interface up or down</td></tr>',
+'<tr><td><code>mesh radio channels [halow|5ghz]</code></td><td>Legal channels for this node\'s region</td></tr>',
+'<tr><td><code>mesh radio halow &lt;channel|auto&gt; [bw]</code></td><td>Set the HaLow channel (and bandwidth)</td></tr>',
+'<tr><td><code>mesh radio 5ghz &lt;channel|default&gt;</code></td><td>Pin the 5GHz mesh channel</td></tr>',
+'<tr><td><code>mesh password admin|mesh-key|ap-key</code></td><td>Change a password (prompted). Admin password and mesh key are staged fleet-wide</td></tr>',
+'<tr><td><code>mesh fleet status|set|activate|cancel</code></td><td>Stage settings (<code>key=value</code>) for every node, check acknowledgements, apply</td></tr>',
+'<tr><td><code>mesh update status|now</code></td><td>OTA update state; apply software/overlay now</td></tr>',
+'<tr><td><code>mesh service start|stop|restart &lt;name&gt;</code></td><td>Control a service</td></tr>',
+'<tr><td><code>mesh hostname &lt;prefix&gt;</code></td><td>Set the hostname prefix</td></tr>',
+'<tr><td><code>mesh version</code></td><td>Software release and manet-ctrl version</td></tr>',
 '<tr><td><code>mesh gps</code></td><td>GPS fix status and coordinates</td></tr>',
 '<tr><td><code>mesh services</code></td><td>List all services with status, category, enabled state</td></tr>',
 '<tr><td><code>mesh perf ping &lt;target&gt;</code></td><td>Ping a peer node (10 packets)</td></tr>',
