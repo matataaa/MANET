@@ -54,6 +54,13 @@ func main() {
 		fmt.Println(Version)
 		return
 	}
+	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "ota-") {
+		if err := otaCommand(os.Args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	log.SetFlags(log.Ldate | log.Ltime)
 	log.SetPrefix("[node-update] ")
@@ -364,6 +371,14 @@ func applySoftware(baseURL, board, remoteVerStr string, status *updateStatus) {
 		return
 	}
 
+	if err := checkOTASignature(tarballURL, tarballPath, remoteVerStr); err != nil {
+		log.Printf("software update refused: %v", err)
+		os.Remove(tarballPath)
+		status.Phase = "idle"
+		writeStatus(*status)
+		return
+	}
+
 	status.Phase = "extracting software"
 	writeStatus(*status)
 
@@ -422,6 +437,14 @@ func applyOverlay(baseURL, board, remoteVerStr string, status *updateStatus) {
 	overlayURL := fmt.Sprintf("%s/%s-sbc-overlay.tar.gz", baseURL, board)
 	if err := download(overlayURL, overlayTarballPath); err != nil {
 		log.Printf("overlay download failed: %v", err)
+		status.Phase = "idle"
+		writeStatus(*status)
+		return
+	}
+
+	if err := checkOTASignature(overlayURL, overlayTarballPath, remoteVerStr); err != nil {
+		log.Printf("overlay update refused: %v", err)
+		os.Remove(overlayTarballPath)
 		status.Phase = "idle"
 		writeStatus(*status)
 		return

@@ -151,6 +151,7 @@ function configRenderView(panel, cfg) {
       { label: 'Auto Update', key: 'auto_update', yesno: true },
       { label: 'Update URL', key: 'update_url' },
       { label: 'Auto Update Overlay', key: 'auto_update_overlay', yesno: true },
+      { label: 'Allow Unsigned Updates', key: 'update_allow_unsigned', yesno: true },
       { label: 'Auto Update Min Bandwidth', key: 'auto_update_min_mbps', fmt: function(v) { return (v || '10') + ' Mbit'; } },
     ]},
     { title: 'GPS / CoT', fields: [
@@ -566,6 +567,7 @@ function configRenderEdit(panel, cfg) {
     { label: 'Auto Update', key: 'auto_update', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Checks for a new release every 6h, and immediately when this setting is saved' },
     { label: 'Update URL', key: 'update_url', type: 'text', hint: 'Base URL for OTA tarball server (blank = disabled)' },
     { label: 'Auto Update Overlay (kernel/firmware)', key: 'auto_update_overlay', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Updates the kernel/modules/firmware. No rollback if a bad overlay fails to boot — test on one node before enabling fleet-wide. Off by default.' },
+    { label: 'Allow Unsigned Updates', key: 'update_allow_unsigned', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes (lab only)'}], hint: 'Install update packages even when their signature is missing or wrong. Anyone who can serve this node an update could then run code on it. Off by default.' },
     { label: 'Auto Update Min Bandwidth (Mbit)', key: 'auto_update_min_mbps', type: 'text', hint: 'Automatic apply is skipped below this link speed. Manual "Update Now" and fleet-wide force update ignore it (with a warning).' },
     { section: 'Gateway' },
     { label: 'Gateway Enabled', key: 'gateway', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}], hint: 'Allow this node to act as a mesh gateway' },
@@ -797,7 +799,7 @@ async function configSave() {
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','eud_bandwidth','mesh_ssid','mesh_key',
     'ipv4_network','regulatory_domain','halow_bw','halow_channel','halow_duty_cycle','halow_txpower_dbm','acs','mesh_5ghz_bw','mesh_5ghz_channel','multicast_mode','battery_monitor','admin_password','require_auth','ui_uplink_access','ssh_uplink_access',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
-    'auto_update','update_url','auto_update_overlay','auto_update_min_mbps',
+    'auto_update','update_url','auto_update_overlay','auto_update_min_mbps','update_allow_unsigned',
     'gps','gps_source','gps_static_lat','gps_static_lon','gps_static_alt','callsign','cot_type','cot_team','cot_role','cot_icon',
     'voice_mic_volume','voice_speaker_volume','voice_channel',
     'voice_beep_tx_start','voice_beep_rx_end','voice_gain','voice_enabled'];

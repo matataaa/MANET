@@ -1010,6 +1010,7 @@ var saveableKeys = map[string]bool{
 	"eud_bandwidth": true,
 	"qos_enabled":   true, "qos_voice_band": true, "qos_cot_band": true, "qos_chat_band": true,
 	"auto_update": true, "update_url": true, "auto_update_overlay": true, "auto_update_min_mbps": true,
+	"update_allow_unsigned": true,
 	"gps": true, "gps_source": true, "gps_static_lat": true, "gps_static_lon": true, "gps_static_alt": true,
 	"callsign": true, "cot_type": true, "cot_team": true, "cot_role": true, "cot_icon": true,
 }
@@ -1064,6 +1065,7 @@ var keyDescriptions = map[string]string{
 	"auto_update":          "Enable automatic OTA tools tarball updates",
 	"update_url":           "URL node-update polls for tarball updates",
 	"auto_update_overlay":  "Enable automatic overlay (no-rollback) updates",
+	"update_allow_unsigned": "Install OTA packages whose signature is missing or invalid: y/n (default n; lab use only)",
 	"auto_update_min_mbps": "Minimum measured bandwidth required before an auto-update proceeds",
 	"gps":                  "Enable GPS (gpsd) on this node",
 	"gps_source":           "GPS source: receiver (gpsd) or static",
