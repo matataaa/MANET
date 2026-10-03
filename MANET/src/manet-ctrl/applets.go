@@ -44,6 +44,12 @@ type appletManifest struct {
 		Port    int      `json:"port"`
 		Args    []string `json:"args"`
 		Service string   `json:"service"`
+		// Public lets callers without a login use the backend through
+		// /api/applets/<name>/proxy and read its config and logs: meant
+		// for applets every EUD user is supposed to use, like chat. Off by
+		// default, since a backend is a root process whose HTTP API is
+		// otherwise only the admin's (e.g. the VPN applets).
+		Public bool `json:"public,omitempty"`
 	} `json:"backend"`
 	Frontend struct {
 		Entrypoint string `json:"entrypoint"`
@@ -279,6 +285,9 @@ func apiAppletLogs(w http.ResponseWriter, r *http.Request, name string) {
 		writeJSON(w, 404, map[string]interface{}{"error": "applet not found"})
 		return
 	}
+	if !appletBackendAllowed(w, r, m) {
+		return
+	}
 	lines := r.URL.Query().Get("lines")
 	if lines == "" {
 		lines = "100"
@@ -297,6 +306,9 @@ func apiAppletConfigGet(w http.ResponseWriter, r *http.Request, name string) {
 	m := loadManifest(name)
 	if m == nil {
 		writeJSON(w, 404, map[string]interface{}{"error": "applet not found"})
+		return
+	}
+	if !appletBackendAllowed(w, r, m) {
 		return
 	}
 	if m.Backend.Port == 0 {
@@ -368,6 +380,9 @@ func apiAppletProxy(w http.ResponseWriter, r *http.Request, name, subPath string
 	m := loadManifest(name)
 	if m == nil {
 		writeJSON(w, 404, map[string]interface{}{"error": "applet not found"})
+		return
+	}
+	if !appletBackendAllowed(w, r, m) {
 		return
 	}
 	if m.Backend.Port == 0 {
@@ -705,6 +720,12 @@ func apiAppletsRouter(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
+}
+
+// appletBackendAllowed gates everything that reaches an applet's backend
+// or its logs: open for Public applets, a login otherwise.
+func appletBackendAllowed(w http.ResponseWriter, r *http.Request, m *appletManifest) bool {
+	return m.Backend.Public || checkAuth(w, r)
 }
 
 // --- Helpers ---

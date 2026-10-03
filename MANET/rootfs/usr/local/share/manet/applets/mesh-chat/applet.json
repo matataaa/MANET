@@ -9,7 +9,8 @@
     "binary": "mesh-chat",
     "port": 9800,
     "args": ["-port", "9800", "-iface", "br0"],
-    "service": "mesh-chat.service"
+    "service": "mesh-chat.service",
+    "public": true
   },
   "frontend": {
     "entrypoint": "index.html"
