@@ -68,6 +68,7 @@ fleet-wide via Fleet Control's Network Config.
 | `auto_update` | `n` | Software channel: apply automatically once detected, if the bandwidth gate passes. Off by default on every provisioning platform. |
 | `auto_update_overlay` | `n` | Overlay channel: apply automatically once detected, if the gate passes. Independent of `auto_update` — a kernel/firmware swap has no rollback, so this stays opt-in even if you trust software auto-update fleet-wide. |
 | `auto_update_min_mbps` | `10` | Minimum current uplink throughput required for *automatic* apply on either channel. Manual "Update Now" and "Force Update All Nodes" ignore this (with a warning shown first). |
+| `update_allow_unsigned` | `n` | Install a package even when its signature (see [Package signing](#package-signing)) is missing or invalid, with a warning in the log. Lab use only. |
 
 Saving any of these triggers an immediate re-check on that node
 (`systemctl reload node-update`), rather than waiting for the next
@@ -122,6 +123,38 @@ Nodes":
    node picks it up within one poll cycle (~10s) and applies locally via
    the same mechanism as a manual "Update Now" — same bypass semantics,
    same warning-before-confirm.
+
+## Package signing
+
+`node-update` extracts tarballs as root onto `/`, so it only installs one
+that comes with a valid signature: next to every `<name>.tar.gz` on the
+update server sits `<name>.tar.gz.sig`, an Ed25519 signature over the file
+name, the version from the matching version file, and the file's SHA-256.
+Nodes check it against the public keys in
+`/usr/local/share/manet/ota-keys/*.pub`, shipped in the tools tarball.
+
+Because the package itself is verified, the transport doesn't matter:
+`update_url` can be plain `http://`, e.g. a gateway or laptop on the mesh
+serving the files off-grid. Binding the name and version means an old
+signed release can't be re-served as a newer one, and an overlay can't be
+swapped in for a tools tarball.
+
+- **Keys.** The private key lives on the release machine
+  (`/root/manet-releases/keys/ota-signing.key`, mode 0600, never in git).
+  Back it up: without it, nodes only take new releases with
+  `update_allow_unsigned=y` or a manual install. To rotate, add the new
+  `.pub` to `rootfs/usr/local/share/manet/ota-keys/`, ship a release signed
+  with the old key, then switch keys and drop the old `.pub`.
+- **Signing** (`release.sh` does this automatically):
+  `node-update ota-sign <private-key> <version> <tarball>` writes
+  `<tarball>.sig`. `<version>` is exactly what goes in the version file
+  (`0.4.7` for software, `0.549` for an overlay). Sign each file under its
+  final published name: the name is part of what's signed.
+- **New key pair:** `node-update ota-keygen <private-key> <public-key>`
+  (refuses to overwrite an existing key).
+- **First rollout.** Nodes still running a node-update without signature
+  checks install the first signed release like any other; from then on
+  they verify every package.
 
 ## Publishing a software release: step by step
 
@@ -178,13 +211,20 @@ stamped into the tarball, as its own standalone file:
 echo -n "0.2.0" > manet_release_version.txt
 ```
 
-**6. Copy these three files to your webhost**, all in the same directory —
+**5b. Sign each tarball** (see [Package signing](#package-signing)):
+
+```sh
+node-update ota-sign /root/manet-releases/keys/ota-signing.key 0.2.0 rpi5-tools.tar.gz
+node-update ota-sign /root/manet-releases/keys/ota-signing.key 0.2.0 cm4-tools.tar.gz
+```
+
+**6. Copy these files to your webhost**, all in the same directory —
 this directory *is* what `update_url` should point to:
 
 ```
 manet_release_version.txt
-rpi5-tools.tar.gz
-cm4-tools.tar.gz
+rpi5-tools.tar.gz  rpi5-tools.tar.gz.sig
+cm4-tools.tar.gz   cm4-tools.tar.gz.sig
 ```
 
 Any static file host works — `node-update` does a plain HTTP(S) GET, no
