@@ -32,7 +32,22 @@ function authLogout() {
 }
 document.getElementById('logout-btn').addEventListener('click', authLogout);
 
+// Callers that hit a 401 while the login box is already open (e.g. parallel
+// authFetch calls) wait on the same box instead of being dropped and never
+// settling; all of them are resumed on login or cancel.
+let _authWaiters = [];
+
+function authSettleWaiters(ok) {
+  var waiters = _authWaiters;
+  _authWaiters = [];
+  waiters.forEach(function(w) {
+    var cb = ok ? w.onSuccess : w.onCancel;
+    if (cb) cb();
+  });
+}
+
 function authShowLogin(onSuccess, onCancel) {
+  _authWaiters.push({ onSuccess: onSuccess, onCancel: onCancel });
   if (_authLoginVisible) return;
   _authLoginVisible = true;
   var overlay = document.createElement('div');
@@ -70,7 +85,7 @@ function authShowLogin(onSuccess, onCancel) {
         authUpdateLogoutButton();
         overlay.remove();
         _authLoginVisible = false;
-        if (onSuccess) onSuccess();
+        authSettleWaiters(true);
       } else {
         err.textContent = d.error || 'Invalid password';
         pw.value = '';
@@ -84,7 +99,7 @@ function authShowLogin(onSuccess, onCancel) {
   document.getElementById('auth-cancel').onclick = function() {
     overlay.remove();
     _authLoginVisible = false;
-    if (onCancel) onCancel();
+    authSettleWaiters(false);
   };
 }
 

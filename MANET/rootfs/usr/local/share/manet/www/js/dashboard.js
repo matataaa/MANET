@@ -354,7 +354,7 @@ function renderDashNodeList(nodes) {
       var row = this.closest('.node-row');
       var name = row ? row.querySelector('.node-name').textContent.trim() : id;
       if (!confirm('Remove ' + name + ' from registry?\nIt will reappear if still active on the mesh.')) return;
-      fetch('/api/admin/delete-node', {
+      authFetch('/api/admin/delete-node', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({id: id})
