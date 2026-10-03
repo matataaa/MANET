@@ -59,7 +59,7 @@ const PROFILE_SECTIONS = [
     { key: 'gateway_nat', label: 'NAT Masquerade', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { key: 'gateway_mss_clamp', label: 'MSS Clamping', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { key: 'gateway_bandwidth', label: 'Bandwidth Advertisement', type: 'select', options: [
-      {v:'',l:'Auto (batman default)'},{v:'2M/2M',l:'2 Mbit'},{v:'5M/5M',l:'5 Mbit'},{v:'10M/10M',l:'10 Mbit'},
+      {v:'',l:'Auto (measured on Ethernet, else 10/2)'},{v:'2M/2M',l:'2 Mbit'},{v:'5M/5M',l:'5 Mbit'},{v:'10M/10M',l:'10 Mbit'},
       {v:'20M/20M',l:'20 Mbit'},{v:'50M/50M',l:'50 Mbit'},{v:'100M/100M',l:'100 Mbit'},
       {v:'200M/200M',l:'200 Mbit'},{v:'300M/300M',l:'300 Mbit'},{v:'500M/500M',l:'500 Mbit'},{v:'1000M/1000M',l:'1 Gbit'},
     ] },

@@ -139,7 +139,7 @@ DOCS_TABS.config = [
 '<tr><td><code>gateway</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Allow this node to act as a mesh gateway, providing internet access to other nodes.</td></tr>',
 '<tr><td><code>gateway_nat</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Enable NAT masquerade on the upstream interface so mesh traffic can reach the internet.</td></tr>',
 '<tr><td><code>gateway_mss_clamp</code></td><td><code>y</code> / <code>n</code></td><td>Yes</td><td>Clamp TCP MSS to prevent fragmentation through the mesh-to-internet path.</td></tr>',
-'<tr><td><code>gateway_bandwidth</code></td><td>string (e.g. <code>10M/10M</code>)</td><td>Yes</td><td>Advertised bandwidth for batman-adv gateway selection. Empty = auto.</td></tr>',
+'<tr><td><code>gateway_bandwidth</code></td><td>string (e.g. <code>10M/10M</code>)</td><td>Yes</td><td>Download/upload bandwidth this gateway announces; nodes pick the gateway with the best mesh path and announced bandwidth. Empty = auto: measured on an Ethernet uplink (5 MB HTTPS test, which also rejects captive portals), else 10/2 Mbit/s. A set value overrides the measurement.</td></tr>',
 '<tr><td><code>dns_servers</code></td><td>comma-separated IPs</td><td>Yes</td><td>Upstream DNS servers written to <code>/etc/resolv.conf</code>. Used by dnsmasq for forwarding EUD queries. Default: <code>8.8.8.8,8.8.4.4</code>. Changing this restarts dnsmasq.</td></tr>',
 '</tbody></table>',
 

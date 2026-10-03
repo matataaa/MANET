@@ -574,7 +574,7 @@ function configRenderEdit(panel, cfg) {
     { label: 'NAT Masquerade', key: 'gateway_nat', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'MSS Clamping', key: 'gateway_mss_clamp', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
     { label: 'Bandwidth', key: 'gateway_bandwidth', type: 'select', options: [
-      {v:'',l:'Auto (batman default)'},{v:'2M/2M',l:'2M/2M'},{v:'5M/5M',l:'5M/5M'},{v:'10M/10M',l:'10M/10M'},
+      {v:'',l:'Auto (measured on Ethernet, else 10/2)'},{v:'2M/2M',l:'2M/2M'},{v:'5M/5M',l:'5M/5M'},{v:'10M/10M',l:'10M/10M'},
       {v:'20M/20M',l:'20M/20M'},{v:'50M/50M',l:'50M/50M'},{v:'100M/100M',l:'100M/100M'}
     ] },
     { label: 'DNS Servers', key: 'dns_servers', type: 'text', hint: 'Comma-separated (e.g. 8.8.8.8,8.8.4.4)' },

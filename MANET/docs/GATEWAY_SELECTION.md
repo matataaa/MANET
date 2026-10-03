@@ -1,6 +1,8 @@
 # Gateway selection (design)
 
-Status: **proposal**, not implemented. Covers how a mesh node picks the
+Status: **implemented** (option A below), following upstream very-srs/MANET
+0.559. Code: `src/gateway-manager/selection.go` (client choice),
+`rootfs/usr/local/bin/manet-uplink-speed.sh` (gateway measurement). Covers how a mesh node picks the
 internet gateway its default route points at, and what a gateway announces
 about its uplink. Supersedes "follow batman-adv's pick" in
 `src/gateway-manager`.
@@ -76,9 +78,9 @@ testable in `main_test.go` without a mesh.
 
 ## Gateway side: announcing bandwidth
 
-Two options:
+Two options were considered; **A is implemented**:
 
-- **A. Measured (recommended).** When an Ethernet uplink is promoted,
+- **A. Measured.** When an Ethernet uplink is promoted,
   download at most 5 MB over HTTPS (Cloudflare's speed endpoint, an OVH test
   file as fallback), timed from the first byte so DNS/TCP/TLS setup doesn't
   count. Announce `batctl gw_mode server <down>/<down/5>` (upload isn't
@@ -113,11 +115,16 @@ A gateway announcing near-zero bandwidth disappears from clients' `gwl`
 (seen on 2026-10-03: EUD4 at 0.1/0.0 Mbit → EUD3 withdrew its route within
 2 s), so a measured value must never be announced below 1 Mbit/s down.
 
-**Captive portals (optional, with A).** A captive portal passes our ICMP
-probe but cannot complete HTTPS to the test host, so a failed download can
-keep an Ethernet uplink from being promoted at all. That touches the
-promote path in `manet-uplink-dispatch.sh`, not just `gateway-manager`, so it
-is a separate, later step.
+**Captive portals.** A captive portal passes our ICMP probe but cannot
+complete HTTPS to the test host, so on Ethernet the download is also the
+internet check: `ethernet-autodetect.sh` only hands a port to the dispatcher
+as a gateway after it passes, and `manet-uplink-dispatch.sh`'s
+`find_working_uplink` requires it too. A failed port stays in the `network`
+role; the dispatcher's periodic reconcile retries it, at most once a minute
+(`measure` exits 3 inside that window). Wiring points:
+`find_working_uplink` (gate), `promote_gateway` (`announce`),
+`demote_gateway` (`forget`), `ethernet-autodetect.sh` (gate) and
+`batman-if-setup.sh` (`announce` at boot).
 
 ## Not changing
 
@@ -131,6 +138,11 @@ is a separate, later step.
 - Unit: table-driven tests of `decide` (first pick, hold timers, ratio and
   absolute margins, failover on missing/unreachable, restart adoption,
   no gateways) and of the `gwl` parser against captured output.
-- Bench: today only EUD4 has an uplink. A second gateway (Ethernet or a
-  phone tether on another node) is needed to see selection, failover
-  (unplug the active uplink) and hysteresis (throttle one uplink).
+- Bench (2026-10-03, EUD4 gateway + EUD3 client, hand-deployed on 0.5.0):
+  EUD4 measured 131.4 Mbit/s and announced 131.4/26.2 through the real
+  `promote` path; EUD3 saw it (path 116.2, score 116.2) and kept its route
+  across a `gateway-manager` restart. With EUD4's own HTTPS blocked on end0,
+  ping still passed but `measure` exited 1, then 3 on immediate retry; after
+  unblocking and the 60 s window it measured 135.1 and re-announced.
+- Not yet tested on hardware: a node choosing between two or more
+  gateways, failover and hysteresis (the bench has one uplink).
