@@ -12,7 +12,7 @@ APPLET="${1:?Usage: build-applet.sh <applet-name> [output.tar.gz]}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SRC="$REPO_ROOT/src/$APPLET"
-APPLET_FILES="$REPO_ROOT/rootfs/usr/local/share/applets/$APPLET"
+APPLET_FILES="$REPO_ROOT/rootfs/usr/local/share/manet/applets/$APPLET"
 OUT="${2:-$APPLET.tar.gz}"
 
 [ -d "$SRC" ] || { echo "No source at $SRC"; exit 1; }

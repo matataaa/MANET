@@ -280,7 +280,7 @@ DOCS_TABS.api = [
 '<tr><td>POST</td><td><code>/api/applets/{name}/config</code></td><td>Auth. Write key=value pairs to the applet\'s declared config file</td></tr>',
 '<tr><td>GET</td><td><code>/api/applets/{name}/config-page</code></td><td>Serve the applet\'s config HTML page</td></tr>',
 '<tr><td>GET</td><td><code>/api/applets/{name}/frontend[/path]</code></td><td>Serve applet frontend static files (index.html, JS, CSS)</td></tr>',
-'<tr><td>*</td><td><code>/api/applets/{name}/proxy[/path]</code></td><td>Reverse proxy to the applet backend (HTTP and WebSocket). Supports GET, POST, DELETE.</td></tr>',
+'<tr><td>*</td><td><code>/api/applets/{name}/proxy[/path]</code></td><td>Reverse proxy to the applet backend (HTTP and WebSocket). Supports GET, POST, DELETE. Requires login unless the applet sets <code>backend.public: true</code> in applet.json (also gates its <code>/logs</code> and <code>/config</code> reads).</td></tr>',
 '<tr><td>DELETE</td><td><code>/api/applets/{name}</code></td><td>Auth. Uninstall — stops service, runs post-remove hook, removes event hooks and files, reloads systemd</td></tr>',
 '</tbody></table>',
 

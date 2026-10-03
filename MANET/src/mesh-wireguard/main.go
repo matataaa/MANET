@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -55,6 +56,32 @@ func saveConfig() error {
 		return err
 	}
 	return os.WriteFile(configFile, data, 0600)
+}
+
+// ifaceRE is wg-quick's own rule for interface names. The name also
+// becomes the file name under configDir, so it must not hold a path.
+var ifaceRE = regexp.MustCompile(`^[a-zA-Z0-9_=+.-]{1,15}$`)
+
+// validateConfig rejects what generateWGConf can't write safely. Every
+// value lands unescaped on its own "Key = value" line of a wg-quick
+// config, so a line break would start a new directive -- and wg-quick
+// runs PostUp/PreUp lines as root shell commands.
+func validateConfig(c Config) error {
+	if c.Interface != "" && !ifaceRE.MatchString(c.Interface) {
+		return fmt.Errorf("invalid interface name")
+	}
+	fields := []string{c.Address, c.PrivateKey, c.DNS}
+	for _, p := range c.Peers {
+		fields = append(fields, p.PublicKey, p.Endpoint, p.AllowedIPs)
+	}
+	for _, f := range fields {
+		for _, ch := range f {
+			if ch < 0x20 || ch == 0x7f {
+				return fmt.Errorf("values must not contain control characters")
+			}
+		}
+	}
+	return nil
 }
 
 func generateWGConf() error {
@@ -169,6 +196,10 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "bad json"})
 		return
 	}
+	if err := validateConfig(body); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
 
 	mu.Lock()
 	if body.Interface != "" {
@@ -202,7 +233,19 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
 }
 
+// requirePost keeps actions off GET, so a link or <img> can't trigger them.
+func requirePost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]interface{}{"ok": false, "error": "POST required"})
+		return false
+	}
+	return true
+}
+
 func handleUp(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	mu.Lock()
 	generateWGConf()
 	iface := cfg.Interface
@@ -219,6 +262,9 @@ func handleUp(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleDown(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	iface := cfg.Interface
 	if iface == "" {
 		iface = "wg0"
@@ -232,6 +278,9 @@ func handleDown(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGenKey(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
 	privOut, err := exec.Command("wg", "genkey").Output()
 	if err != nil {
 		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "genkey failed"})

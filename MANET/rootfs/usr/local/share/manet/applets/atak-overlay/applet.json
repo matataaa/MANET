@@ -9,7 +9,8 @@
     "binary": "atak-overlay",
     "port": 9821,
     "args": ["-port", "9821"],
-    "service": "atak-overlay.service"
+    "service": "atak-overlay.service",
+    "public": true
   },
   "frontend": {
     "entrypoint": "index.html"
