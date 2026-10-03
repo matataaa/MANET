@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -381,7 +382,7 @@ func fleetPollAlfred() {
 		log.Printf("fleet: admin_password is empty, refusing to process slot 70 packages")
 		return
 	}
-	if best := parseAlfredBest(out, getMyMAC(), "70", "staged_at", password, conf["mesh_ssid"]); best != nil {
+	if best := parseAlfredBest(out, ownMACs(), "70", "staged_at", password, conf["mesh_ssid"]); best != nil {
 		fleetProcessPackage(best)
 	}
 }
@@ -400,7 +401,31 @@ func fleetPollAlfred() {
 // every legitimate push with a bogus far-future timestamp. Ranking only ever
 // happens on content that has already passed GCM authentication now, so that
 // class of attack no longer has anything to act on.
-func parseAlfredBest(out []byte, myMAC, slot, tsField, password, meshSSID string) []byte {
+// ownMACs is every MAC address this node owns, colons stripped, for
+// recognising its own alfred entries. alfred labels an entry with the MAC of
+// the interface it serves on (br0, see radio-setup.sh's alfred unit), not the
+// bat0 MAC getMyMAC() returns, and br0's MAC follows its ports; comparing
+// against bat0 alone never matched, so every node acted on its own packages.
+func ownMACs() map[string]bool {
+	own := map[string]bool{}
+	if mac := getMyMAC(); mac != "" {
+		own[strings.ReplaceAll(mac, ":", "")] = true
+	}
+	paths, _ := filepath.Glob("/sys/class/net/*/address")
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		mac := strings.ReplaceAll(normMAC(string(data)), ":", "")
+		if mac != "" && mac != "000000000000" {
+			own[mac] = true
+		}
+	}
+	return own
+}
+
+func parseAlfredBest(out []byte, own map[string]bool, slot, tsField, password, meshSSID string) []byte {
 	var best []byte
 	var bestTS int64
 	haveBest := false
@@ -412,7 +437,7 @@ func parseAlfredBest(out []byte, myMAC, slot, tsField, password, meshSSID string
 			continue
 		}
 		mac := strings.TrimLeft(line[:idx], "{ \"")
-		if strings.ReplaceAll(mac, ":", "") == strings.ReplaceAll(myMAC, ":", "") {
+		if own[strings.ReplaceAll(normMAC(mac), ":", "")] {
 			continue
 		}
 		rest := line[idx+4:]
@@ -494,7 +519,7 @@ func fleetPollUpdateAlfred() {
 		log.Printf("fleet: admin_password is empty, refusing to process slot 71 packages")
 		return
 	}
-	if best := parseAlfredBest(out, getMyMAC(), "71", "triggered_at", password, conf["mesh_ssid"]); best != nil {
+	if best := parseAlfredBest(out, ownMACs(), "71", "triggered_at", password, conf["mesh_ssid"]); best != nil {
 		fleetProcessUpdatePackage(best)
 	}
 }

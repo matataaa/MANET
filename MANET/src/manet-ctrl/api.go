@@ -493,12 +493,11 @@ func apiForceUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to broadcast update trigger"})
 		return
 	}
-	// Act on it here at once rather than waiting for this node's own copy to
-	// come back through alfred, and ack it so that copy is ignored.
-	// parseAlfredBest's own-entry skip compares bat0's MAC with the source
-	// MAC alfred records (br0's), so it does not catch it. node-update applies
-	// a channel only when it has an update for it, so this is safe on a node
-	// that is already up to date.
+	// Peers act on the broadcast; this node skips its own alfred entry
+	// (parseAlfredBest/ownMACs), so trigger it here directly. The ack is a
+	// second guard against acting on that copy. node-update applies a channel
+	// only when it has an update for it, so this is safe on a node that is
+	// already up to date.
 	if err := triggerLocalUpdate(channel); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "broadcast sent, but this node: " + err.Error()})
 		return

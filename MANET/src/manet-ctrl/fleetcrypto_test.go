@@ -313,7 +313,7 @@ func TestParseAlfredBestVerifyThenRank(t *testing.T) {
 		buildAlfredLine("cc:cc:cc:cc:cc:cc", bogusPayload),
 	}, "\n")
 
-	best := parseAlfredBest([]byte(lines), myMAC, "70", "staged_at", testPassword, testSSID)
+	best := parseAlfredBest([]byte(lines), map[string]bool{strings.ReplaceAll(myMAC, ":", ""): true}, "70", "staged_at", testPassword, testSSID)
 	if best == nil {
 		t.Fatalf("parseAlfredBest returned nil, expected the legitimate package to win")
 	}
@@ -336,9 +336,40 @@ func TestParseAlfredBestSkipsOwnEntry(t *testing.T) {
 	}
 	line := buildAlfredLine(myMAC, envelope)
 
-	best := parseAlfredBest([]byte(line), myMAC, "70", "staged_at", testPassword, testSSID)
+	best := parseAlfredBest([]byte(line), map[string]bool{strings.ReplaceAll(myMAC, ":", ""): true}, "70", "staged_at", testPassword, testSSID)
 	if best != nil {
 		t.Fatalf("parseAlfredBest should have skipped this node's own entry, got %s", best)
+	}
+}
+
+// alfred labels this node's entries with br0's MAC, not bat0's (getMyMAC):
+// any of the node's own MACs must be skipped, whatever its case or format,
+// while a peer's entry still wins.
+func TestParseAlfredBestSkipsAnyOwnInterfaceMAC(t *testing.T) {
+	own := map[string]bool{
+		"0ebf740028d2": true, // bat0
+		"aad38e5aac79": true, // br0, what alfred records as the source
+	}
+	mine, err := fleetSeal("71", []byte(`{"channel":"check","triggered_at":300}`), testPassword, testSSID)
+	if err != nil {
+		t.Fatalf("fleetSeal failed: %v", err)
+	}
+	peer, err := fleetSeal("71", []byte(`{"channel":"software","triggered_at":200}`), testPassword, testSSID)
+	if err != nil {
+		t.Fatalf("fleetSeal failed: %v", err)
+	}
+	lines := strings.Join([]string{
+		buildAlfredLine("AA:D3:8E:5A:AC:79", mine),
+		buildAlfredLine("9c:04:b6:a0:aa:13", peer),
+	}, "\n")
+
+	best := parseAlfredBest([]byte(lines), own, "71", "triggered_at", testPassword, testSSID)
+	var pkg map[string]interface{}
+	if err := json.Unmarshal(best, &pkg); err != nil {
+		t.Fatalf("failed to unmarshal winning package: %v", err)
+	}
+	if c, _ := pkg["channel"].(string); c != "software" {
+		t.Fatalf("own br0-labelled entry should be skipped and the peer's win, got channel %q", c)
 	}
 }
 
@@ -359,7 +390,7 @@ func TestParseAlfredBestRanksNewerAuthenticatedEntry(t *testing.T) {
 		buildAlfredLine("cc:cc:cc:cc:cc:cc", newer),
 	}, "\n")
 
-	best := parseAlfredBest([]byte(lines), myMAC, "70", "staged_at", testPassword, testSSID)
+	best := parseAlfredBest([]byte(lines), map[string]bool{strings.ReplaceAll(myMAC, ":", ""): true}, "70", "staged_at", testPassword, testSSID)
 	var pkg map[string]interface{}
 	if err := json.Unmarshal(best, &pkg); err != nil {
 		t.Fatalf("failed to unmarshal winning package: %v", err)
