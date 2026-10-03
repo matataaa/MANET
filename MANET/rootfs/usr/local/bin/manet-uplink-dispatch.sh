@@ -10,6 +10,7 @@ LOCK_FILE=/run/manet-uplink-dispatch.lock
 NETWORKD_DIR=/etc/systemd/network
 # Written only by ethernet-autodetect.sh, which owns the Ethernet port's role.
 ETH_ROLE_FILE=/run/manet-eth-role
+UPLINK_SPEED=${MANET_UPLINK_SPEED:-/usr/local/bin/manet-uplink-speed.sh}
 
 EVENT="${1:-${STATE:-reconcile}}"
 IFACE="${2:-${IFACE:-${INTERFACE:-}}}"
@@ -198,8 +199,20 @@ find_working_uplink() {
         iface_default_gw "$iface" >/dev/null || true
 
         if internet_probe "$iface"; then
-            echo "$iface"
-            return 0
+            # An Ethernet uplink must also complete the speed test, which
+            # measures what this gateway will announce. A captive portal or a
+            # filtered network fails it, and then this is not a gateway yet.
+            # Other uplinks are metered and not tested (exit 2).
+            local speed_rc=0
+            "$UPLINK_SPEED" measure "$iface" >/dev/null || speed_rc=$?
+            if [ "$speed_rc" -eq 0 ] || [ "$speed_rc" -eq 2 ]; then
+                echo "$iface"
+                return 0
+            fi
+            # 3: a recent failure stands and was not retested; already logged.
+            [ "$speed_rc" -eq 3 ] ||
+                log "$iface passes the internet probe but not the speed test; not a gateway yet"
+            continue
         fi
 
         log "$iface has IPv4 ($ip) but no verified internet"
@@ -295,7 +308,8 @@ promote_gateway() {
     fi
 
     configure_firewall "$iface"
-    batctl gw_mode server 2>/dev/null || true
+    # Announce the measured bandwidth (Ethernet), gateway_bandwidth, or 10/2.
+    "$UPLINK_SPEED" announce "$iface" >/dev/null 2>&1 || true
 
     touch "$LEGACY_GATEWAY_STATE"
     echo "$iface" > "$UPSTREAM_IFACE_FILE"
@@ -332,6 +346,8 @@ demote_gateway() {
 
     clear_firewall
     batctl gw_mode client 2>/dev/null || true
+    # The uplink is gone; a new one is measured again before it is announced.
+    "$UPLINK_SPEED" forget 2>/dev/null || true
     systemctl stop manet-gateway-ntp.service 2>/dev/null || true
     /usr/local/bin/manet-gateway-ntp.sh stop || true
     rm -f "$LEGACY_GATEWAY_STATE" "$LEGACY_NTP_STATE" "$STATE_FILE" "$UPSTREAM_IFACE_FILE"

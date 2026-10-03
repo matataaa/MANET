@@ -45,6 +45,7 @@ ROLE_FILE="/run/manet-eth-role"
 LOCK_FILE="/run/manet-eth.lock"
 NETWORKD_DIR="/etc/systemd/network"
 DISPATCH="/usr/local/bin/manet-uplink-dispatch.sh"
+UPLINK_SPEED="${MANET_UPLINK_SPEED:-/usr/local/bin/manet-uplink-speed.sh}"
 ETH_STATE_FILE="/var/run/ethernet_detection_state"
 
 # Passive capture taken while waiting for a lease. Bounded in time, packet
@@ -361,10 +362,20 @@ detect_and_apply() {
     if [ -n "$ip" ]; then
         rm -f "$LAN_CAPTURE_FILE"
         log "IP acquired on $ETH_IFACE: $ip"
+        # The speed test is the internet check that matters: a captive portal
+        # or a filtered network passes ping but cannot complete it, and such a
+        # port must not become a gateway. Its result is what the gateway
+        # announces. Exit 2 (not an Ethernet port) means not tested. A later
+        # pass of the dispatcher's reconcile retries a failure.
+        local speed_rc=1
         if ping -c 3 -W 2 -I "$ETH_IFACE" 8.8.8.8 >/dev/null 2>&1; then
+            speed_rc=0
+            "$UPLINK_SPEED" measure "$ETH_IFACE" >/dev/null || speed_rc=$?
+        fi
+        if [ "$speed_rc" -eq 0 ] || [ "$speed_rc" -eq 2 ]; then
             apply_gateway
         else
-            apply_network "Lease but no internet"
+            apply_network "Lease but no internet (or the speed test failed)"
         fi
         return
     fi
