@@ -788,6 +788,24 @@ echo "nameserver 1.1.1.1" > /etc/resolv.conf
 # On a USB MM81xx board ($_halow_on_spi=0, detected above) the SPI overlay only
 # creates a phantom spi0.0 that fails probe on every boot ("morse_spi_probe
 # failed"), and gpio=3=op,dh fights dtparam=i2c_arm=on for the same pin.
+#
+# Is the CM4's 2711 XHCI (what otg_mode=1 selects) failing on this board?
+# Upstream switches every CM4 to DWC2, following Waveshare's CM4-IO-BASE-A
+# wiki, which says to drop otg_mode=1 for dtoverlay=dwc2,dr_mode=host if the
+# board's FE1.1s hub shows errors.  It doesn't on every board: some nodes run
+# their USB HaLow card on this XHCI through that same hub.  DWC2 is the
+# slower, more CPU-hungry controller, so only switch when this boot shows the
+# failure: no root hub on the XHCI, or hub/enumeration errors on its bus.
+_cm4_xhci_failing=no
+if grep -q 'Compute Module 4' /proc/device-tree/model 2>/dev/null; then
+    _xhci_bus=$(cat /sys/devices/platform/scb/fe9c0000.xhci/usb*/busnum 2>/dev/null | head -n1)
+    if [ -z "$_xhci_bus" ]; then
+        _cm4_xhci_failing=yes
+    elif dmesg | grep -Eq "(usb|hub) $_xhci_bus-[0-9.:]+.*(error -[0-9]+|not accepting address|unable to enumerate|hub_ext_port_status failed|Cannot enable)"; then
+        _cm4_xhci_failing=yes
+    fi
+    echo " > CM4 2711 XHCI failing: $_cm4_xhci_failing"
+fi
 for _cfg in /boot/firmware/config.txt /boot/config.txt; do
     [ -f "$_cfg" ] || continue
     if [ "$_halow_on_spi" -eq 1 ]; then
@@ -802,6 +820,38 @@ for _cfg in /boot/firmware/config.txt /boot/config.txt; do
     grep -q 'enable_uart=1'  "$_cfg"   || echo "enable_uart=1"              >> "$_cfg"
     if [ "__HARDWARE_MODEL__" = "rpi4" ]; then
         grep -q 'pcie-32bit-dma' "$_cfg" || printf '\n[cm4]\ndtoverlay=pcie-32bit-dma\n' >> "$_cfg"
+    fi
+
+    # CM4 USB: the stock image runs USB off the 2711 built-in XHCI controller
+    # via otg_mode=1 in the [cm4] section.  When that controller is failing on
+    # this board (see _cm4_xhci_failing above), comment it out and drive USB
+    # through the legacy DWC2 controller in host mode instead.  The overlay
+    # line goes directly beneath it so it stays inside [cm4] and has no effect
+    # on a Pi 4B flashed from the same branch.
+    #
+    # The "is it already there?" test has to be section aware.  The stock
+    # config.txt already carries an identical dtoverlay=dwc2,dr_mode=host line
+    # under [cm5].  A file-wide grep matched that one, skipped the insert, and
+    # left the CM4 with otg_mode commented out and no dwc2 line of its own:
+    # XHCI off, DWC2 never enabled, and so no USB host controller at all.  No
+    # root hub, therefore no USB HaLow card, therefore no mesh.
+    if [ "$_cm4_xhci_failing" = "yes" ]; then
+        _cm4_has_dwc2=$(awk '
+            /^\[/                                              { in_cm4 = ($0 == "[cm4]"); next }
+            in_cm4 && /^[[:space:]]*dtoverlay=dwc2,dr_mode=host/ { found = 1 }
+            END                                                 { print (found ? "yes" : "no") }
+        ' "$_cfg")
+
+        sed -i 's/^otg_mode=1/#otg_mode=1/' "$_cfg"
+
+        if [ "$_cm4_has_dwc2" = "no" ] && grep -q '^#otg_mode=1' "$_cfg"; then
+            awk '
+                /^#otg_mode=1/ && !ins {
+                    print; print "dtoverlay=dwc2,dr_mode=host"; ins = 1; next
+                }
+                { print }
+            ' "$_cfg" > "$_cfg.manet-otg" && mv "$_cfg.manet-otg" "$_cfg"
+        fi
     fi
 done
 
