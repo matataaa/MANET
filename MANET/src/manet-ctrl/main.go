@@ -130,16 +130,10 @@ func handleTerminalSSH(conn *websocket.Conn, q url.Values) {
 		password = conf["admin_password"]
 	}
 
-	sshArgs := []string{"-tt",
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "ConnectTimeout=5",
-		fmt.Sprintf("%s@%s", user, target),
-	}
-	var cmd *exec.Cmd
-	if password != "" {
-		cmd = exec.Command("sshpass", append([]string{"-p", password, "ssh"}, sshArgs...)...)
-	} else {
-		cmd = exec.Command("ssh", sshArgs...)
+	cmd, err := sshCommand(user, target, password, true, "")
+	if err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\x1b[31m%v\x1b[0m\r\n", err)))
+		return
 	}
 
 	handleTerminalPTY(conn, cmd, target)
@@ -151,7 +145,12 @@ func handleTerminalLocal(conn *websocket.Conn) {
 }
 
 func handleTerminalPTY(conn *websocket.Conn, cmd *exec.Cmd, target string) {
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "LANG=en_US.UTF-8")
+	// Keep an environment the caller prepared (sshCommand's askpass setup).
+	env := cmd.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	cmd.Env = append(env, "TERM=xterm-256color", "LANG=en_US.UTF-8")
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -520,6 +519,11 @@ func serveStatic(webRoot string) http.HandlerFunc {
 }
 
 func main() {
+	// Before flag parsing: as ssh's askpass helper this binary is started
+	// with the prompt text as its argument (see sshaskpass.go).
+	if runAsAskpass() {
+		return
+	}
 	port := flag.String("port", "80", "listen port")
 	tlsPort := flag.String("tls-port", "443", "HTTPS listen port")
 	tlsCert := flag.String("tls-cert", "/etc/manet/tls/cert.pem", "TLS certificate file")

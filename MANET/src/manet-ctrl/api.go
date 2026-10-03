@@ -2049,22 +2049,16 @@ func apiTerminalExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var shellCmd string
+	proc := exec.Command("bash", "-l", "-c", cmd)
 	if target != "" {
-		if !validateTargetRE.MatchString(target) {
-			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Invalid target"})
+		// ssh joins its remote arguments with spaces for the remote shell,
+		// so the command has to arrive there as one quoted word.
+		var err error
+		proc, err = sshCommand(user, target, password, false, "bash -l -c "+shellQuote(cmd))
+		if err != nil {
+			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "Invalid target or user"})
 			return
 		}
-		sshOpts := "-o StrictHostKeyChecking=no -o ConnectTimeout=5"
-		if password != "" {
-			shellCmd = fmt.Sprintf("sshpass -p %s ssh %s %s@%s bash -l -c %s",
-				shellQuote(password), sshOpts, shellQuote(user), shellQuote(target), shellQuote(cmd))
-		} else {
-			shellCmd = fmt.Sprintf("ssh %s %s@%s bash -l -c %s",
-				sshOpts, shellQuote(user), shellQuote(target), shellQuote(cmd))
-		}
-	} else {
-		shellCmd = fmt.Sprintf("bash -l -c %s", shellQuote(cmd))
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -2072,7 +2066,6 @@ func apiTerminalExec(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(200)
 
-	proc := exec.Command("bash", "-c", shellCmd)
 	proc.Stdout = w
 	proc.Stderr = w
 	flusher, _ := w.(http.Flusher)
