@@ -28,7 +28,7 @@ var Version = "dev"
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:    16384,
 	WriteBufferSize:   16384,
-	CheckOrigin:       func(r *http.Request) bool { return true },
+	CheckOrigin:       sameOrigin,
 	EnableCompression: true,
 }
 
@@ -632,7 +632,7 @@ func main() {
 	go fleetMcastListener()
 	go airtimeLoop()
 
-	handler := appletHostRedirect(mux, *webRoot)
+	handler := originGuard(appletHostRedirect(mux, *webRoot))
 
 	go func() {
 		sig := make(chan os.Signal, 1)

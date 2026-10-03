@@ -262,7 +262,11 @@ func apiVoice(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		body := readBody(r)
 		action := jsonStr(body, "action", "")
-		if action == "volume" {
+		// Keying the radio is what every EUD user does (the Android app
+		// has no login), and /ws/voice already lets anyone on the mesh
+		// transmit; volume is a local comfort setting. Reconfiguring or
+		// restarting the voice service stays admin-only.
+		if action == "volume" || action == "ptt_on" || action == "ptt_off" {
 			apiVoiceConfig(w, r, body)
 			return
 		}
@@ -303,6 +307,14 @@ func apiVoiceConfig(w http.ResponseWriter, r *http.Request, body map[string]inte
 		if micVol == "" && spkVol == "" {
 			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "no volume specified"})
 			return
+		}
+		// Reachable without a login, so nothing but a 0-100 level may
+		// reach mesh.conf.
+		for _, v := range []string{micVol, spkVol} {
+			if n, err := strconv.Atoi(v); v != "" && (err != nil || n < 0 || n > 100) {
+				writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "volume must be 0-100"})
+				return
+			}
 		}
 		volUpdates := map[string]string{}
 		if micVol != "" {
@@ -2129,9 +2141,9 @@ func apiTerminalReboot(w http.ResponseWriter, r *http.Request) {
 // endpoint) that need to redact secrets for an unauthenticated caller rather
 // than reject the whole request outright.
 //
-// DEPLOYMENT PREREQUISITE (flagged repeatedly across review passes — must
-// not get lost before cutover): MANET/provisioning/firstrun.sh.template
-// provisions require_auth=n by default. With require_auth=n, this function
+// DEPLOYMENT PREREQUISITE: MANET/provisioning/firstrun.sh.template
+// provisions require_auth=y, but nodes provisioned before that change still
+// carry require_auth=n. With require_auth=n, this function
 // returns true for EVERY caller unconditionally — nothing in this file gets
 // redacted and every /api/admin/* + /api/control/* endpoint is wide open to
 // anyone who can reach this node's HTTP port. require_auth=y (with a real

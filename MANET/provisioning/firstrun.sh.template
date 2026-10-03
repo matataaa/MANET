@@ -748,7 +748,11 @@ echo "admin_password=__ADMIN_PW__" >> /etc/mesh.conf
 # crashes the boot) and i2c-dev is already unconditionally enabled by
 # radio-setup.sh, so there's no real board where enabling this does harm.
 echo "battery_monitor=y" >> /etc/mesh.conf
-echo "require_auth=n" >> /etc/mesh.conf
+# Login on from first boot: without it every device on the mesh side (any
+# EUD, any LAN AP client) can change config and open a root terminal. Every
+# provisioner sets admin_password (generated when left blank); an empty one
+# leaves the node open regardless, see sessionAuthState in manet-ctrl.
+echo "require_auth=y" >> /etc/mesh.conf
 
 
 # Disable the current script so it won't run again at next boot
