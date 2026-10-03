@@ -987,7 +987,7 @@ var saveableKeys = map[string]bool{
 	"max_euds_per_node": true, "mesh_ssid": true, "mesh_key": true,
 	"ipv4_network": true, "regulatory_domain": true, "halow_bw": true, "halow_channel": true, "halow_duty_cycle": true, "halow_txpower_dbm": true, "mesh_5ghz_bw": true, "mesh_5ghz_channel": true,
 	"acs":             true,
-	"battery_monitor": true, "admin_password": true, "require_auth": true, "ui_uplink_access": true,
+	"battery_monitor": true, "admin_password": true, "require_auth": true, "ui_uplink_access": true, "ssh_uplink_access": true,
 	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
 	"multicast_mode":   true,
 	"voice_mic_volume": true, "voice_speaker_volume": true,
@@ -1028,6 +1028,7 @@ var keyDescriptions = map[string]string{
 	"admin_password":       "Password gating write/control API access when require_auth is set",
 	"require_auth":         "Require admin_password for control/config endpoints",
 	"ui_uplink_access":     "Allow the web UI (HTTPS) from this node's uplink network, e.g. a monitoring workstation on a gateway's LAN: y/n (default n, mesh side only)",
+	"ssh_uplink_access":    "Allow SSH from this node's uplink network, e.g. lab troubleshooting from the LAN: y/n (default n, mesh side only)",
 	"gateway":              "Enable gateway election and internet uplink for the mesh",
 	"gateway_nat":          "Enable NAT/masquerade on the elected gateway node",
 	"gateway_mss_clamp":    "Enable TCP MSS clamping on the gateway uplink",
@@ -1332,7 +1333,7 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		applied["multicast_applied"] = true
 	}
 
-	if _, ok := updates["ui_uplink_access"]; ok && updates["ui_uplink_access"] != existingConf["ui_uplink_access"] {
+	if uplinkAccessChanged(updates, existingConf) {
 		runUIFirewall()
 		applied["ui_firewall_applied"] = true
 	}
