@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -26,6 +27,10 @@ const (
 
 var probeTargets = []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}
 var consecutiveProbeFailures int
+
+// Client-side gateway choice, kept across polls (selection.go).
+var sel = newSelector(time.Now())
+var warnedBandwidth bool
 
 type Config struct {
 	Enabled      bool
@@ -164,11 +169,20 @@ func pollGateway(cfg Config) {
 		log.Printf("internet probe failed on %s (%d/%d)", iface, consecutiveProbeFailures, probeFailThreshold)
 	}
 
+	// A configured gateway_bandwidth overrides the measured one that
+	// manet-uplink-speed.sh announces; without it that script owns the value.
 	if cfg.Bandwidth != "" {
-		cur := strings.TrimSpace(runOut("batctl", "gw_mode"))
-		if !strings.Contains(cur, cfg.Bandwidth) {
-			run("batctl", "gw_mode", "server", cfg.Bandwidth)
-			log.Printf("batman gateway bandwidth set to %s", cfg.Bandwidth)
+		arg, want, ok := bandwidthArg(cfg.Bandwidth)
+		have, known := announcedDownMbit(runOut("batctl", "gw_mode"))
+		switch {
+		case !ok:
+			if !warnedBandwidth {
+				log.Printf("ignoring invalid gateway_bandwidth %q", cfg.Bandwidth)
+				warnedBandwidth = true
+			}
+		case !known || math.Abs(have-want) > 0.05:
+			run("batctl", "gw_mode", "server", arg)
+			log.Printf("batman gateway bandwidth set to %s", arg)
 		}
 	}
 
@@ -194,22 +208,19 @@ func pollClient(cfg Config) {
 		clearNAT()
 	}
 
-	gwMAC := batmanGatewayMAC()
-	if gwMAC == "" {
+	now := time.Now()
+	gws := parseGateways(runOut("batctl", "gwl", "-H", "-n"))
+	cur := runOut("ip", "route", "show", "default")
+	if len(gws) == 0 {
+		sel.plan(nil, false, now)
 		// No node is currently announcing gateway status. A default route
 		// installed on an earlier poll would still point at a node that
 		// stopped NATing — traffic would silently black-hole instead of
 		// failing visibly — so withdraw it rather than leaving it in place.
-		cur := runOut("ip", "route", "show", "default")
 		if strings.Contains(cur, "dev br0") {
 			run("ip", "route", "del", "default", "dev", "br0")
 			log.Println("withdrew stale default route (no gateway announced)")
 		}
-		return
-	}
-
-	gwIP := lookupRegistryIP(gwMAC)
-	if gwIP == "" {
 		return
 	}
 
@@ -218,17 +229,55 @@ func pollClient(cfg Config) {
 		return
 	}
 
-	cur := runOut("ip", "route", "show", "default")
-	if strings.Contains(cur, "via "+gwIP+" dev br0") {
-		return
+	// After a restart, the gateway the existing route points at is current,
+	// so restarting the service never moves the node.
+	if sel.cur == "" && strings.Contains(cur, "dev br0") {
+		for _, g := range gws {
+			if ip := lookupRegistryIP(g.MAC); ip != "" && strings.Contains(cur, "via "+ip+" ") {
+				sel.cur = g.MAC
+				break
+			}
+		}
 	}
 
-	if !pingReachable(gwIP) {
+	curReachable := false
+	if sel.cur != "" {
+		if ip := lookupRegistryIP(sel.cur); ip != "" {
+			curReachable = pingReachable(ip)
+		}
+	}
+	candidates, urgent := sel.plan(gws, curReachable, now)
+
+	scores := make(map[string]float64, len(gws))
+	for _, g := range gws {
+		scores[g.MAC] = g.Score
+	}
+	for _, mac := range candidates {
+		gwIP := lookupRegistryIP(mac)
+		if gwIP == "" {
+			log.Printf("no registry entry for gateway %s", mac)
+			continue
+		}
+		// The current gateway was pinged above; anything else must answer
+		// before the route moves to it.
+		if (mac != sel.cur || urgent != "") && !pingReachable(gwIP) {
+			log.Printf("gateway %s (%s) not reachable; skipping", mac, gwIP)
+			continue
+		}
+		if !strings.Contains(cur, "via "+gwIP+" dev br0") || !strings.Contains(cur, "src "+localIP) {
+			run("ip", "route", "replace", "default", "via", gwIP, "dev", "br0", "src", localIP)
+			if sel.cur != "" && mac != sel.cur {
+				reason := urgent
+				if reason == "" {
+					reason = fmt.Sprintf("noticeably better (%.1f Mbit/s)", scores[mac])
+				}
+				log.Printf("switching gateway %s → %s: %s", sel.cur, mac, reason)
+			}
+			log.Printf("default route → %s via br0 (src %s, gateway %s, %.1f Mbit/s)", gwIP, localIP, mac, scores[mac])
+		}
+		sel.switched(mac, now)
 		return
 	}
-
-	run("ip", "route", "replace", "default", "via", gwIP, "dev", "br0", "src", localIP)
-	log.Printf("default route → %s via br0 (src %s)", gwIP, localIP)
 }
 
 // --- Gateway state ---
@@ -299,20 +348,6 @@ func clearNAT() {
 	run("nft", "flush", "chain", "ip", "mangle", "forward")
 	log.Println("NAT/firewall rules cleared")
 	go meshHook("gateway-down")
-}
-
-// --- Batman gateway discovery ---
-
-var gwListRE = regexp.MustCompile(`^\*\s+([0-9a-fA-F:]{17})`)
-
-func batmanGatewayMAC() string {
-	out := runOut("batctl", "gwl")
-	for _, line := range strings.Split(out, "\n") {
-		if m := gwListRE.FindStringSubmatch(line); len(m) > 1 {
-			return strings.ToLower(m[1])
-		}
-	}
-	return ""
 }
 
 // --- Registry lookup ---
