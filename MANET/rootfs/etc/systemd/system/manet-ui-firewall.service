@@ -1,0 +1,17 @@
+[Unit]
+Description=Limit who can reach the web UI, SSH and iperf ports (table manet_ui)
+# manet-ctrl also runs manet-ui-firewall.sh at startup, every minute and when
+# the DHCP pool or the uplink-access flags change. This unit closes the gap
+# after an nftables restart, whose "flush ruleset" drops the table: PartOf
+# re-runs it right after nftables.service instead of up to a minute later.
+# Safe before a DHCP pool exists (port 80 stays open, 443/22 stay limited).
+After=nftables.service
+PartOf=nftables.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/manet-ui-firewall.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

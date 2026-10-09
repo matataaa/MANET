@@ -205,8 +205,8 @@ ap_to_mesh() {
     else
         log "Failed to add $ap to bat0"
     fi
-    # The AP radio changed role, so mesh-manager must rebuild its ebtables
-    # and dnsmasq view. Only on this transition: a plain wired EUD needs no
+    # The AP radio changed role, so mesh-manager must rebuild its dnsmasq
+    # view. Only on this transition: a plain wired EUD needs no
     # service restarts (dnsmasq already serves br0).
     systemctl restart mesh-manager 2>/dev/null || true
 }
