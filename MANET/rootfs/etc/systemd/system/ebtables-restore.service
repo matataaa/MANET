@@ -1,5 +1,9 @@
 [Unit]
-Description=Restore ebtables rules
+Description=Restore legacy ebtables rules
+# Legacy: older mesh-manager versions saved their DHCP rules here. The current
+# one enforces DHCP isolation through table bridge manet_dhcp and deletes this
+# file at startup, so on updated nodes this unit is skipped.
+ConditionPathExists=/etc/ebtables.rules
 Before=batman-enslave.service dnsmasq.service
 After=network-pre.target
 

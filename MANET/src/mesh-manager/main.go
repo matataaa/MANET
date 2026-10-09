@@ -34,7 +34,7 @@ const (
 	myChunkFile      = "/var/run/my_ipv4_chunk"
 	dnsmasqConf      = "/etc/dnsmasq.d/mesh-eud.conf"
 	dnsmasqUpstream  = "/etc/dnsmasq.d/upstream-dns.conf"
-	ebtablesRules    = "/etc/ebtables.rules"
+	legacyEbtables   = "/etc/ebtables.rules"
 	servicesReserved = 5
 )
 
@@ -406,36 +406,45 @@ func (im *ipManager) randomAvailableChunk(claimed map[int]string) (int, bool) {
 	return available[rand.Intn(len(available))], true
 }
 
-func (im *ipManager) configureEbtables() {
-	log.Printf("Configuring ebtables DHCP isolation")
+// nftCmd and dhcpIsolationNFT are variables so tests can stand in for nft.
+var (
+	nftCmd           = run
+	dhcpIsolationNFT = "/usr/local/share/manet/dhcp-isolation.nft"
+)
+
+// ensureDHCPIsolation keeps the bridge table manet_dhcp (DHCP and EUD
+// discovery stop at bat0, see manet-dhcp-isolation.service) in place. That
+// unit loads it at boot and again on an nftables restart; this per-pass check
+// is the safeguard for anything else that flushes the ruleset, so EUD DHCP
+// can never silently leak across the mesh. Upstream's IP manager does the
+// same for its copy of the table.
+func ensureDHCPIsolation() {
+	if _, err := nftCmd(5*time.Second, "nft", "list", "table", "bridge", "manet_dhcp"); err == nil {
+		return
+	}
+	if _, err := os.Stat(dhcpIsolationNFT); err != nil {
+		log.Printf("DHCP isolation: table manet_dhcp missing and %s not installed", dhcpIsolationNFT)
+		return
+	}
+	if out, err := nftCmd(5*time.Second, "nft", "-f", dhcpIsolationNFT); err != nil {
+		log.Printf("DHCP isolation: table manet_dhcp missing, re-applying failed: %v: %s", err, strings.TrimSpace(out))
+		return
+	}
+	log.Printf("DHCP isolation: table manet_dhcp was missing; re-applied")
+}
+
+// retireLegacyEbtables removes the ebtables DHCP rules older mesh-manager
+// versions kept in table bridge filter (and saved to /etc/ebtables.rules for
+// ebtables-restore.service). manet_dhcp enforces the same bat0 drops, and
+// re-applies itself; the old rules came back only on a chunk claim, so an
+// nftables restart left them missing. Nothing else uses that FORWARD chain.
+func retireLegacyEbtables() {
+	if _, err := os.Stat(legacyEbtables); err != nil {
+		return
+	}
 	run(5*time.Second, "ebtables", "-F", "FORWARD")
-
-	if _, err := os.Stat("/sys/class/net/bat0"); err == nil {
-		run(5*time.Second, "ebtables", "-A", "FORWARD", "-o", "bat0", "-p", "IPv4",
-			"--ip-protocol", "udp", "--ip-destination-port", "67:68", "-j", "DROP")
-		run(5*time.Second, "ebtables", "-A", "FORWARD", "-i", "bat0", "-p", "IPv4",
-			"--ip-protocol", "udp", "--ip-destination-port", "67:68", "-j", "DROP")
-	}
-
-	apIface := readText("/var/lib/ap_interface")
-	matches, _ := filepath.Glob("/sys/class/net/wlan*")
-	for _, path := range matches {
-		iface := filepath.Base(path)
-		if apIface != "" && iface == apIface {
-			continue
-		}
-		out, err := run(3*time.Second, "ip", "link", "show", iface)
-		if err == nil && strings.Contains(out, "master") {
-			run(5*time.Second, "ebtables", "-A", "FORWARD", "-o", iface, "-p", "IPv4",
-				"--ip-protocol", "udp", "--ip-destination-port", "67:68", "-j", "DROP")
-			run(5*time.Second, "ebtables", "-A", "FORWARD", "-i", iface, "-p", "IPv4",
-				"--ip-protocol", "udp", "--ip-destination-port", "67:68", "-j", "DROP")
-		}
-	}
-	run(5*time.Second, "ebtables-save")
-	// ebtables-save outputs to stdout; redirect to file
-	if out, err := run(5*time.Second, "ebtables-save"); err == nil {
-		os.WriteFile(ebtablesRules, []byte(out), 0644)
+	if err := os.Remove(legacyEbtables); err == nil {
+		log.Printf("Retired legacy ebtables DHCP rules (%s); manet_dhcp enforces them", legacyEbtables)
 	}
 }
 
@@ -618,6 +627,7 @@ func (im *ipManager) run() {
 	}
 
 	im.cleanupStaleAddrs()
+	ensureDHCPIsolation()
 
 	currentIP := ""
 	for _, ip := range br0IPs() {
@@ -703,7 +713,6 @@ func (im *ipManager) run() {
 		run(5*time.Second, "ip", "addr", "add", c.Primary.String()+"/"+pLen, "dev", controlIface)
 		run(5*time.Second, "ip", "addr", "add", c.Secondary.String()+"/"+pLen, "dev", controlIface)
 
-		im.configureEbtables()
 		im.configureDnsmasq(c)
 
 		im.pIP = c.Primary.String()
@@ -767,7 +776,6 @@ func (im *ipManager) run() {
 				}
 				if needsUpdate {
 					log.Printf("DHCP config changed, reconfiguring")
-					im.configureEbtables()
 					im.configureDnsmasq(c)
 				}
 			}
@@ -1140,6 +1148,8 @@ func main() {
 
 	im := newIPManager()
 	im.stop = stop
+
+	retireLegacyEbtables()
 
 	// Initial IP allocation
 	im.run()
