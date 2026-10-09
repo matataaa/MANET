@@ -395,8 +395,7 @@ DOCS_TABS.services = [
 '<table class="docs-table"><thead><tr><th>Service</th><th>Unit</th><th>Description</th></tr></thead><tbody>',
 '<tr><td>Interface Names</td><td><code>manet-wlan-apply-link-names</code></td><td>Renames wireless interfaces to consistent names (wlan0-3) based on MAC addresses at early boot.</td></tr>',
 '<tr><td>RF Unblock</td><td><code>wifi-rfkill-unblock</code></td><td>Unblocks all WiFi interfaces via rfkill at boot.</td></tr>',
-'<tr><td>HaLow TX Power</td><td><code>halow-txpower-wlan2</code></td><td>Sets the HaLow radio TX power for wlan2.</td></tr>',
-'<tr><td>MANET TX Power</td><td><code>manet-txpower</code></td><td>Sets TX power limits across all MANET radios.</td></tr>',
+'<tr><td>MANET TX Power</td><td><code>manet-txpower</code></td><td>Requests 30 dBm on every mesh radio, Wi-Fi and HaLow, on its PHY; firmware and the regulatory table set the real limit.</td></tr>',
 '</tbody></table>',
 ].join('\n');
 

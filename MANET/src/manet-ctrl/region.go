@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -19,8 +18,9 @@ var regionRoot = "/"
 // radio-setup.sh.
 const dutyCycleOffOptions = "options morse enable_auto_duty_cycle=0 enable_auto_mpsw=0"
 
-// spiDefaultTxMaxMBM is radio-setup.sh's SPI driver cap when
-// halow_txpower_dbm is unset; USB boards keep the driver default.
+// spiDefaultTxMaxMBM is radio-setup.sh's SPI driver cap, raising the SPI
+// driver's own default to the 24 dBm design target; USB boards keep the
+// driver default. The power request itself is manet-txpower.sh's.
 const spiDefaultTxMaxMBM = "2400"
 
 var (
@@ -31,7 +31,6 @@ var (
 	legacyDutyNRE    = regexp.MustCompile(` enable_auto_duty_cycle=N\b`)
 	wpaCountryRE     = regexp.MustCompile(`(?m)^country=\S*$`)
 	hostapdCountryRE = regexp.MustCompile(`(?m)^country_code=.*$`)
-	txpowerFixedRE   = regexp.MustCompile(`txpower fixed \d+`)
 )
 
 // regionValueError rejects anything but a real two-letter country code. The
@@ -50,9 +49,7 @@ func regionValueError(key, value string) error {
 	return nil
 }
 
-// halowOptionValueError validates halow_duty_cycle and halow_txpower_dbm.
-// 30 dBm is the highest any Morse regulatory table allows; empty means the
-// default for both.
+// halowOptionValueError validates halow_duty_cycle; empty means the default.
 func halowOptionValueError(key, value string) error {
 	if value == "" {
 		return nil
@@ -61,10 +58,6 @@ func halowOptionValueError(key, value string) error {
 	case "halow_duty_cycle":
 		if value != "off" && value != "auto" {
 			return fmt.Errorf("halow_duty_cycle must be off or auto")
-		}
-	case "halow_txpower_dbm":
-		if n, err := strconv.Atoi(value); err != nil || n < 1 || n > 30 {
-			return fmt.Errorf("halow_txpower_dbm must be a whole number from 1 to 30")
 		}
 	}
 	return nil
@@ -84,22 +77,12 @@ func halowDutyCycleOff(conf map[string]string, halow string) bool {
 	return halow == "EU"
 }
 
-// halowTxpowerMBM is the HaLow power request in mBm: halow_txpower_dbm when
-// set, otherwise the per-bandwidth default. The second result says whether
-// it is an operator override.
-func halowTxpowerMBM(conf map[string]string) (string, bool) {
-	if v := conf["halow_txpower_dbm"]; v != "" && halowOptionValueError("halow_txpower_dbm", v) == nil {
-		return v + "00", true
-	}
-	_, _, _, tx := halowBWParams(effectiveHalowBW(conf), resolveHalowDomain(conf))
-	return tx, false
-}
-
 // morseConf sets the country, duty-cycle and driver power-cap lines in a
 // morse.conf, keeping every other option (bcf, spi_clock_speed, power save)
-// as radio-setup.sh wrote it. txMaxMBM empty restores radio-setup.sh's
-// default cap: 2400 on SPI boards, none (driver default) on USB.
-func morseConf(text, halow string, dutyOff bool, txMaxMBM string) string {
+// as radio-setup.sh wrote it. The cap line is radio-setup.sh's default:
+// 2400 on SPI boards, none (driver default) on USB; this also clears a cap
+// left by the removed halow_txpower_dbm key.
+func morseConf(text, halow string, dutyOff bool) string {
 	country := "options morse country=" + halow
 	if morseCountryRE.MatchString(text) {
 		text = morseCountryRE.ReplaceAllLiteralString(text, country)
@@ -111,7 +94,8 @@ func morseConf(text, halow string, dutyOff bool, txMaxMBM string) string {
 	// power-save line, which would override an "auto" choice.
 	text = legacyDutyNRE.ReplaceAllLiteralString(text, "")
 
-	if txMaxMBM == "" && morseSPIRE.MatchString(text) {
+	txMaxMBM := ""
+	if morseSPIRE.MatchString(text) {
 		txMaxMBM = spiDefaultTxMaxMBM
 	}
 	switch {
@@ -144,10 +128,9 @@ func appendLine(text, line string) string {
 	return text + line + "\n"
 }
 
-// applyRadioConfigFiles writes the region, HaLow duty cycle and HaLow power
-// into the radio files radio-setup.sh only writes once, at provisioning: the
-// cfg80211 and Morse module options, crda, hostapd, the Wi-Fi mesh
-// supplicants and the halow-txpower units. Without it a region change from
+// applyRadioConfigFiles writes the region and HaLow duty cycle into the radio
+// files radio-setup.sh only writes once, at provisioning: the cfg80211 and
+// Morse module options, crda, hostapd and the Wi-Fi mesh supplicants. Without it a region change from
 // the UI or a fleet push reached mesh.conf and the HaLow supplicant only,
 // and the Morse module kept its provisioned country -- so an EU config
 // still transmitted on US-plan frequencies.
@@ -165,15 +148,8 @@ func applyRadioConfigFiles(conf map[string]string) ([]string, error) {
 		return nil, err
 	}
 	halow := resolveHalowDomain(conf)
-	for _, k := range []string{"halow_duty_cycle", "halow_txpower_dbm"} {
-		if err := halowOptionValueError(k, conf[k]); err != nil {
-			return nil, err
-		}
-	}
-	txMBM, override := halowTxpowerMBM(conf)
-	txMaxMBM := ""
-	if override {
-		txMaxMBM = txMBM
+	if err := halowOptionValueError("halow_duty_cycle", conf["halow_duty_cycle"]); err != nil {
+		return nil, err
 	}
 	dutyOff := halowDutyCycleOff(conf, halow)
 
@@ -214,7 +190,7 @@ func applyRadioConfigFiles(conf map[string]string) ([]string, error) {
 	update(path("etc/default/crda"), set("REGDOMAIN="+country+"\n"), true)
 	// morse.conf only exists on nodes with a HaLow radio; never create it.
 	update(path("etc/modprobe.d/morse.conf"), func(t string) string {
-		return morseConf(t, halow, dutyOff, txMaxMBM)
+		return morseConf(t, halow, dutyOff)
 	}, false)
 	update(path("etc/hostapd/hostapd.conf"), func(t string) string {
 		return hostapdCountryRE.ReplaceAllLiteralString(t, "country_code="+country)
@@ -232,16 +208,9 @@ func applyRadioConfigFiles(conf map[string]string) ([]string, error) {
 		}, false)
 	}
 
-	units, _ := filepath.Glob(path("etc/systemd/system/halow-txpower-*.service"))
-	for _, p := range units {
-		update(p, func(t string) string {
-			return txpowerFixedRE.ReplaceAllLiteralString(t, "txpower fixed "+txMBM)
-		}, false)
-	}
-
 	if len(changed) > 0 {
-		log.Printf("radio config: region %s, HaLow %s, duty cycle off=%v, HaLow power %s mBm written to %s; takes effect at next boot",
-			country, halow, dutyOff, txMBM, strings.Join(changed, ", "))
+		log.Printf("radio config: region %s, HaLow %s, duty cycle off=%v written to %s; takes effect at next boot",
+			country, halow, dutyOff, strings.Join(changed, ", "))
 	}
 	if len(errs) > 0 {
 		return changed, fmt.Errorf("radio config files not fully updated: %s", strings.Join(errs, "; "))

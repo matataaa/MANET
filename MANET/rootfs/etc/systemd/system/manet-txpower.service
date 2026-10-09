@@ -1,16 +1,14 @@
 [Unit]
-Description=Set MANET lab TX power limits
-# Wi-Fi mesh radios only. HaLow power belongs to halow-txpower-<iface>.service,
-# which radio-setup.sh and manet-ctrl write from halow_txpower_dbm / halow_bw;
-# setting it here too raced that unit at boot and overrode the operator value.
-After=wpa_supplicant@wlan0.service wpa_supplicant@wlan1.service
-Wants=wpa_supplicant@wlan0.service wpa_supplicant@wlan1.service
+Description=Request 30 dBm on mesh radios, with no MANET power ceiling
+# Every mesh radio, Wi-Fi and HaLow, per PHY; see manet-txpower.sh. HaLow is
+# enslaved to bat0 after its supplicant starts, so by then it is up and on
+# its channel.
+After=batman-enslave.service wpa_supplicant@wlan0.service wpa_supplicant@wlan1.service
 
 [Service]
 Type=oneshot
 ExecStartPre=/bin/sleep 5
-ExecStart=-/usr/sbin/iw dev wlan0 set txpower fixed 2300
-ExecStart=-/usr/sbin/iw dev wlan1 set txpower fixed 2400
+ExecStart=/usr/local/bin/manet-txpower.sh
 RemainAfterExit=yes
 
 [Install]

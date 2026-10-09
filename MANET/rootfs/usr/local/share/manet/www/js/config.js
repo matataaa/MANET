@@ -129,7 +129,6 @@ function configRenderView(panel, cfg) {
       { label: 'HaLow Plan', key: 'halow_regulatory_domain', fmt: function(v) { return (v || '?') + ' (from Regulatory Domain)'; } },
       { label: 'HaLow Bandwidth', key: 'halow_bw' },
       { label: 'HaLow Duty Cycle', key: 'halow_duty_cycle', fmt: function(v) { return v || 'Default'; } },
-      { label: 'HaLow TX Power', key: 'halow_txpower_dbm', fmt: function(v) { return v ? v + ' dBm' : 'Default'; } },
       { label: 'HaLow Channel', key: 'halow_channel', fmt: function(v) {
         if (!v) return 'Auto';
         var domain = halowPlanFor(cfg.regulatory_domain || 'US');
@@ -506,9 +505,6 @@ function configRenderEdit(panel, cfg) {
     { label: 'HaLow Duty Cycle', key: 'halow_duty_cycle', type: 'select', options: [
       {v:'',l:'Default (off on EU plan, auto elsewhere)'},{v:'off',l:'Off (no airtime limit)'},{v:'auto',l:'Auto (regional limit)'}
     ], hint: 'Auto applies the Morse regional limit: none in US, 10% (AP) / 2.8% (station) in EU. Off in EU exceeds the ETSI 863-868 MHz rules. Applies after a reboot.' },
-    { label: 'HaLow TX Power', key: 'halow_txpower_dbm', type: 'select', options:
-      [{v:'',l:'Default (24/24/22/20 dBm for 1/2/4/8 MHz)'}].concat(Array.from({length: 30}, (_, i) => ({v: String(30 - i), l: (30 - i) + ' dBm'}))),
-      hint: 'Request and driver cap. The regional table (US 30, EU 16 dBm EIRP) and the board calibration (BCF) still limit it; the Hardware tab shows what the radio reports. Applies after a reboot.' },
     { label: '5GHz Mesh Channel Mode', key: 'acs', type: 'select', options: [
       {v:'n',l:'Static (pinned channel)'},{v:'y',l:'Automatic (ACS)'}
     ], hint: 'Static pins the 5GHz (and 2.4GHz) mesh to a fixed channel — deterministic, recommended. Automatic elects a channel via scanning/consensus across the fleet. Live — applies within one 15s tick, no restart needed.' },
@@ -800,7 +796,7 @@ async function configSave() {
   }
 
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','eud_bandwidth','mesh_ssid','mesh_key',
-    'ipv4_network','regulatory_domain','halow_bw','halow_channel','halow_duty_cycle','halow_txpower_dbm','acs','mesh_5ghz_bw','mesh_5ghz_channel','multicast_mode','battery_monitor','admin_password','require_auth','ui_uplink_access','ssh_uplink_access',
+    'ipv4_network','regulatory_domain','halow_bw','halow_channel','halow_duty_cycle','acs','mesh_5ghz_bw','mesh_5ghz_channel','multicast_mode','battery_monitor','admin_password','require_auth','ui_uplink_access','ssh_uplink_access',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
     'auto_update','update_url','auto_update_overlay','auto_update_min_mbps','update_allow_unsigned',
     'gps','gps_source','gps_static_lat','gps_static_lon','gps_static_alt','callsign','cot_type','cot_team','cot_role','cot_icon',

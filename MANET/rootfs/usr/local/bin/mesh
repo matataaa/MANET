@@ -152,6 +152,21 @@ elif mode == "activate":
 elif mode == "result":
     result(load(), args[0] if args else "")
 
+elif mode == "txpower-result":          # report what the radio took, not the request
+    d = load()
+    result(d, "")
+    iface, want, got = d.get("iface", "?"), d.get("dbm", "?"), d.get("actual_dbm") or ""
+    try:
+        matched = abs(float(got) - float(want)) <= 0.5
+    except ValueError:
+        matched = False
+    if matched:
+        print(f"TX power set to {got} dBm on {iface}")
+    elif got:
+        print(f"Requested {want} dBm on {iface}; the radio reports {got} dBm (driver/firmware limit)")
+    else:
+        print(f"Requested {want} dBm on {iface}; the radio reports no power value")
+
 elif mode == "config-set-result":
     d = load()
     if d.get("ok") and not d.get("saved"):
@@ -374,7 +389,7 @@ case "${1:-}" in
         config_save mesh_5ghz_channel "$ch" ;;
       txpower)
         need $# 4 "radio txpower <iface> <dbm>"
-        api POST /control/txpower "$(py txpower "$3" "$4")" | py result "TX power set to $4 dBm on $3" ;;
+        api POST /control/txpower "$(py txpower "$3" "$4")" | py txpower-result ;;
       interface)
         need $# 4 "radio interface <iface> up|down"
         [[ "$4" == up || "$4" == down ]] || die "state must be up or down"

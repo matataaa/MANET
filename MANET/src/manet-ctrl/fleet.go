@@ -281,8 +281,7 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 	}
 	// Same as apiAdminSave: the module options apply at the next boot.
 	_, dutyChanged := updates["halow_duty_cycle"]
-	_, powerChanged := updates["halow_txpower_dbm"]
-	if rdChanged || bwChanged || dutyChanged || powerChanged {
+	if rdChanged || bwChanged || dutyChanged {
 		if _, err := applyRadioConfigFiles(conf); err != nil {
 			log.Printf("fleet: %v", err)
 		}
