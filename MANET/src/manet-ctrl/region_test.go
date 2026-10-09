@@ -23,7 +23,7 @@ options morse country=US
 `
 
 func TestMorseConfUSToEUAndBack(t *testing.T) {
-	eu := morseConf(spiMorseConf, "EU", true, "")
+	eu := morseConf(spiMorseConf, "EU", true)
 	if !strings.Contains(eu, "\noptions morse country=EU\n") || strings.Contains(eu, "country=US") {
 		t.Fatalf("country not switched to EU:\n%s", eu)
 	}
@@ -35,40 +35,34 @@ func TestMorseConfUSToEUAndBack(t *testing.T) {
 			t.Fatalf("lost %q:\n%s", keep, eu)
 		}
 	}
-	if again := morseConf(eu, "EU", true, ""); again != eu {
+	if again := morseConf(eu, "EU", true); again != eu {
 		t.Fatalf("not idempotent:\n%s\nvs\n%s", again, eu)
 	}
-	back := morseConf(eu, "US", false, "")
+	back := morseConf(eu, "US", false)
 	if strings.Contains(back, dutyCycleOffOptions) || !strings.Contains(back, "country=US") {
 		t.Fatalf("EU -> US did not clear EU state:\n%s", back)
 	}
-	if morseConf(back, "US", false, "") != back {
+	if morseConf(back, "US", false) != back {
 		t.Fatalf("US result not stable")
 	}
 }
 
-func TestMorseConfPowerCap(t *testing.T) {
-	// Override on USB adds the cap; clearing it removes it again.
-	usb := morseConf(usbMorseConf, "US", false, "2800")
-	if !strings.Contains(usb, "options morse tx_max_power_mbm=2800\n") {
-		t.Fatalf("override cap missing:\n%s", usb)
+func TestMorseConfResetsLeftoverPowerCap(t *testing.T) {
+	// A cap written by the removed halow_txpower_dbm key goes back to
+	// radio-setup.sh's default: none on USB, 2400 on SPI.
+	usb := strings.Replace(usbMorseConf, "country=US\n", "country=US\noptions morse tx_max_power_mbm=2800\n", 1)
+	if got := morseConf(usb, "US", false); got != usbMorseConf {
+		t.Fatalf("USB must return to the driver default:\n%s", got)
 	}
-	if got := morseConf(usb, "US", false, ""); got != usbMorseConf {
-		t.Fatalf("clearing the override on USB must restore the driver default:\n%s", got)
-	}
-	// On SPI, clearing restores radio-setup.sh's 2400 rather than removing it.
-	spi := morseConf(spiMorseConf, "US", false, "3000")
-	if strings.Count(spi, "tx_max_power_mbm=") != 1 || !strings.Contains(spi, "tx_max_power_mbm=3000") {
-		t.Fatalf("SPI override not a single 3000 line:\n%s", spi)
-	}
-	if got := morseConf(spi, "US", false, ""); !strings.Contains(got, "tx_max_power_mbm=2400") || strings.Contains(got, "3000") {
-		t.Fatalf("clearing the override on SPI must restore 2400:\n%s", got)
+	spi := strings.Replace(spiMorseConf, "tx_max_power_mbm=2400", "tx_max_power_mbm=3000", 1)
+	if got := morseConf(spi, "US", false); got != spiMorseConf {
+		t.Fatalf("SPI must return to 2400:\n%s", got)
 	}
 }
 
 func TestMorseConfDropsLegacyDutyCycleN(t *testing.T) {
 	legacy := "options morse enable_ps=0 enable_dynamic_ps_offload=N enable_auto_duty_cycle=N enable_twt=N\noptions morse country=US\n"
-	got := morseConf(legacy, "US", false, "")
+	got := morseConf(legacy, "US", false)
 	if strings.Contains(got, "enable_auto_duty_cycle") {
 		t.Fatalf("auto must not keep the old =N override:\n%s", got)
 	}
@@ -78,7 +72,7 @@ func TestMorseConfDropsLegacyDutyCycleN(t *testing.T) {
 }
 
 func TestMorseConfAddsMissingCountry(t *testing.T) {
-	got := morseConf("options morse bcf=x.bin", "US", false, "")
+	got := morseConf("options morse bcf=x.bin", "US", false)
 	if got != "options morse bcf=x.bin\noptions morse country=US\n" {
 		t.Fatalf("got %q", got)
 	}
@@ -98,20 +92,10 @@ func TestHalowDutyCycleOff(t *testing.T) {
 	}
 }
 
-func TestHalowTxpowerMBM(t *testing.T) {
-	if got, override := halowTxpowerMBM(map[string]string{"halow_bw": "4MHz"}); got != "2200" || override {
-		t.Errorf("US 4MHz default: got %s override=%v", got, override)
-	}
-	if got, override := halowTxpowerMBM(map[string]string{"halow_bw": "4MHz", "halow_txpower_dbm": "27"}); got != "2700" || !override {
-		t.Errorf("override: got %s override=%v", got, override)
-	}
-}
-
 func TestRegionAndHalowOptionValidation(t *testing.T) {
 	for _, ok := range [][2]string{
 		{"regulatory_domain", "US"}, {"regulatory_domain", "NL"}, {"regulatory_domain", "JP"},
 		{"halow_duty_cycle", ""}, {"halow_duty_cycle", "off"}, {"halow_duty_cycle", "auto"},
-		{"halow_txpower_dbm", ""}, {"halow_txpower_dbm", "1"}, {"halow_txpower_dbm", "30"},
 	} {
 		if err := configValueError(ok[0], ok[1]); err != nil {
 			t.Errorf("%s=%q rejected: %v", ok[0], ok[1], err)
@@ -120,7 +104,6 @@ func TestRegionAndHalowOptionValidation(t *testing.T) {
 	for _, bad := range [][2]string{
 		{"regulatory_domain", ""}, {"regulatory_domain", "EU"}, {"regulatory_domain", "us"}, {"regulatory_domain", "US bcf=evil.bin"},
 		{"halow_duty_cycle", "0"}, {"halow_duty_cycle", "off x=1"},
-		{"halow_txpower_dbm", "0"}, {"halow_txpower_dbm", "31"}, {"halow_txpower_dbm", "24.5"}, {"halow_txpower_dbm", "24 bcf=x"},
 	} {
 		if err := configValueError(bad[0], bad[1]); err == nil {
 			t.Errorf("%s=%q accepted", bad[0], bad[1])
@@ -159,8 +142,6 @@ func withRegionRoot(t *testing.T) string {
 	return root
 }
 
-const halowTxpowerUnit = "[Service]\nType=oneshot\nExecStart=/usr/sbin/iw dev wlan2 set txpower fixed 2200\n"
-
 func TestApplyRadioConfigFiles(t *testing.T) {
 	root := withRegionRoot(t)
 	s1g := "network={\n    country=\"US\"\n    op_class=69\n}\n"
@@ -171,7 +152,6 @@ func TestApplyRadioConfigFiles(t *testing.T) {
 		"etc/wpa_supplicant/wpa_supplicant-wlan0.conf":       "ctrl_interface=/var/run/wpa_supplicant\ncountry=US\nnetwork={\n ssid=\"country=US\"\n}\n",
 		"etc/wpa_supplicant/wpa_supplicant-wlan1-lobby.conf": "country=US\n",
 		"etc/wpa_supplicant/wpa_supplicant-wlan2-s1g.conf":   s1g,
-		"etc/systemd/system/halow-txpower-wlan2.service":     halowTxpowerUnit,
 	})
 	os.MkdirAll(filepath.Join(root, "etc/default"), 0755)
 
@@ -179,10 +159,9 @@ func TestApplyRadioConfigFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// crda is created; everything else but the s1g conf is rewritten (the
-	// unit moves from 22 to the EU 1MHz default of 24 dBm).
-	if len(changed) != 7 {
-		t.Fatalf("changed %d files, want 7: %v", len(changed), changed)
+	// crda is created; everything else but the s1g conf is rewritten.
+	if len(changed) != 6 {
+		t.Fatalf("changed %d files, want 6: %v", len(changed), changed)
 	}
 	for rel, want := range map[string]string{
 		"etc/modprobe.d/cfg80211.conf":                       "options cfg80211 ieee80211_regdom=NL\n",
@@ -191,7 +170,6 @@ func TestApplyRadioConfigFiles(t *testing.T) {
 		"etc/wpa_supplicant/wpa_supplicant-wlan0.conf":       "ctrl_interface=/var/run/wpa_supplicant\ncountry=NL\nnetwork={\n ssid=\"country=US\"\n}\n",
 		"etc/wpa_supplicant/wpa_supplicant-wlan1-lobby.conf": "country=NL\n",
 		"etc/wpa_supplicant/wpa_supplicant-wlan2-s1g.conf":   s1g,
-		"etc/systemd/system/halow-txpower-wlan2.service":     strings.Replace(halowTxpowerUnit, "2200", "2400", 1),
 	} {
 		if got := readTree(t, root, rel); got != want {
 			t.Errorf("%s = %q, want %q", rel, got, want)
@@ -209,17 +187,14 @@ func TestApplyRadioConfigFiles(t *testing.T) {
 		t.Fatalf("second apply must be a no-op, changed %v, err %v", changed, err)
 	}
 
-	// Operator overrides: EU with the regional duty cycle and a 27 dBm request.
+	// Operator override: EU with the regional duty cycle. The SPI cap stays.
 	if _, err := applyRadioConfigFiles(map[string]string{"regulatory_domain": "NL", "halow_bw": "1MHz",
-		"halow_duty_cycle": "auto", "halow_txpower_dbm": "27"}); err != nil {
+		"halow_duty_cycle": "auto"}); err != nil {
 		t.Fatal(err)
 	}
 	morse = readTree(t, root, "etc/modprobe.d/morse.conf")
-	if strings.Contains(morse, dutyCycleOffOptions) || !strings.Contains(morse, "tx_max_power_mbm=2700") {
-		t.Errorf("overrides not written:\n%s", morse)
-	}
-	if got := readTree(t, root, "etc/systemd/system/halow-txpower-wlan2.service"); !strings.Contains(got, "txpower fixed 2700") {
-		t.Errorf("power request not written: %q", got)
+	if strings.Contains(morse, dutyCycleOffOptions) || !strings.Contains(morse, "tx_max_power_mbm=2400") {
+		t.Errorf("override not written or SPI cap lost:\n%s", morse)
 	}
 
 	// Back to US with defaults restores the original files. A stale
@@ -274,7 +249,7 @@ func TestApplyRadioConfigFilesRejectsBadValue(t *testing.T) {
 	root := withRegionRoot(t)
 	for _, conf := range []map[string]string{
 		{"regulatory_domain": "US bcf=x"},
-		{"regulatory_domain": "US", "halow_txpower_dbm": "40"},
+		{"regulatory_domain": "US", "halow_duty_cycle": "always"},
 	} {
 		if _, err := applyRadioConfigFiles(conf); err == nil {
 			t.Fatalf("expected an error for %v", conf)

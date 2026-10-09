@@ -73,9 +73,8 @@ const (
 )
 
 var (
-	HalowEUChannels      = []int{863500, 864500, 865500, 866500, 867500}
-	HalowUIToS1GChannel  = map[int]int{1: 1, 2: 3, 3: 5, 4: 7, 5: 9}
-	HalowBWTxPowerCapDBM = map[string]string{"1MHz": "24", "2MHz": "24", "4MHz": "22", "8MHz": "20"}
+	HalowEUChannels     = []int{863500, 864500, 865500, 866500, 867500}
+	HalowUIToS1GChannel = map[int]int{1: 1, 2: 3, 3: 5, 4: 7, 5: 9}
 )
 
 // MeshConfFile, PendingConfFile, AckVersionFile, and FleetPrefsFile are vars
@@ -147,25 +146,24 @@ type BatteryInfo struct {
 }
 
 type Iface struct {
-	Name          string   `json:"name"`
-	Role          string   `json:"role"`
-	Health        string   `json:"health"`
-	Detail        string   `json:"detail"`
-	Faults        []string `json:"faults"`
-	Addrs         []string `json:"addrs"`
-	State         string   `json:"state"`
-	Channel       string   `json:"channel"`
-	FreqMHz       string   `json:"freq_mhz"`
-	WidthMHz      string   `json:"width_mhz,omitempty"`
-	TxPowerDBM    string   `json:"txpower_dbm"`
-	TxPowerCapDBM string   `json:"txpower_cap_dbm"`
-	TxPowerOpts   []string `json:"txpower_options_dbm"`
-	HalowBW       string   `json:"halow_bw"`
-	HalowSource   string   `json:"halow_source"`
-	TxMCS         string   `json:"tx_mcs,omitempty"`
-	RxMCS         string   `json:"rx_mcs,omitempty"`
-	Driver        string   `json:"driver,omitempty"`
-	TempC         *float64 `json:"temp_c,omitempty"`
+	Name        string   `json:"name"`
+	Role        string   `json:"role"`
+	Health      string   `json:"health"`
+	Detail      string   `json:"detail"`
+	Faults      []string `json:"faults"`
+	Addrs       []string `json:"addrs"`
+	State       string   `json:"state"`
+	Channel     string   `json:"channel"`
+	FreqMHz     string   `json:"freq_mhz"`
+	WidthMHz    string   `json:"width_mhz,omitempty"`
+	TxPowerDBM  string   `json:"txpower_dbm"`
+	TxPowerOpts []string `json:"txpower_options_dbm"`
+	HalowBW     string   `json:"halow_bw"`
+	HalowSource string   `json:"halow_source"`
+	TxMCS       string   `json:"tx_mcs,omitempty"`
+	RxMCS       string   `json:"rx_mcs,omitempty"`
+	Driver      string   `json:"driver,omitempty"`
+	TempC       *float64 `json:"temp_c,omitempty"`
 }
 
 type EUD struct {
@@ -433,7 +431,7 @@ func configValueError(key, value string) error {
 		}
 	case "regulatory_domain":
 		return regionValueError(key, value)
-	case "halow_duty_cycle", "halow_txpower_dbm":
+	case "halow_duty_cycle":
 		return halowOptionValueError(key, value)
 	}
 	return nil

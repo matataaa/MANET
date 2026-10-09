@@ -154,8 +154,7 @@ Applets are managed through the manet-ctrl API. Each applet has an `applet.json`
 |---------|------|-------------|
 | `manet-wlan-apply-link-names` | oneshot (early boot) | Renames wireless interfaces to consistent names (wlan0-3) based on MAC addresses and `.link` files. |
 | `wifi-rfkill-unblock` | oneshot | Unblocks all WiFi interfaces via rfkill at boot. |
-| `halow-txpower-wlan2` | oneshot | Sets the HaLow radio TX power for wlan2. |
-| `manet-txpower` | oneshot | Sets TX power limits across all MANET radios. |
+| `manet-txpower` | oneshot | Requests 30 dBm on every mesh radio, Wi-Fi and HaLow, on its PHY; firmware and the regulatory table set the real limit. |
 
 ### Situational Awareness
 

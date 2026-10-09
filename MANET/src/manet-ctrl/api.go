@@ -1030,7 +1030,7 @@ var saveableKeys = map[string]bool{
 	"node_hostname": true, "eud": true, "lan_ap_ssid": true, "lan_ap_key": true,
 	"lan_ap_channel": true, "lan_ap_bw": true,
 	"max_euds_per_node": true, "mesh_ssid": true, "mesh_key": true,
-	"ipv4_network": true, "regulatory_domain": true, "halow_bw": true, "halow_channel": true, "halow_duty_cycle": true, "halow_txpower_dbm": true, "mesh_5ghz_bw": true, "mesh_5ghz_channel": true,
+	"ipv4_network": true, "regulatory_domain": true, "halow_bw": true, "halow_channel": true, "halow_duty_cycle": true, "mesh_5ghz_bw": true, "mesh_5ghz_channel": true,
 	"acs":             true,
 	"battery_monitor": true, "admin_password": true, "require_auth": true, "ui_uplink_access": true, "ssh_uplink_access": true,
 	"gateway": true, "gateway_nat": true, "gateway_mss_clamp": true, "gateway_bandwidth": true,
@@ -1066,7 +1066,6 @@ var keyDescriptions = map[string]string{
 	"halow_bw":             "802.11ah HaLow channel bandwidth — EU domain supports 1MHz only; changing regulatory domain/bandwidth changes the on-air channel, so roll out to all HaLow nodes together, not one at a time",
 	"halow_channel":        "802.11ah HaLow channel (empty = Auto, domain/bandwidth default)",
 	"halow_duty_cycle":     "HaLow duty cycling: off (no airtime limit) or auto (the driver's regional limit: none in US, 10%/2.8% in EU). Empty = off on the EU plan, auto elsewhere. Applies at the next reboot. Off in EU exceeds the ETSI 863-868 MHz duty-cycle rules.",
-	"halow_txpower_dbm":    "HaLow TX power request and driver cap in dBm (1-30). Empty = per-bandwidth default (24/24/22/20 dBm for 1/2/4/8 MHz). The Morse regulatory table (EU 16 dBm EIRP, US 30) and the board's BCF still cap it; the radio reports what it actually uses. Applies at the next reboot.",
 	"mesh_5ghz_bw":         "5GHz mesh channel width: 20 (deterministic peering, default), 40 or 80 (higher throughput — 40 requires the patched wpa_supplicant and silently falls back to 20 without it; 80 without the patch can mismatch primary channel between nodes) — fleet-wide, never mixed per node",
 	"mesh_5ghz_channel":    "5GHz mesh channel number to pin the static-mode (acs=n) data channel to — valid: 36, 40, 44, 48, 149, 153, 157, 161, 165 (last five US-only, illegal under ETSI); unrecognized/absent falls back to the default lobby channel; has no effect when acs=y",
 	"acs":                  "5GHz/2.4GHz mesh channel selection mode: n (default) pins static channels, y runs automatic channel selection/election — live, applies within one 15s node-manager tick, no restart needed",
@@ -1346,12 +1345,11 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Region, HaLow duty cycle and HaLow power: module options and radio
-	// configs. Idempotent, so it runs on every save that carries one of
-	// them (config.js always sends them).
+	// Region and HaLow duty cycle: module options and radio configs.
+	// Idempotent, so it runs on every save that carries one of them
+	// (config.js always sends them).
 	_, dutySubmitted := updates["halow_duty_cycle"]
-	_, powerSubmitted := updates["halow_txpower_dbm"]
-	if rdSubmitted || bwSubmitted || dutySubmitted || powerSubmitted {
+	if rdSubmitted || bwSubmitted || dutySubmitted {
 		changed, err := applyRadioConfigFiles(conf)
 		if err != nil {
 			log.Printf("radio config: %v", err)
@@ -1359,7 +1357,7 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(changed) > 0 {
 			applied["radio_reboot_required"] = true
-			warnings = append(warnings, "Region / HaLow duty cycle / HaLow power written to the radio module options; reboot this node for the radios to use them")
+			warnings = append(warnings, "Region / HaLow duty cycle written to the radio module options; reboot this node for the radios to use them")
 		}
 	}
 
@@ -2444,15 +2442,15 @@ func applyWPAConfig(conf map[string]string) {
 	}
 }
 
-func halowBWParams(bw, regDomain string) (opClass, channel, primChwidth, txpowerMBM string) {
+func halowBWParams(bw, regDomain string) (opClass, channel, primChwidth string) {
 	if regDomain == "US" {
 		switch bw {
 		case "1MHz":
-			return "68", "11", "0", "2400"
+			return "68", "11", "0"
 		case "2MHz":
-			return "69", "10", "1", "2400"
+			return "69", "10", "1"
 		case "4MHz":
-			return "70", "24", "1", "2200"
+			return "70", "24", "1"
 		case "8MHz":
 			// op_class 72 / channel 8 is rejected outright by
 			// wpa_supplicant_s1g ("error determining S1G operating channel
@@ -2461,9 +2459,9 @@ func halowBWParams(bw, regDomain string) (opClass, channel, primChwidth, txpower
 			// duplicate lookup used when the UI/fleet push updates
 			// halow_bw on an already-provisioned node. op_class 71 /
 			// channel 12 is the confirmed-working pair for 8MHz.
-			return "71", "12", "1", "2000"
+			return "71", "12", "1"
 		default:
-			return "71", "12", "1", "2200"
+			return "71", "12", "1"
 		}
 	}
 	if regDomain == "EU" {
@@ -2473,7 +2471,7 @@ func halowBWParams(bw, regDomain string) (opClass, channel, primChwidth, txpower
 		// 863000 kHz). apiAdminSave rejects any non-1MHz halow_bw + EU
 		// combination at save time, so this branch always returns the
 		// single real EU default regardless of what bw was requested.
-		return "66", "5", "0", "2400"
+		return "66", "5", "0"
 	}
 	// Non-US/EU domains (JP/KR/SG/AU/NZ/IN/...) are out of scope — no
 	// hardware to validate a real per-domain table against, so this
@@ -2481,9 +2479,9 @@ func halowBWParams(bw, regDomain string) (opClass, channel, primChwidth, txpower
 	// applies.
 	switch bw {
 	case "2MHz":
-		return "67", "2", "1", "2400"
+		return "67", "2", "1"
 	default:
-		return "66", "1", "0", "2400"
+		return "66", "1", "0"
 	}
 }
 
@@ -2759,7 +2757,7 @@ func apiHalowChannels(w http.ResponseWriter, r *http.Request) {
 	// them (today's existing single-default behavior, unchanged).
 	defaultChannel, ok := halowDefaultChannel[domain][bw]
 	if !ok {
-		_, defCh, _, _ := halowBWParams(bw, domain)
+		_, defCh, _ := halowBWParams(bw, domain)
 		if n, err := strconv.Atoi(defCh); err == nil {
 			defaultChannel = n
 		}
@@ -2783,8 +2781,7 @@ func apiHalowChannels(w http.ResponseWriter, r *http.Request) {
 func applyHalowBW(conf map[string]string) bool {
 	bw := effectiveHalowBW(conf)
 	regDomain := resolveHalowDomain(conf)
-	opClass, ch, chwidth, _ := halowBWParams(bw, regDomain)
-	txMBM, _ := halowTxpowerMBM(conf)
+	opClass, ch, chwidth := halowBWParams(bw, regDomain)
 	if explicit := conf["halow_channel"]; explicit != "" {
 		ch = explicit
 	}
@@ -2794,7 +2791,6 @@ func applyHalowBW(conf map[string]string) bool {
 	channelValRE := regexp.MustCompile(`channel=(\d+)`)
 	chwidthRE := regexp.MustCompile(`s1g_prim_chwidth=\d+`)
 	countryRE := regexp.MustCompile(`country="([^"]*)"`)
-	txpowerRE := regexp.MustCompile(`txpower fixed \d+`)
 
 	wpaDir := "/etc/wpa_supplicant"
 	entries, _ := os.ReadDir(wpaDir)
@@ -2857,22 +2853,6 @@ func applyHalowBW(conf map[string]string) bool {
 		return false
 	}
 
-	svcDir := "/etc/systemd/system"
-	svcEntries, _ := os.ReadDir(svcDir)
-	for _, entry := range svcEntries {
-		name := entry.Name()
-		if !strings.HasPrefix(name, "halow-txpower-") {
-			continue
-		}
-		path := svcDir + "/" + name
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		text := txpowerRE.ReplaceAllString(string(data), "txpower fixed "+txMBM)
-		os.WriteFile(path, []byte(text), 0644)
-	}
-	runCmd(5*time.Second, "systemctl", "daemon-reload")
 	runCmd(10*time.Second, "bash", "-c", "systemctl restart 'wpa_supplicant-s1g-wlan*.service' 2>/dev/null || true")
 	return true
 }

@@ -92,9 +92,7 @@ function hwRenderRadios() {
     if (r.width_mhz) rows += hwRow('Channel Width', r.width_mhz + ' MHz');
     if (r.halow_bw) rows += hwRow('Primary BW', r.halow_bw);
     if (r.txpower_dbm) {
-      var txLabel = r.txpower_dbm + ' dBm';
-      if (r.txpower_cap_dbm) txLabel += ' <span style="color:var(--muted)">(cap: ' + r.txpower_cap_dbm + ' dBm)</span>';
-      rows += hwRow('TX Power', txLabel);
+      rows += hwRow('TX Power', r.txpower_dbm + ' dBm');
     }
     if (r.tx_mcs) rows += hwRow('TX MCS', r.tx_mcs);
     if (r.rx_mcs) rows += hwRow('RX MCS', r.rx_mcs);

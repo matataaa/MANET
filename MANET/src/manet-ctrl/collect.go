@@ -593,8 +593,8 @@ func getEUDs() []EUD {
 
 func getRunningServices() map[string]bool {
 	checks := map[string][]string{
-		"ntp":       {"chrony", "chronyd", "ntp", "ntpd"},
-		"tak":       {"tak-server", "takserver"},
+		"ntp": {"chrony", "chronyd", "ntp", "ntpd"},
+		"tak": {"tak-server", "takserver"},
 	}
 	result := make(map[string]bool)
 	for svc, units := range checks {
@@ -1133,9 +1133,6 @@ func enrichIfacesWithHalow(ifaces []Iface) []Iface {
 		// HaLow at 2MHz). HaLow's real bandwidth is HalowBW, already set
 		// above; clear the meaningless generic value rather than report it.
 		ifaces[i].WidthMHz = ""
-		if cap, ok := HalowBWTxPowerCapDBM[ifaces[i].HalowBW]; ok {
-			ifaces[i].TxPowerCapDBM = cap
-		}
 	}
 	return ifaces
 }
@@ -1315,16 +1312,15 @@ func readIfaceTxPower(iface string) string {
 	return ""
 }
 
+// getIfaceTxPowerCap is the highest per-channel limit iface's own PHY
+// lists. MANET sets no ceiling of its own; firmware may still report less.
 func getIfaceTxPowerCap(iface string) string {
-	if iface == "wlan2" {
-		info := getHalowDriverInfo(iface)
-		if bw, ok := info["halow_bw"]; ok {
-			if cap, ok := HalowBWTxPowerCapDBM[bw]; ok {
-				return cap
-			}
-		}
+	data, err := os.ReadFile(filepath.Join(sysClassNet, iface, "phy80211/name"))
+	phy := strings.TrimSpace(string(data))
+	if err != nil || !phyNameRE.MatchString(phy) {
+		return ""
 	}
-	out, err := runCmdStdout(5*time.Second, "iw", "phy")
+	out, err := runCmdStdout(5*time.Second, "iw", "phy", phy, "info")
 	if err != nil {
 		return ""
 	}
@@ -1350,9 +1346,50 @@ func fmtDBM(v float64) string {
 	return fmt.Sprintf("%.1f", v)
 }
 
+// sysClassNet is a variable so tests can point it at a fake tree.
+var sysClassNet = "/sys/class/net"
+
+var phyNameRE = regexp.MustCompile(`^phy[0-9]+$`)
+
+// txPowerTarget returns the PHY whose power governs iface. Both mt76
+// (mt7915e/MT7916) and morse accept a per-netdev txpower request and ignore
+// it; only the wiphy setting takes effect (confirmed on EUD4, including by
+// peer RSSI on HaLow). A PHY setting changes every interface on that radio,
+// so it is refused while another interface on it is UP (unreadable flags
+// count as UP).
+func txPowerTarget(iface string) (string, error) {
+	base := filepath.Join(sysClassNet, iface)
+	data, err := os.ReadFile(filepath.Join(base, "phy80211/name"))
+	phy := strings.TrimSpace(string(data))
+	if err != nil || !phyNameRE.MatchString(phy) {
+		return "", fmt.Errorf("cannot identify radio PHY for %s", iface)
+	}
+	entries, _ := os.ReadDir(sysClassNet)
+	for _, e := range entries {
+		other := e.Name()
+		if other == iface {
+			continue
+		}
+		od, err := os.ReadFile(filepath.Join(sysClassNet, other, "phy80211/name"))
+		if err != nil || strings.TrimSpace(string(od)) != phy {
+			continue
+		}
+		fd, _ := os.ReadFile(filepath.Join(sysClassNet, other, "flags"))
+		flags, err := strconv.ParseUint(strings.TrimSpace(string(fd)), 0, 64)
+		if err != nil || flags&1 != 0 {
+			return "", fmt.Errorf("cannot change %s power: %s also serves %s", iface, phy, other)
+		}
+	}
+	return phy, nil
+}
+
 func setIfaceTxPower(iface string, dbm float64) (string, string, error) {
 	mbm := int(dbm * 100)
-	_, err := runCmd(5*time.Second, "iw", "dev", iface, "set", "txpower", "fixed", strconv.Itoa(mbm))
+	phy, err := txPowerTarget(iface)
+	if err != nil {
+		return "", "", err
+	}
+	_, err = runCmd(5*time.Second, "iw", "phy", phy, "set", "txpower", "fixed", strconv.Itoa(mbm))
 	if err != nil {
 		return "", "", err
 	}

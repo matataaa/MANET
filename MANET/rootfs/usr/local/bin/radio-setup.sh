@@ -214,14 +214,10 @@ write_morse_conf() {
         # mode (params verified on the SPI MM6108 v1.16.4 driver only; the
         # USB MM81xx param set differs).
         [ "$usb" -eq 0 ] && echo "options morse enable_ps=0 enable_dynamic_ps_offload=N enable_twt=N"
-        # Driver TX cap: halow_txpower_dbm when set, else the 24 dBm design
-        # target on SPI and the driver default (22 dBm) on USB. The Morse
-        # regulatory table and the BCF still cap below this.
-        if [[ "${halow_txpower_dbm:-}" =~ ^[0-9]+$ ]]; then
-            echo "options morse tx_max_power_mbm=${halow_txpower_dbm}00"
-        elif [ "$usb" -eq 0 ]; then
-            echo "options morse tx_max_power_mbm=2400"
-        fi
+        # Driver TX cap: the 24 dBm design target on SPI, the driver default
+        # on USB. The Morse regulatory table and the BCF still cap below
+        # this; manet-txpower.service requests 30 dBm under it.
+        [ "$usb" -eq 0 ] && echo "options morse tx_max_power_mbm=2400"
         [ -n "$bcf" ] && echo "options morse bcf=$bcf"
         [ -n "$spi_clock" ] && echo "options morse spi_clock_speed=$spi_clock"
         halow_duty_cycle_off "$domain" && echo "options morse enable_auto_duty_cycle=0 enable_auto_mpsw=0"
@@ -876,7 +872,13 @@ cleanup_iface_service() {
 
 cleanup_iface_service 'wpa_supplicant@wlan*.service' "$current_mesh"
 cleanup_iface_service 'wpa_supplicant-s1g-wlan*.service' "$current_halow"
-cleanup_iface_service 'halow-txpower-wlan*.service' "$current_halow"
+# HaLow power is manet-txpower.service's (per PHY, every mesh radio); the
+# old per-interface units requested it with `iw dev`, which morse ignores.
+for old_power_unit in /etc/systemd/system/halow-txpower-wlan*.service; do
+    [ -f "$old_power_unit" ] || continue
+    systemctl disable --now "${old_power_unit##*/}" 2>/dev/null || true
+    rm -f "$old_power_unit"
+done
 cleanup_iface_service 'mesh-interface-setup@wlan*.service' "$current_mesh"
 
 # Remove orphan wpa_supplicant configs for interfaces no longer in any role
@@ -1442,9 +1444,9 @@ EOF
     case "$HALOW_REGULATORY_DOMAIN" in
         US)
             case "$halow_bw" in
-                1MHz)  S1G_OP_CLASS=68; S1G_CHANNEL=11; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
-                2MHz)  S1G_OP_CLASS=69; S1G_CHANNEL=10; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2400 ;;
-                4MHz)  S1G_OP_CLASS=70; S1G_CHANNEL=24; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2200 ;;
+                1MHz)  S1G_OP_CLASS=68; S1G_CHANNEL=11; S1G_PRIM_CHWIDTH=0 ;;
+                2MHz)  S1G_OP_CLASS=69; S1G_CHANNEL=10; S1G_PRIM_CHWIDTH=1 ;;
+                4MHz)  S1G_OP_CLASS=70; S1G_CHANNEL=24; S1G_PRIM_CHWIDTH=1 ;;
                 # op_class 72 / channel 8 is rejected outright by
                 # wpa_supplicant_s1g ("error determining S1G operating
                 # channel width from operating class") — confirmed live on
@@ -1455,8 +1457,8 @@ EOF
                 # MHz" in wpa_supplicant_s1g's own channel-info log) — so
                 # an explicit halow_bw=8MHz now reaches the same, proven
                 # values instead of the broken pair.
-                8MHz)  S1G_OP_CLASS=71; S1G_CHANNEL=12; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2000 ;;
-                *)     S1G_OP_CLASS=71; S1G_CHANNEL=12; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2200 ;;
+                8MHz)  S1G_OP_CLASS=71; S1G_CHANNEL=12; S1G_PRIM_CHWIDTH=1 ;;
+                *)     S1G_OP_CLASS=71; S1G_CHANNEL=12; S1G_PRIM_CHWIDTH=1 ;;
             esac
             S1G_COUNTRY="US"
             S1G_MBCA=1
@@ -1470,7 +1472,7 @@ EOF
             ;;
         EU)
             case "$halow_bw" in
-                1MHz)  S1G_OP_CLASS=66; S1G_CHANNEL=5; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
+                1MHz)  S1G_OP_CLASS=66; S1G_CHANNEL=5; S1G_PRIM_CHWIDTH=0 ;;
                 # The compiled wpa_supplicant_s1g op-class table has no
                 # 2MHz/4MHz/8MHz entry for EU at all -- EU is genuinely
                 # 1MHz-only on this hardware/firmware. apiAdminSave rejects
@@ -1478,7 +1480,7 @@ EOF
                 # no save-time reject path, so fall back to the only real
                 # EU width instead of writing an invalid op_class/channel
                 # pair into the s1g wpa_supplicant conf.
-                *)     S1G_OP_CLASS=66; S1G_CHANNEL=5; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
+                *)     S1G_OP_CLASS=66; S1G_CHANNEL=5; S1G_PRIM_CHWIDTH=0 ;;
             esac
             S1G_COUNTRY="$HALOW_REGULATORY_DOMAIN"
             S1G_MBCA=0
@@ -1492,16 +1494,13 @@ EOF
             ;;
         *)
             case "$halow_bw" in
-                2MHz)  S1G_OP_CLASS=67; S1G_CHANNEL=2; S1G_PRIM_CHWIDTH=1; S1G_TXPOWER=2400 ;;
-                *)     S1G_OP_CLASS=66; S1G_CHANNEL=1; S1G_PRIM_CHWIDTH=0; S1G_TXPOWER=2400 ;;
+                2MHz)  S1G_OP_CLASS=67; S1G_CHANNEL=2; S1G_PRIM_CHWIDTH=1 ;;
+                *)     S1G_OP_CLASS=66; S1G_CHANNEL=1; S1G_PRIM_CHWIDTH=0 ;;
             esac
             S1G_COUNTRY="$HALOW_REGULATORY_DOMAIN"
             S1G_MBCA=0
             ;;
     esac
-    # halow_txpower_dbm replaces the per-bandwidth request (same value as the
-    # tx_max_power_mbm cap write_morse_conf writes).
-    [[ "${halow_txpower_dbm:-}" =~ ^[0-9]+$ ]] && S1G_TXPOWER="${halow_txpower_dbm}00"
 
 cat << EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-s1g.conf
 country="$S1G_COUNTRY"
@@ -1537,22 +1536,6 @@ network={
 }
 EOF
 
-cat << EOF > /etc/systemd/system/halow-txpower-$WLAN.service
-[Unit]
-Description=Set HaLow TX power for $WLAN
-After=wpa_supplicant-s1g-$WLAN.service
-Wants=wpa_supplicant-s1g-$WLAN.service
-
-[Service]
-Type=oneshot
-ExecStartPre=/bin/sleep 5
-ExecStart=/usr/sbin/iw dev $WLAN set txpower fixed $S1G_TXPOWER
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    systemctl enable halow-txpower-$WLAN.service
 
 cat << EOF > /etc/systemd/system/wpa_supplicant-s1g-$WLAN.service
 [Unit]
