@@ -157,7 +157,7 @@ elif mode == "txpower-result":          # report what the radio took, not the re
     result(d, "")
     iface, want, got = d.get("iface", "?"), d.get("dbm", "?"), d.get("actual_dbm") or ""
     try:
-        matched = abs(float(got) - float(want)) < 0.5
+        matched = abs(float(got) - float(want)) <= 0.5
     except ValueError:
         matched = False
     if matched:

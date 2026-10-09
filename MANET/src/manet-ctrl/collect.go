@@ -747,7 +747,7 @@ func getInterfaces() []Iface {
 		if iw, ok := iwDevs[name]; ok {
 			iface.Channel = iw.Channel
 			iface.FreqMHz = iw.Freq
-			iface.TxPowerDBM = iw.TxPower
+			iface.TxPowerDBM = effectiveTxPower(name, iw.TxPower)
 			iface.WidthMHz = iw.Width
 			if t, ok := radioTemps[iw.Wiphy]; ok {
 				iface.TempC = &t
@@ -1307,9 +1307,58 @@ func readIfaceTxPower(iface string) string {
 		return ""
 	}
 	if m := regexp.MustCompile(`txpower\s+([\d.]+)\s+dBm`).FindStringSubmatch(out); len(m) > 1 {
-		return m[1]
+		return effectiveTxPower(iface, m[1])
 	}
 	return ""
+}
+
+// debugfsIEEE80211 is a variable so tests can point it at a fake tree.
+var debugfsIEEE80211 = "/sys/kernel/debug/ieee80211"
+
+// mt76RatePowerDBM is the highest per-rate transmit power the mt76 driver
+// programmed for phy's current channel (txpower_sku, 0.5 dB units), CCK
+// excluded since the mesh runs OFDM/HT/HE rates. iw reports the requested
+// ceiling instead: on MT7916 a 30 dBm request still leaves the 2.4 GHz
+// rates at their EEPROM targets (OFDM 16 dBm, measured on EUD4).
+func mt76RatePowerDBM(phy string) (float64, bool) {
+	data, err := os.ReadFile(filepath.Join(debugfsIEEE80211, phy, "mt76/txpower_sku"))
+	if err != nil {
+		return 0, false
+	}
+	best := -1
+	for _, line := range strings.Split(string(data), "\n") {
+		name, vals, ok := strings.Cut(line, ":")
+		if !ok || !strings.Contains(name, "(TMAC)") || strings.HasPrefix(strings.TrimSpace(name), "CCK") {
+			continue
+		}
+		for _, f := range strings.Fields(vals) {
+			if v, err := strconv.Atoi(f); err == nil && v > best {
+				best = v
+			}
+		}
+	}
+	if best < 0 {
+		return 0, false
+	}
+	return float64(best) / 2, true
+}
+
+// effectiveTxPower is what iface actually transmits at: the mt76 per-rate
+// power when that is below the reported ceiling, otherwise the report
+// (HaLow and other drivers have no per-rate table).
+func effectiveTxPower(iface, reported string) string {
+	data, err := os.ReadFile(filepath.Join(sysClassNet, iface, "phy80211/name"))
+	if err != nil {
+		return reported
+	}
+	rate, ok := mt76RatePowerDBM(strings.TrimSpace(string(data)))
+	if !ok {
+		return reported
+	}
+	if r, err := strconv.ParseFloat(reported, 64); err == nil && r <= rate {
+		return reported
+	}
+	return fmtDBM(rate)
 }
 
 // getIfaceTxPowerCap is the highest per-channel limit iface's own PHY
@@ -1398,7 +1447,7 @@ func setIfaceTxPower(iface string, dbm float64) (string, string, error) {
 		actual := readIfaceTxPower(iface)
 		if actual != "" {
 			av, _ := strconv.ParseFloat(actual, 64)
-			if math.Abs(av-dbm) < 0.5 {
+			if math.Abs(av-dbm) <= 0.5 {
 				return fmtDBM(dbm), actual, nil
 			}
 		}

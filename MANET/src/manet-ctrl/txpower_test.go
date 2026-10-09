@@ -87,3 +87,55 @@ func TestTxPowerTargetUsesPHYForHaLow(t *testing.T) {
 		t.Fatalf("got %q, %v; want phy0", got, err)
 	}
 }
+
+// eud4SKU2G is EUD4's phy1 (2.4 GHz, channel 6) txpower_sku at a 30 dBm
+// request, trimmed; values are 0.5 dB units.
+const eud4SKU2G = `
+Phy0 Tx power table (channel 6)
+                      1m     2m     5m    11m
+CCK (TMAC)      :     35     35     35     35
+                      6m     9m    12m    18m    24m    36m    48m    54m
+OFDM (TMAC)     :     32     32     32     32     31     31     29     29
+                    mcs0   mcs1   mcs2   mcs3   mcs4   mcs5   mcs6   mcs7
+HT_BW20 (TMAC)  :     31     31     31     29     29     29     28     27
+HE_RU242 (TMAC) :     31     31     31     29     29     29     28     27     24     24     22     22
+
+Tx power (bbp)  :     31
+`
+
+func fakeSKU(t *testing.T, phy, table string) {
+	t.Helper()
+	dir := t.TempDir()
+	if table != "" {
+		os.MkdirAll(filepath.Join(dir, phy, "mt76"), 0755)
+		os.WriteFile(filepath.Join(dir, phy, "mt76/txpower_sku"), []byte(table), 0644)
+	}
+	old := debugfsIEEE80211
+	debugfsIEEE80211 = dir
+	t.Cleanup(func() { debugfsIEEE80211 = old })
+}
+
+func TestEffectiveTxPowerUsesMT76RateTable(t *testing.T) {
+	fakeNet(t, map[string][2]string{"wlan0": {"phy1", "0x1003"}})
+	fakeSKU(t, "phy1", eud4SKU2G)
+	// CCK's 35 (17.5 dBm) is ignored; OFDM 6M's 32 is the highest = 16 dBm.
+	if got := effectiveTxPower("wlan0", "30.00"); got != "16" {
+		t.Fatalf("30 dBm ceiling over a 16 dBm table: got %q, want 16", got)
+	}
+	// A request below the table is what the radio uses.
+	if got := effectiveTxPower("wlan0", "10.00"); got != "10.00" {
+		t.Fatalf("10 dBm request: got %q, want the report", got)
+	}
+}
+
+func TestEffectiveTxPowerFallsBackToReport(t *testing.T) {
+	fakeNet(t, map[string][2]string{"wlan2": {"phy0", "0x1003"}})
+	fakeSKU(t, "phy0", "") // HaLow: no mt76 table
+	if got := effectiveTxPower("wlan2", "24.00"); got != "24.00" {
+		t.Fatalf("got %q, want the iw report", got)
+	}
+	fakeSKU(t, "phy0", "garbage without rate rows\n")
+	if got := effectiveTxPower("wlan2", "24.00"); got != "24.00" {
+		t.Fatalf("unparsable table: got %q, want the iw report", got)
+	}
+}
