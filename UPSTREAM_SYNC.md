@@ -55,8 +55,8 @@ git fetch upstream
 
 ## Last reviewed
 
-Upstream commit reviewed up to: `fcd02c5` (2026-10-03) — "Describe gateway
-choice as fastest reachable internet" (release 0.559)
+Upstream commit reviewed up to: `90f738b` (2026-10-09) — "rock3a tested
+successfully oct-2026" (release 0.567)
 
 **Note (2026-09-26):** upstream force-pushed `main` between the 2026-09-06
 pass and this one — `git fetch upstream` showed a *forced-update* in the
@@ -378,6 +378,46 @@ symlink selector (fork's Go `node-manager` re-reads `acs`); the shared
 `mesh-service-election.py` (fork has no MediaMTX/Mumble elections); 30 dBm
 mesh power (relies on upstream's kernel 6.18 driver ceiling removal);
 Python→jq cleanups; flasher automount hold (desktop-only, low priority).
+
+### 2026-10-09 pass (covers `fcd02c5..90f738b`, releases 0.560–0.567)
+
+Fast-forward, no force-push. 37 commits; most of the volume is new upstream
+features (ATAK phone service, ranging/positioning, MT7916 timing patches and
+firmware tooling, GPS reader rewrite).
+
+**Ported:**
+1. **Radio power on the PHY (mattronix/MANET#68).** Upstream 956232b: mt76
+   honours only `iw phy <phy> set txpower`. Verified on EUD4 that morse
+   (USB and SPI) ignores `iw dev` too, so our UI/API power, the boot unit
+   and `halow_txpower_dbm` had never applied. Adopted upstream's model:
+   request 30 dBm per PHY on every mesh radio, AP and shared-PHY guarded;
+   `halow_txpower_dbm` and the generated `halow-txpower-*` units removed.
+   Measured: HaLow unchanged (firmware limits SPI 27 / USB 24 dBm); MT7916
+   runs at its EEPROM per-rate targets (2.4 GHz OFDM 16 dBm, 5 GHz 22 dBm)
+   whatever is requested above that.
+2. **Discovery isolation at bat0 (mattronix/MANET#69).** Upstream 70aaf19's
+   `dhcp-isolation.nft` unchanged. The fork's `mdns-isolate.service` had
+   never been enabled, so EUD mDNS/SSDP/LLMNR crossed the mesh (verified
+   5/5/5 before, 0/0/0 after).
+
+**Rejected:** 031e6b8 (`ConditionPathExists=/dev/i2c-1` on battery-reader):
+the fork's Go reader already waits for the bus, and the condition would
+skip it on first boot before `i2c-dev` loads.
+
+**Open, worth porting later:** 3cf7031 `dpkg --configure -a` and
+non-interactive installs in `radio-setup.sh`; 94d6520 offline-resumable
+updates and logrotate for `/var/log/*.log`; 454a75a NTS-only internet time
+on the gateway.
+
+**Skipped / N/A:** ATAK, positioning, GPS reader rewrite, MT7916 timing
+patches and firmware tooling (features; note the upstream CM4 overlay from
+0.563 on ships `mt7915e` with `manet_timing=1`, inert without debugfs
+writes, so bench-test the next overlay bump on EUD4); 1d9e095 boot-clock
+timers (Go timers are monotonic); bc42934 `/etc/hosts` only on change
+(mesh-manager already does); ee355be shorter BATMAN interface waits (Morse
+HaLow bring-up can exceed 10 s here); 922de07/4ca08df voice (Python
+service, fork's is Go); systemd sandboxing (f098985), Rock 3A, version
+bumps.
 
 Update this line after each review pass so `git log upstream/main --oneline
 <last-reviewed-sha>..upstream/main` shows only what's new.
