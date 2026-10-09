@@ -1,0 +1,19 @@
+[Unit]
+Description=Keep DHCP and EUD discovery traffic off the mesh (bat0)
+# Upstream's bridge table manet_dhcp: DHCP plus NetBIOS, SSDP, WS-Discovery,
+# mDNS and LLMNR stop at bat0 in both directions, so EUD chatter does not
+# spend HaLow airtime and each node's avahi (allowed on br0) stays local.
+# A private table: mesh-manager's ebtables DHCP rules live in table filter.
+# /etc/nftables.conf starts with "flush ruleset", so load after it, and
+# PartOf re-applies this table whenever nftables.service is restarted.
+After=nftables.service
+PartOf=nftables.service
+Before=dnsmasq.service batman-enslave.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /usr/local/share/manet/dhcp-isolation.nft
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
