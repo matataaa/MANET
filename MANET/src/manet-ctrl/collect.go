@@ -749,6 +749,7 @@ func getInterfaces() []Iface {
 			iface.FreqMHz = iw.Freq
 			iface.TxPowerDBM = effectiveTxPower(name, iw.TxPower)
 			iface.WidthMHz = iw.Width
+			iface.Mode = iw.Type
 			if t, ok := radioTemps[iw.Wiphy]; ok {
 				iface.TempC = &t
 			}
@@ -998,11 +999,15 @@ func wpaSupplicantMeshFault(freqMHz string) string {
 }
 
 func parseIWDev() map[string]iwDev {
-	devs := make(map[string]iwDev)
 	out, err := runCmdStdout(5*time.Second, "iw", "dev")
 	if err != nil {
-		return devs
+		return make(map[string]iwDev)
 	}
+	return parseIWDevOutput(out)
+}
+
+func parseIWDevOutput(out string) map[string]iwDev {
+	devs := make(map[string]iwDev)
 	var current string
 	var curPhy string
 	for _, line := range strings.Split(out, "\n") {
@@ -1023,6 +1028,8 @@ func parseIWDev() map[string]iwDev {
 			switch {
 			case strings.HasPrefix(trimmed, "ssid "):
 				d.SSID = strings.TrimPrefix(trimmed, "ssid ")
+			case strings.HasPrefix(trimmed, "type "):
+				d.Type = strings.TrimPrefix(trimmed, "type ")
 			case strings.HasPrefix(trimmed, "channel "):
 				parts := strings.Fields(trimmed)
 				if len(parts) >= 2 {

@@ -156,6 +156,7 @@ type Iface struct {
 	Channel     string   `json:"channel"`
 	FreqMHz     string   `json:"freq_mhz"`
 	WidthMHz    string   `json:"width_mhz,omitempty"`
+	Mode        string   `json:"mode,omitempty"`
 	TxPowerDBM  string   `json:"txpower_dbm"`
 	TxPowerOpts []string `json:"txpower_options_dbm"`
 	HalowBW     string   `json:"halow_bw"`
