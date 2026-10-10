@@ -619,9 +619,8 @@ EOF
 #systemctl enable one-shot-time-sync.service
 
 # Config for the active gateway acting as a mesh NTP server
+# manet-gateway-ntp.sh adds the NTS internet servers to both configs below.
 cat << EOF > /etc/chrony/chrony-server.conf
-# Use public NTP servers from the internet.
-pool pool.ntp.org iburst
 driftfile /var/lib/chrony/chrony.drift
 makestep 1.0 3
 # Allow clients from our private mesh prefix.
@@ -632,8 +631,6 @@ EOF
 
 # Config used ONLY to test external NTP connectivity
 cat << EOF > /etc/chrony/chrony-test.conf
-# Use public NTP servers from the internet.
-pool pool.ntp.org iburst
 driftfile /var/lib/chrony/chrony.drift
 makestep 1.0 3
 # Do NOT allow any clients - this is just a test config.
