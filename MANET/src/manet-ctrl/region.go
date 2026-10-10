@@ -20,7 +20,8 @@ const dutyCycleOffOptions = "options morse enable_auto_duty_cycle=0 enable_auto_
 
 // spiDefaultTxMaxMBM is radio-setup.sh's SPI driver cap, raising the SPI
 // driver's own default to the 24 dBm design target; USB boards keep the
-// driver default. The power request itself is manet-txpower.sh's.
+// driver default. The power request itself is manet-txpower.sh's. The
+// txpower iw reports ignores this cap, so it can read above 24 dBm.
 const spiDefaultTxMaxMBM = "2400"
 
 var (

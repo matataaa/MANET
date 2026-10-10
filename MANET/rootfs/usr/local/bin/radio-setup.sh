@@ -231,7 +231,10 @@ write_morse_conf() {
         [ "$usb" -eq 0 ] && echo "options morse enable_ps=0 enable_dynamic_ps_offload=N enable_twt=N"
         # Driver TX cap: the 24 dBm design target on SPI, the driver default
         # on USB. The Morse regulatory table and the BCF still cap below
-        # this; manet-txpower.service requests 30 dBm under it.
+        # this; manet-txpower.service requests 30 dBm under it. The txpower
+        # iw reports is not limited by this cap or the BCF: Seeed SPI HAT
+        # nodes report 27 dBm while their RF output measured flat above
+        # about 20 dBm.
         [ "$usb" -eq 0 ] && echo "options morse tx_max_power_mbm=2400"
         [ -n "$bcf" ] && echo "options morse bcf=$bcf"
         [ -n "$spi_clock" ] && echo "options morse spi_clock_speed=$spi_clock"
