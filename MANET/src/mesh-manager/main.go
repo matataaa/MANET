@@ -448,12 +448,15 @@ func retireLegacyEbtables() {
 	}
 }
 
-func (im *ipManager) configureDnsmasq(c chunkIPs) {
-	log.Printf("Configuring dnsmasq: pool=%s-%s gateway=%s",
-		c.DHCPStart, c.DHCPEnd, c.Secondary)
-
-	conf := fmt.Sprintf(`interface=br0
-bind-interfaces
+// dnsmasqConfText renders mesh-eud.conf for a chunk. The steady-state check
+// compares the file against it in full, so a template change here reaches
+// nodes that already hold a chunk, not just ones claiming a new one.
+func dnsmasqConfText(c chunkIPs) string {
+	// bind-dynamic, not bind-interfaces: dnsmasq starts at boot before this
+	// manager has put an address on br0, and bind-interfaces exits with
+	// "unknown interface br0" for an interface that has no address yet.
+	return fmt.Sprintf(`interface=br0
+bind-dynamic
 dhcp-range=%s,%s,4m
 dhcp-option=3,%s
 dhcp-option=6,%s
@@ -464,9 +467,14 @@ address=/manet.mesh/%s
 address=/perf.mesh/%s
 log-dhcp
 `, c.DHCPStart, c.DHCPEnd, c.Secondary, c.Secondary, c.Secondary, c.Secondary)
+}
+
+func (im *ipManager) configureDnsmasq(c chunkIPs) {
+	log.Printf("Configuring dnsmasq: pool=%s-%s gateway=%s",
+		c.DHCPStart, c.DHCPEnd, c.Secondary)
 
 	os.MkdirAll("/etc/dnsmasq.d", 0755)
-	os.WriteFile(dnsmasqConf, []byte(conf), 0644)
+	os.WriteFile(dnsmasqConf, []byte(dnsmasqConfText(c)), 0644)
 	os.WriteFile(dnsmasqUpstream, []byte("server=1.1.1.1\nserver=8.8.8.8\n"), 0644)
 
 	run(5*time.Second, "systemctl", "unmask", "dnsmasq.service")
@@ -763,18 +771,8 @@ func (im *ipManager) run() {
 				im.ensureAddr(c.Primary.String())
 				im.ensureAddr(c.Secondary.String())
 
-				needsUpdate := false
 				data, err := os.ReadFile(dnsmasqConf)
-				if err != nil {
-					needsUpdate = true
-				} else {
-					text := string(data)
-					if !strings.Contains(text, "dhcp-range="+c.DHCPStart.String()) ||
-						!strings.Contains(text, "dhcp-option=3,"+c.Secondary.String()) {
-						needsUpdate = true
-					}
-				}
-				if needsUpdate {
+				if err != nil || string(data) != dnsmasqConfText(c) {
 					log.Printf("DHCP config changed, reconfiguring")
 					im.configureDnsmasq(c)
 				}
