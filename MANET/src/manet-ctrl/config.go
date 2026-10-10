@@ -434,6 +434,17 @@ func configValueError(key, value string) error {
 		return regionValueError(key, value)
 	case "halow_duty_cycle":
 		return halowOptionValueError(key, value)
+	case "ipv4_network":
+		// radio-setup and mesh-manager do prefix arithmetic on this value; a
+		// bare address (e.g. "10.30.2.0") broke radio-setup's AP section on a
+		// node provisioned from an old image, leaving it without an AP.
+		ip, n, err := net.ParseCIDR(value)
+		if err != nil || ip.To4() == nil {
+			return fmt.Errorf("ipv4_network must be an IPv4 CIDR such as 10.30.2.0/24")
+		}
+		if ones, _ := n.Mask.Size(); ones > 30 {
+			return fmt.Errorf("ipv4_network prefix must be /30 or shorter")
+		}
 	}
 	return nil
 }

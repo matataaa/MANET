@@ -45,6 +45,12 @@ func TestConfigValueError(t *testing.T) {
 		{"node_hostname", "a\nrequire_auth=n", false},
 		{"node_hostname", "a\rb", false},
 		{"lan_ap_ssid", "quotes\"are fine unquoted", true},
+		{"ipv4_network", "10.30.2.0/24", true},
+		{"ipv4_network", "172.16.0.0/16", true},
+		{"ipv4_network", "10.30.2.0", false},
+		{"ipv4_network", "", false},
+		{"ipv4_network", "10.30.2.0/31", false},
+		{"ipv4_network", "fd00::/64", false},
 	}
 	for _, c := range cases {
 		err := configValueError(c.key, c.value)
