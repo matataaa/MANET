@@ -567,7 +567,7 @@ function configRenderEdit(panel, cfg) {
     { label: 'Update URL', key: 'update_url', type: 'text', hint: 'Base URL for OTA tarball server (blank = disabled)' },
     { label: 'Auto Update Overlay (kernel/firmware)', key: 'auto_update_overlay', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes'}], hint: 'Updates the kernel/modules/firmware. No rollback if a bad overlay fails to boot — test on one node before enabling fleet-wide. Off by default.' },
     { label: 'Allow Unsigned Updates', key: 'update_allow_unsigned', type: 'select', options: [{v:'n',l:'No'},{v:'y',l:'Yes (lab only)'}], hint: 'Install update packages even when their signature is missing or wrong. Anyone who can serve this node an update could then run code on it. Off by default.' },
-    { label: 'Auto Update Min Bandwidth (Mbit)', key: 'auto_update_min_mbps', type: 'text', hint: 'Automatic apply is skipped below this link speed. Manual "Update Now" and fleet-wide force update ignore it (with a warning).' },
+    { label: 'Auto Update Min Bandwidth (Mbit)', key: 'auto_update_min_mbps', type: 'text', hint: 'Automatic apply is skipped below this link speed. Manual and fleet-wide updates ignore it (with a warning).' },
     { section: 'Gateway' },
     { label: 'Gateway Enabled', key: 'gateway', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}], hint: 'Allow this node to act as a mesh gateway' },
     { label: 'NAT Masquerade', key: 'gateway_nat', type: 'select', options: [{v:'y',l:'Yes'},{v:'n',l:'No'}] },
