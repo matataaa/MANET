@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -113,7 +114,9 @@ func main() {
 					log.Println("SIGUSR1: no trigger file, ignoring")
 					continue
 				}
-				if t.checkOnly {
+				if t.source != "" {
+					log.Printf("SIGUSR1: offline update requested from %s (software=%v overlay=%v)", t.source, t.software, t.overlay)
+				} else if t.checkOnly {
 					log.Println("SIGUSR1: update check requested")
 				} else {
 					log.Printf("SIGUSR1: manual update requested (software=%v overlay=%v)", t.software, t.overlay)
@@ -138,6 +141,12 @@ type trigger struct {
 	// Updates"): no SIGHUP cooldown, and nothing is applied, not even by
 	// the auto_update flags.
 	checkOnly bool
+	// source, when set, replaces update_url for this run: a local
+	// directory laid out like the update server, holding an offline
+	// package manet-ctrl staged from an upload (or fetched from the node
+	// it was uploaded to). Only the requested channels are applied from
+	// it, never by the auto_update flags.
+	source string
 }
 
 func readAndClearTrigger() trigger {
@@ -146,17 +155,33 @@ func readAndClearTrigger() trigger {
 	if err != nil {
 		return trigger{}
 	}
-	switch strings.TrimSpace(string(data)) {
+	return parseTrigger(string(data))
+}
+
+// parseTrigger reads the trigger file: the channel word on the first line,
+// optionally followed by a "source=<directory>" line.
+func parseTrigger(data string) trigger {
+	lines := strings.Split(strings.TrimSpace(data), "\n")
+	var t trigger
+	switch strings.TrimSpace(lines[0]) {
 	case "software":
-		return trigger{software: true}
+		t = trigger{software: true}
 	case "overlay":
-		return trigger{overlay: true}
+		t = trigger{overlay: true}
 	case "both":
-		return trigger{software: true, overlay: true}
+		t = trigger{software: true, overlay: true}
 	case "check":
-		return trigger{checkOnly: true}
+		t = trigger{checkOnly: true}
+	default:
+		return trigger{}
 	}
-	return trigger{}
+	for _, l := range lines[1:] {
+		v, ok := strings.CutPrefix(strings.TrimSpace(l), "source=")
+		if ok && filepath.IsAbs(v) && filepath.Clean(v) == v && v != "/" {
+			t.source = v
+		}
+	}
+	return t
 }
 
 // channelStatus is one channel's entry in the status file manet-ctrl reads
@@ -196,6 +221,9 @@ func runChecks(board string, manual trigger) {
 	mu.Unlock()
 
 	baseURL := strings.TrimRight(confValue("update_url"), "/")
+	if manual.source != "" {
+		baseURL = manual.source
+	}
 	uplinkMbps, uplinkType := queryUplink()
 
 	status := updateStatus{
@@ -228,8 +256,15 @@ func runChecks(board string, manual trigger) {
 		return
 	}
 
-	autoUpdate := isAffirmative(confValue("auto_update"), true)
-	autoUpdateOverlay := isAffirmative(confValue("auto_update_overlay"), false)
+	// An offline package only ever installs what the operator picked.
+	autoUpdate := manual.source == "" && isAffirmative(confValue("auto_update"), true)
+	autoUpdateOverlay := manual.source == "" && isAffirmative(confValue("auto_update_overlay"), false)
+	if manual.source != "" && manual.software && !swAvailable {
+		log.Printf("offline package: no release newer than v%s in %s", swLocal, manual.source)
+	}
+	if manual.source != "" && manual.overlay && !ovAvailable {
+		log.Printf("offline package: no %s overlay newer than v%s in %s", board, ovLocal, manual.source)
+	}
 	gateOK := bandwidthOK(uplinkMbps, uplinkType)
 
 	// Software and overlay are evaluated independently — NOT a single
@@ -429,6 +464,7 @@ func applySoftware(baseURL, board, remoteVerStr string, status *updateStatus) bo
 	// the node re-detect "update available" and reboot forever, since it
 	// could never catch up. remoteVerStr already parsed successfully above.
 	// finishRecovery flushes the unpacked files to disk before recording it.
+	keepPackage(tarballURL, pkg, "manet_release_version.txt", remoteVerStr)
 	if err := finishRecovery("software", remoteVerStr); err != nil {
 		log.Printf("failed to record release version: %v", err)
 	}
@@ -498,6 +534,7 @@ func applyOverlay(baseURL, board, remoteVerStr string, status *updateStatus) boo
 		return false
 	}
 
+	keepPackage(overlayURL, pkg, board+"-overlay-version.txt", remoteVerStr)
 	if err := finishRecovery("overlay", remoteVerStr); err != nil {
 		log.Printf("failed to record overlay version: %v", err)
 	}
@@ -627,6 +664,18 @@ func confValue(key string) string {
 }
 
 func fetchText(url string) (string, error) {
+	if isLocalPath(url) {
+		f, err := os.Open(url)
+		if err != nil {
+			return "", err
+		}
+		defer f.Close()
+		data, err := io.ReadAll(io.LimitReader(f, 4096))
+		if err != nil {
+			return "", err
+		}
+		return firstLine(data, url)
+	}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", err
@@ -648,15 +697,25 @@ func fetchText(url string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return firstLine(data, url)
+}
 
+func firstLine(data []byte, src string) (string, error) {
 	lines := strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)
 	if len(lines) == 0 {
-		return "", fmt.Errorf("empty response from %s", url)
+		return "", fmt.Errorf("empty response from %s", src)
 	}
 	return lines[0], nil
 }
 
+// isLocalPath tells an offline package's file (see trigger.source) from an
+// update server URL.
+func isLocalPath(p string) bool { return strings.HasPrefix(p, "/") }
+
 func download(url, dest string) error {
+	if isLocalPath(url) {
+		return copyFile(url, dest)
+	}
 	log.Printf("downloading %s", url)
 
 	resp, err := downloadClient.Get(url)

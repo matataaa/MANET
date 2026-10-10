@@ -8,6 +8,7 @@ let configEditing = false;
 let configData = null;
 let configVoiceData = null;
 let configUpdateStatus = null;
+let configOfflineStore = null;
 let configTarget = null;
 
 function configBaseUrl() {
@@ -90,6 +91,13 @@ async function configFetch() {
       const updR = await fetch(base + '/api/admin/update-status');
       configUpdateStatus = await updR.json();
     } catch(e) { configUpdateStatus = null; }
+    configOfflineStore = null;
+    if (!configTarget) {
+      try {
+        const offR = await fetch('/api/offline-update');
+        if (offR.ok) configOfflineStore = await offR.json();
+      } catch(e) {}
+    }
     configRender();
   } catch(e) {
     document.getElementById('cfg-content').innerHTML =
@@ -205,6 +213,7 @@ function configRenderView(panel, cfg) {
   let html = '<div>';
 
   html += configRenderUpdateBanner(cfg);
+  html += '<div id="cfg-offline-card">' + configRenderOfflineCard() + '</div>';
 
   sections.forEach(sec => {
     html += '<div class="card cfg-section"><div class="cfg-section-title">' + sec.title + '</div>';
@@ -242,8 +251,92 @@ function configRenderView(panel, cfg) {
 
   document.getElementById('cfg-edit-btn').addEventListener('click', configStartEditGated);
   configWireUpdateButtons();
+  configWireOfflineCard();
 
   qosFetch();
+}
+
+// Offline update card (this node only: an upload can't go through the peer
+// proxy, and Fleet Control covers the other nodes). Shows what this node's
+// package store holds, with an install button per channel that is newer
+// than what's installed -- separate buttons, as for online updates, so the
+// no-rollback Kernel/Drivers channel is never a side effect.
+function configRenderOfflineCard() {
+  var store = configOfflineStore;
+  if (configTarget || !store || !store.board) return '';
+  var st = configUpdateStatus || {};
+  var applying = st.phase && st.phase !== 'idle';
+  var html = '<div class="card cfg-section"><div class="cfg-section-title">Offline Update</div>';
+  var newer = [];
+  ['software', 'overlay'].forEach(function(ch) {
+    var p = store[ch];
+    var installed = st[ch] && st[ch].local;
+    var label = p ? offlinePackageText(ch, p) : '<span style="color:var(--muted)">none</span>';
+    if (p && installed) {
+      label += offlineCompare(ch, p.version, installed) > 0
+        ? ' <span style="color:var(--ok)">newer than installed v' + escHtml(installed) + '</span>'
+        : ' <span style="color:var(--muted)">(installed)</span>';
+    }
+    if (p && offlineCompare(ch, p.version, installed) > 0) newer.push(ch);
+    html += '<div class="cfg-row"><div class="cfg-label">' + offlineChannelLabel(ch) + ' package</div><div class="cfg-value">' + label + '</div></div>';
+  });
+  html += '<div style="padding:8px 12px">';
+  if (store.fetching) {
+    html += '<div class="fleet-pending-meta">Fetching a package from ' + escHtml(store.fetching) + '…</div>';
+  } else if (newer.length && !applying) {
+    html += '<div class="fleet-actions">';
+    if (newer.indexOf('software') !== -1) html += '<button class="fleet-btn fleet-btn-primary" id="cfg-offline-sw-btn">Install MANET v' + escHtml(store.software.version) + '</button>';
+    if (newer.indexOf('overlay') !== -1) html += '<button class="fleet-btn fleet-btn-danger" id="cfg-offline-ov-btn">Install Kernel/Drivers v' + escHtml(store.overlay.version) + '</button>';
+    if (newer.length === 2) html += '<button class="fleet-btn fleet-btn-danger" id="cfg-offline-both-btn">Install Both</button>';
+    html += '</div>';
+  }
+  html += offlineRenderUpload('cfg', store.board);
+  html += '<div style="font-size:11px;color:var(--muted);margin-top:6px">This node keeps the last package it installed, so Fleet Control can update other nodes from it without internet.</div>';
+  html += '</div></div>';
+  return html;
+}
+
+function configRefreshOfflineCard() {
+  var el = document.getElementById('cfg-offline-card');
+  if (!el) return;
+  el.innerHTML = configRenderOfflineCard();
+  configWireOfflineCard();
+}
+
+function configWireOfflineCard() {
+  offlineWireUpload('cfg', function() {
+    configRefreshOfflineCard();
+    // A finished upload changes what the store holds.
+    if (!offlineUploadState.busy && !offlineUploadState.error) configFetch();
+  });
+  [['cfg-offline-sw-btn', 'software'], ['cfg-offline-ov-btn', 'overlay'], ['cfg-offline-both-btn', 'both']].forEach(function(b) {
+    var btn = document.getElementById(b[0]);
+    if (btn) btn.addEventListener('click', function() { configOfflineInstall(b[1], btn); });
+  });
+}
+
+function configOfflineInstall(channel, btn) {
+  var label = channel === 'both' ? 'MANET + Kernel/Drivers' : offlineChannelLabel(channel);
+  var msg = 'Install ' + label + ' from the package stored on this node? It needs no internet; the node reboots once it is applied.';
+  if (channel !== 'software') {
+    msg += ' The Kernel/Drivers channel updates kernel/firmware — there is no rollback if it fails to boot.';
+  }
+  configConfirm(msg, { label: 'Install ' + label, danger: channel !== 'software' }, async function() {
+    btn.disabled = true;
+    try {
+      var r = await authFetch('/api/admin/update-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: channel, source: LOCAL_DATA && LOCAL_DATA.ip })
+      });
+      if (!r.ok) throw new Error('request failed');
+      notify('Update', 'Offline install started', { type: 'success' });
+      configStartUpdatePoll();
+    } catch (e) {
+      btn.disabled = false;
+      notify('Update', 'Failed to start the offline install', { type: 'error' });
+    }
+  });
 }
 
 // Persistent "update available" banner — reuses the same sticky-bar visual

@@ -558,6 +558,10 @@ func main() {
 	mux.HandleFunc("/api/admin/status", apiAdminStatus)
 	mux.HandleFunc("/api/admin/update-status", apiUpdateStatus)
 	mux.HandleFunc("/api/admin/update-summary", apiUpdateSummary)
+	// GET is the offline package store's contents; POST (auth, checked
+	// inside) uploads a package. The files are what other nodes fetch.
+	mux.HandleFunc("/api/offline-update", apiOfflineUpdate)
+	mux.HandleFunc("/api/offline-update/files/", apiOfflineFiles)
 	mux.HandleFunc("/api/daemons", apiDaemons)
 	mux.HandleFunc("/api/atak-package", apiATAKPackage)
 	mux.HandleFunc("/api/mesh-ctrl.apk", apiDownloadAPK)

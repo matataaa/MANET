@@ -269,6 +269,7 @@ function fleetRender() {
   // Node table
   html += fleetRenderNodes(d.nodes, pending);
   html += fleetRenderNodeUpdateTable();
+  html += '<div id="fleet-offline-card">' + fleetRenderOfflineCard() + '</div>';
 
   panel.innerHTML = html;
   if (checkedUpdIPs.length) {
@@ -298,6 +299,142 @@ function fleetRender() {
   if (updateSelBothBtn) updateSelBothBtn.addEventListener('click', function() { fleetUpdateSelected('both', updateSelBothBtn); });
   var checkUpdatesBtn = document.getElementById('fleet-check-updates-btn');
   if (checkUpdatesBtn) checkUpdatesBtn.addEventListener('click', function() { fleetCheckUpdates(checkUpdatesBtn); });
+  fleetWireOfflineCard();
+}
+
+// --- Offline update (see offline.js) ---
+
+// The node whose package store the fleet installs from; kept across the
+// poll re-renders.
+var fleetOfflineSource = null;
+
+// Nodes whose store holds a package (from update-summary's per-node
+// `packages`), this node first.
+function fleetOfflineSources() {
+  var nodes = (fleetUpdateSummaryData && fleetUpdateSummaryData.nodes) || [];
+  var out = nodes.filter(function(n) {
+    var p = n.packages;
+    return n.ip && p && (p.software || p.overlay);
+  });
+  out.sort(function(a, b) {
+    var am = LOCAL_DATA && a.ip === LOCAL_DATA.ip, bm = LOCAL_DATA && b.ip === LOCAL_DATA.ip;
+    return (bm ? 1 : 0) - (am ? 1 : 0) || String(a.hostname).localeCompare(String(b.hostname));
+  });
+  return out;
+}
+
+// Nodes, other than the source, whose installed version on channel is older
+// than the source's package.
+function fleetOfflineTargets(src, channel) {
+  var p = src.packages[channel];
+  if (!p) return [];
+  return ((fleetUpdateSummaryData && fleetUpdateSummaryData.nodes) || []).filter(function(n) {
+    var s = n.status;
+    return n.reached && n.ip !== src.ip && s && s[channel] && offlineCompare(channel, p.version, s[channel].local) > 0;
+  });
+}
+
+function fleetRenderOfflineCard() {
+  if (!fleetUpdateSummaryData || !fleetUpdateSummaryData.nodes) return '';
+  var me = (fleetUpdateSummaryData.nodes || []).find(function(n) { return LOCAL_DATA && n.ip === LOCAL_DATA.ip; });
+  var board = (me && me.packages && me.packages.board) || 'cm4';
+  var sources = fleetOfflineSources();
+  var html = '<div class="fleet-card" style="margin-top:20px">';
+  html += '<div class="fleet-card-title">Offline Update <span style="font-size:10px;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0">(update the fleet from a package one node holds, no internet needed)</span></div>';
+
+  if (!sources.length) {
+    html += '<div class="fleet-pending-meta">No node holds a package yet. Upload one below; nodes also keep the last package they installed.</div>';
+  } else {
+    if (!fleetOfflineSource || !sources.some(function(n) { return n.ip === fleetOfflineSource; })) {
+      fleetOfflineSource = sources[0].ip;
+    }
+    var src = sources.find(function(n) { return n.ip === fleetOfflineSource; });
+    html += '<div class="fleet-actions" style="align-items:center"><span style="font-size:12px">Install from</span><select id="fleet-offline-src">';
+    sources.forEach(function(n) {
+      html += '<option value="' + escHtml(n.ip) + '"' + (n.ip === fleetOfflineSource ? ' selected' : '') + '>' +
+        escHtml(n.hostname || n.ip) + (LOCAL_DATA && n.ip === LOCAL_DATA.ip ? ' (this node)' : '') + '</option>';
+    });
+    html += '</select></div>';
+    ['software', 'overlay'].forEach(function(ch) {
+      var p = src.packages[ch];
+      if (!p) return;
+      var n = fleetOfflineTargets(src, ch).length;
+      html += '<div class="fleet-pending-meta">' + offlinePackageText(ch, p) + ' — ' +
+        (n ? n + ' other node' + (n !== 1 ? 's are' : ' is') + ' older' : 'no other node is older') + '</div>';
+    });
+    var swN = fleetOfflineTargets(src, 'software').length, ovN = fleetOfflineTargets(src, 'overlay').length;
+    if (swN || ovN) {
+      html += '<div class="fleet-actions">';
+      if (swN) html += '<button class="fleet-btn fleet-btn-primary" id="fleet-offline-sw-btn">Push MANET (' + swN + ')</button>';
+      if (ovN) html += '<button class="fleet-btn fleet-btn-danger" id="fleet-offline-ov-btn">Push Kernel/Drivers (' + ovN + ')</button>';
+      if (swN && ovN) html += '<button class="fleet-btn fleet-btn-danger" id="fleet-offline-both-btn">Push Both</button>';
+      html += '</div>';
+    }
+  }
+  html += '<div style="margin-top:12px">' + offlineRenderUpload('fleet', board) + '</div>';
+  html += '<div style="font-size:11px;color:var(--muted);margin-top:6px">Uploads go to this node' +
+    (me ? ' (' + escHtml(me.hostname || me.ip) + ')' : '') + '. The source node itself is not updated by a push: ' +
+    'it serves the package to the others. Update it from its own Config tab once they are done.</div>';
+  html += '</div>';
+  return html;
+}
+
+function fleetRefreshOfflineCard() {
+  var el = document.getElementById('fleet-offline-card');
+  if (!el) return;
+  el.innerHTML = fleetRenderOfflineCard();
+  fleetWireOfflineCard();
+}
+
+function fleetWireOfflineCard() {
+  offlineWireUpload('fleet', function() {
+    fleetRefreshOfflineCard();
+    if (!offlineUploadState.busy && !offlineUploadState.error) fleetFetchUpdateSummary();
+  });
+  var sel = document.getElementById('fleet-offline-src');
+  if (sel) sel.addEventListener('change', function() { fleetOfflineSource = sel.value; fleetRefreshOfflineCard(); });
+  [['fleet-offline-sw-btn', 'software'], ['fleet-offline-ov-btn', 'overlay'], ['fleet-offline-both-btn', 'both']].forEach(function(b) {
+    var btn = document.getElementById(b[0]);
+    if (btn) btn.addEventListener('click', function() { fleetOfflinePush(b[1], btn); });
+  });
+}
+
+// Broadcasts the same slot-71 trigger as Force Update, with the source
+// node's address: every other node fetches the package from that node's
+// store over the mesh and installs it (node-update skips a node that is
+// already up to date).
+function fleetOfflinePush(channel, btn) {
+  var src = fleetOfflineSources().find(function(n) { return n.ip === fleetOfflineSource; });
+  if (!src) return;
+  var chans = channel === 'both' ? ['software', 'overlay'] : [channel];
+  var targets = {}, mb = 0;
+  chans.forEach(function(ch) {
+    if (src.packages[ch]) mb += src.packages[ch].size / 1048576;
+    fleetOfflineTargets(src, ch).forEach(function(n) { targets[n.ip] = true; });
+  });
+  var count = Object.keys(targets).length;
+  var label = fleetChannelLabel(channel);
+  var msg = 'Install ' + label + ' on ' + count + ' node' + (count !== 1 ? 's' : '') + ' from ' + escHtml(src.hostname || src.ip) +
+    '? Each fetches ' + mb.toFixed(0) + ' MB from it over the mesh, which can take a long time over HaLow, then reboots once applied.';
+  if (channel !== 'software') {
+    msg += ' The Kernel/Drivers channel updates kernel/firmware — there is no rollback if it fails to boot.';
+  }
+  fleetConfirm(msg, { label: 'Push ' + label, danger: channel !== 'software' }, async function() {
+    btn.disabled = true;
+    try {
+      var r = await authFetch('/api/admin/force-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: channel, source: src.ip })
+      });
+      if (!r.ok) throw new Error('request failed');
+      fleetToast(label + ' offline update sent to the fleet', 'success');
+      setTimeout(fleetFetchUpdateSummary, 15000);
+    } catch (e) {
+      btn.disabled = false;
+      fleetToast('Failed to start the offline update', 'error');
+    }
+  });
 }
 
 // Renders a sticky "N of M nodes have an update available" banner, same

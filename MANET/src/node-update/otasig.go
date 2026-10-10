@@ -118,6 +118,10 @@ func checkOTASignature(url, file, version string) error {
 //
 //	node-update ota-keygen <private-key-file> <public-key-file>
 //	node-update ota-sign <private-key-file> <version> <tarball>   (writes <tarball>.sig)
+//
+// and on a node:
+//
+//	node-update ota-verify <version> <tarball>   (checks <tarball>.sig)
 func otaCommand(args []string) error {
 	switch {
 	case len(args) == 3 && args[0] == "ota-keygen":
@@ -153,6 +157,19 @@ func otaCommand(args []string) error {
 		}
 		sig := ed25519.Sign(ed25519.PrivateKey(priv), otaMessage(filepath.Base(file), version, digest))
 		return os.WriteFile(file+".sig", []byte(base64.StdEncoding.EncodeToString(sig)+"\n"), 0644)
+	case len(args) == 3 && args[0] == "ota-verify":
+		// Checks <tarball>.sig against the installed keys, the way an
+		// install would; manet-ctrl runs it on an uploaded package.
+		version, file := args[1], args[2]
+		sig, err := os.ReadFile(file + ".sig")
+		if err != nil {
+			return fmt.Errorf("no signature: %v", err)
+		}
+		keys, err := loadOTAKeys(otaKeysDir)
+		if err != nil {
+			return err
+		}
+		return verifyOTA(file, filepath.Base(file), version, string(sig), keys)
 	}
-	return errors.New("usage: node-update ota-keygen <priv> <pub> | ota-sign <priv> <version> <tarball>")
+	return errors.New("usage: node-update ota-keygen <priv> <pub> | ota-sign <priv> <version> <tarball> | ota-verify <version> <tarball>")
 }
