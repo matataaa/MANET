@@ -221,8 +221,14 @@ find_working_uplink() {
     return 1
 }
 
-configure_firewall() {
-    local iface="$1"
+# The firewall every node keeps, gateway or not: input from the mesh side
+# and the uplink candidates (the same broad accepts as before; the web UI,
+# SSH and iperf ports are manet_ui's), and forwarding only within br0, which
+# is how EUDs reach the mesh gateway through this node (ip_forward stays on).
+# A non-gateway, including a demoted gateway still on its LAN, must not
+# route between that LAN and the mesh. Older code deleted the whole table
+# on demotion, which left forwarding wide open.
+base_firewall() {
     local candidate
 
     nft add table inet filter 2>/dev/null || true
@@ -247,6 +253,12 @@ configure_firewall() {
     done
 
     nft add rule inet filter forward iifname "br0" oifname "br0" accept
+}
+
+configure_firewall() {
+    local iface="$1"
+
+    base_firewall
     nft add rule inet filter forward iifname "br0" oifname "$iface" accept
     nft add rule inet filter forward iifname "$iface" oifname "br0" ct state established,related accept
 
@@ -262,7 +274,7 @@ configure_firewall() {
 }
 
 clear_firewall() {
-    nft delete table inet filter 2>/dev/null || true
+    base_firewall
     nft flush chain ip nat postrouting 2>/dev/null || true
     nft flush chain ip mangle forward 2>/dev/null || true
 }

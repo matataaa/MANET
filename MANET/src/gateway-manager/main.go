@@ -204,7 +204,7 @@ func pollGateway(cfg Config) {
 }
 
 func pollClient(cfg Config) {
-	if natHasAnyMasquerade() || filterTableExists() {
+	if natHasAnyMasquerade() {
 		clearNAT()
 	}
 
@@ -314,11 +314,6 @@ func natHasAnyMasquerade() bool {
 	return strings.Contains(out, "masquerade")
 }
 
-func filterTableExists() bool {
-	out := runOut("nft", "list", "tables")
-	return strings.Contains(out, "inet filter")
-}
-
 func applyNAT(iface string, mssClamp bool) {
 	run("sysctl", "-q", "net.ipv4.ip_forward=1")
 
@@ -342,8 +337,11 @@ func applyNAT(iface string, mssClamp bool) {
 	go meshHook("gateway-up", "IFACE="+iface)
 }
 
+// clearNAT removes the gateway's masquerade and MSS clamp. It leaves table
+// inet filter alone: manet-uplink-dispatch.sh resets that to the base
+// firewall on demotion, and deleting it left a non-gateway forwarding
+// between its LAN and the mesh unfiltered.
 func clearNAT() {
-	run("nft", "delete", "table", "inet", "filter")
 	run("nft", "flush", "chain", "ip", "nat", "postrouting")
 	run("nft", "flush", "chain", "ip", "mangle", "forward")
 	log.Println("NAT/firewall rules cleared")
