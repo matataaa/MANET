@@ -249,6 +249,8 @@ base_firewall() {
     nft add rule inet filter input iifname "br0" accept
     nft add rule inet filter input iifname "bat0" accept
     for candidate in $(candidate_ifaces); do
+        # A client's default route is via br0, already accepted above.
+        case "$candidate" in lo|br0|bat0) continue ;; esac
         nft add rule inet filter input iifname "$candidate" accept
     done
 
@@ -271,6 +273,13 @@ configure_firewall() {
     nft add chain ip mangle forward '{ type filter hook forward priority mangle; policy accept; }' 2>/dev/null || true
     nft flush chain ip mangle forward 2>/dev/null || true
     nft add rule ip mangle forward tcp flags syn tcp option maxseg size set rt mtu
+}
+
+# True when the forward chain holds exactly base_firewall's one rule.
+firewall_is_base() {
+    local rules
+    rules=$(nft list chain inet filter forward 2>/dev/null | grep -E '(accept|drop|reject)$' | sed 's/^[[:space:]]*//')
+    [ "$rules" = 'iifname "br0" oifname "br0" accept' ]
 }
 
 clear_firewall() {
@@ -429,6 +438,10 @@ reconcile() {
     # on its own ~60-75s timer forever, restarting radvd/mesh-manager/
     # gateway-manager for no reason each time.
     if [ -z "$current" ] && [ ! -f "$LEGACY_GATEWAY_STATE" ]; then
+        # The boot ruleset (/etc/nftables.conf) also forwards br0 to end0.
+        # Reset a node that was never a gateway to the base firewall once
+        # after boot, and again after an nftables reload brings that back.
+        firewall_is_base || clear_firewall
         return 0
     fi
 
