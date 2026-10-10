@@ -67,6 +67,21 @@ have_package_network() {
     return 0
 }
 
+# Install packages without prompting. A power cut during an earlier install
+# leaves dpkg half-configured, and until "dpkg --configure -a" finishes that
+# work every apt call fails, so do it first. Conffile questions keep the
+# installed file (--force-confold) rather than wait on a tty that is not
+# there. --update refreshes the package lists first.
+install_packages() {
+    DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold --configure -a || return $?
+    if [ "${1:-}" = --update ]; then
+        shift
+        apt-get update -qq || return $?
+    fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
+}
+
 : > "$PROVISION_FAIL_FILE"
 provision_state running
 
@@ -1862,7 +1877,7 @@ fi
 
 if have_package_network; then
     provision_try "apt install failed: avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf" \
-        apt install -y avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf
+        install_packages avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf
 else
     provision_fail "no network: cannot install avahi-daemon iperf3 traceroute sqlite3 python3-zeroconf"
 fi
@@ -1959,7 +1974,7 @@ fi
 # Install smbus and i2c-tools for battery-reader and diagnostics
 if have_package_network; then
     provision_try "apt install failed: python3-smbus i2c-tools" \
-        sh -c 'apt update -qq && apt install -y python3-smbus i2c-tools'
+        install_packages --update python3-smbus i2c-tools
 else
     provision_fail "no network: cannot install python3-smbus i2c-tools"
 fi
@@ -1999,7 +2014,7 @@ if [[ "${gps:-y}" == "n" ]]; then
 else
     if have_package_network; then
         provision_try "apt install failed: gpsd gpsd-clients" \
-            apt-get install -y gpsd gpsd-clients
+            install_packages gpsd gpsd-clients
     else
         provision_fail "no network: cannot install gpsd gpsd-clients"
     fi
