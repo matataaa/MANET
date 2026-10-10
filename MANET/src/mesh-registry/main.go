@@ -128,6 +128,10 @@ func collectLocal() NodeInfo {
 	mcs := collectMCS()
 	tourguideState := loadKV("/var/run/tourguide_state")
 	iface24, iface5 := meshIfaces()
+	// A running chrony is not a time source: every node runs it for its own
+	// one-shot sync, often unsynced. manet-gateway-ntp.sh writes this marker
+	// only once a gateway holds internet (NTS) time.
+	isNTP := fileExists("/var/run/mesh-ntp.state")
 
 	return NodeInfo{
 		Hostname:               hostname,
@@ -140,7 +144,7 @@ func collectLocal() NodeInfo {
 		CPULoad:                cpu,
 		IsGateway:              isGW,
 		GatewayIface:           gwIface,
-		IsNTP:                  boolStr(serviceActive("ntp") || serviceActive("chrony") || serviceActive("systemd-timesyncd")),
+		IsNTP:                  boolStr(isNTP),
 		GPSLat:                 gpsLat,
 		GPSLon:                 gpsLon,
 		GPSAlt:                 gpsAlt,
@@ -735,11 +739,6 @@ func extractChannelNum(line string) string {
 		return fields[1]
 	}
 	return ""
-}
-
-func serviceActive(name string) bool {
-	err := exec.Command("systemctl", "is-active", "--quiet", name).Run()
-	return err == nil
 }
 
 func boolStr(b bool) string {
