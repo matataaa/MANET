@@ -404,10 +404,30 @@ firmware tooling, GPS reader rewrite).
 the fork's Go reader already waits for the bus, and the condition would
 skip it on first boot before `i2c-dev` loads.
 
-**Open, worth porting later:** 3cf7031 `dpkg --configure -a` and
-non-interactive installs in `radio-setup.sh`; 94d6520 offline-resumable
-updates and logrotate for `/var/log/*.log`; 454a75a NTS-only internet time
-on the gateway.
+**Ported in a follow-up (2026-10-10, release 0.5.5):**
+3. **Interrupted dpkg recovery (mattronix/MANET#73).** Upstream 3cf7031:
+   `install_packages()` in `radio-setup.sh` runs `dpkg --configure -a` first
+   and installs non-interactively; firstrun the same. Not taken:
+   `--no-install-recommends`. Verified on EUD2 with a leftover journal entry
+   in `/var/lib/dpkg/updates` (an only-unpacked package is not the failure;
+   apt finishes that by itself).
+4. **NTS-only gateway time (mattronix/MANET#75).** Upstream 454a75a's server
+   set and `nocerttimecheck 1` on the first sync, applied in
+   `manet-gateway-ntp.sh` (the fork has no `mesh-time-sync.py`): it swaps the
+   on-node template's internet sources for the NTS servers at each promotion,
+   so OTA-updated nodes switch over. EUD4's templates held a run of NUL
+   bytes from a power cut, now stripped (the #75 message says two nodes;
+   it was one). Verified on EUD4, including a sync from a
+   2025-01-01 clock with no saved cookies and a control without the date
+   waiver that fails closed.
+
+Found while testing, fork-only: gateway-manager deleted `inet filter` on
+every non-gateway node, leaving it forwarding with no filter
+(mattronix/MANET#74 keeps a base firewall). #76 corrects the SPI
+`tx_max_power_mbm` comment after an RF measurement.
+
+**Open, worth porting later:** 94d6520 offline-resumable updates and
+logrotate for `/var/log/*.log`.
 
 **Skipped / N/A:** ATAK, positioning, GPS reader rewrite, MT7916 timing
 patches and firmware tooling (features; note the upstream CM4 overlay from
