@@ -158,6 +158,63 @@ not retried on every boot. The recovery script and unit are written by
 `node-update` itself, not shipped in the tarball, so the unpack they
 protect can't break them.
 
+## Offline updates
+
+For nodes without internet, and so a release only has to reach the fleet
+once, every node keeps a **package store** in `/var/lib/manet-packages/`,
+laid out exactly like the update server directory (version files,
+`<board>-tools.tar.gz`, `<board>-sbc-overlay.tar.gz`, their `.sig`s). It
+holds, per channel, whichever is newest of:
+
+- the package `node-update` last installed (online or offline): after a
+  successful install it hard-links the kept recovery copy in, with its
+  signature and version file, instead of deleting it;
+- a package uploaded through the UI;
+- a package fetched from another node's store.
+
+`manet-ctrl` serves the store read-only at
+`GET /api/offline-update/files/<name>` (only the store's own file names)
+and describes it at `GET /api/offline-update`.
+
+**Uploading** (Config → Offline Update, or Fleet Control → Offline Update,
+both upload to the node the browser is on): pick the release `.zip`, or
+the files from the release folder — `<board>-tools.tar.gz` + `.sig` +
+`manet_release_version.txt` for MANET, `<board>-sbc-overlay.tar.gz` +
+`.sig` + `<board>-overlay-version.txt` for Kernel/Drivers. Files are
+matched by name (also inside a `.zip`, at any depth); anything else,
+including the `.img`, is ignored, and the upload is capped at 400 MB. A
+package is only stored if `node-update ota-verify <version> <tarball>`
+accepts its signature (or `update_allow_unsigned=y`), it comes with its
+version file, and it is not older than what the store already holds.
+Another board's files are ignored.
+
+**Installing** goes through `node-update` like any other update: the
+trigger file gets a second line, `source=/var/lib/manet-packages`, and
+`node-update` runs its normal detect/verify/recover/apply/reboot cycle
+against that directory instead of `update_url`. Only the requested
+channel(s) are applied, never the `auto_update` flags, and only if newer
+than what is installed. `POST /api/admin/update-now` with
+`{"channel": ..., "source": "<node ip>"}` does this on one node: the
+node's own store when `source` is one of its addresses, otherwise
+`manet-ctrl` first fetches the package from that node's store over the
+mesh (TLS to the peer as for other peer calls, 60-minute limit for slow
+HaLow paths), verifies it into its own store, then triggers the install.
+While fetching, `update-status` reports the phase
+`fetching offline package from <ip>`.
+
+**Fleet push** (Fleet Control → Offline Update → Push): pick a source node
+— any node whose store holds a package, shown from `update-summary`'s
+per-node `packages` — and a channel. `POST /api/admin/force-update` with
+`source` broadcasts the usual slot 71 trigger carrying the source address;
+every other node fetches from it and installs. The source node itself is
+left out: it serves the package to everyone else, and its own update
+reboot would cut their downloads. Update it from its Config tab once the
+rest are done.
+
+Not automatic: a node's scheduled check still only looks at `update_url`.
+Pulling an update from a peer's store when the update server is
+unreachable is a possible follow-up.
+
 ## Package signing
 
 `node-update` extracts tarballs as root onto `/`, so it only installs one

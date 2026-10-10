@@ -476,7 +476,10 @@ func parseAlfredBest(out []byte, own map[string]bool, slot, tsField, password, m
 // so the two package schemas never collide, sealed the same way slot 70 is
 // (see fleetSeal's slot-bound AAD — a slot 70 envelope can't be replayed
 // here and vice versa).
-func broadcastUpdatePackage(channel string) (triggeredAt int64, ok bool) {
+//
+// source, when set, is the mesh address of the node whose offline package
+// store every node installs from (see offlineInstall).
+func broadcastUpdatePackage(channel, source string) (triggeredAt int64, ok bool) {
 	conf := loadKVFile(MeshConfFile)
 	password := conf["admin_password"]
 	if password == "" {
@@ -487,6 +490,9 @@ func broadcastUpdatePackage(channel string) (triggeredAt int64, ok bool) {
 	pkg := map[string]interface{}{
 		"channel":      channel,
 		"triggered_at": triggeredAt,
+	}
+	if source != "" {
+		pkg["source"] = source
 	}
 	data, err := json.Marshal(pkg)
 	if err != nil {
@@ -545,8 +551,21 @@ func fleetProcessUpdatePackage(data []byte) {
 		return
 	}
 
-	log.Printf("fleet: update trigger received (channel=%s, triggered_at=%d)", channel, int64(triggeredAt))
-	if err := triggerLocalUpdate(channel); err != nil {
+	source, _ := pkg["source"].(string)
+	log.Printf("fleet: update trigger received (channel=%s, triggered_at=%d, source=%q)", channel, int64(triggeredAt), source)
+	var err error
+	switch {
+	case source == "":
+		err = triggerLocalUpdate(channel)
+	case channel == "check" || !validOfflineSource(source):
+		err = fmt.Errorf("ignoring offline package source %q", source)
+	case hostMatchesLocalAddr(source):
+		// This node serves the package; apiForceUpdate explains why it
+		// is left out.
+	default:
+		err = offlineInstall(channel, source)
+	}
+	if err != nil {
 		log.Printf("fleet: update trigger: %v", err)
 		return
 	}

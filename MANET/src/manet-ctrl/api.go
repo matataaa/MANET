@@ -417,19 +417,30 @@ func apiAdminStatus(w http.ResponseWriter, r *http.Request) {
 // software/overlay detect results and current uplink reading it writes on
 // every check cycle, regardless of whether auto_update is enabled.
 func apiUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	status, _ := localUpdateStatus()
+	w.Header().Set("Cache-Control", "no-cache")
+	writeJSON(w, 200, status)
+}
+
+// localUpdateStatus is node-update's status file, ok=false (and a
+// nothing-available placeholder) when it has none yet.
+func localUpdateStatus() (status map[string]interface{}, ok bool) {
 	data, err := os.ReadFile(UpdateStatusFile)
-	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{
+	ok = err == nil && json.Unmarshal(data, &status) == nil
+	if !ok {
+		status = map[string]interface{}{
 			"software":    map[string]interface{}{"available": false},
 			"overlay":     map[string]interface{}{"available": false},
 			"uplink_mbps": 0,
 			"uplink_type": "unknown",
-		})
-		return
+		}
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Write(data)
+	// Fetching an offline package from another node happens here, before
+	// node-update is involved: report it as the apply's first phase.
+	if src := readOfflineStore().Fetching; src != "" {
+		status["phase"] = "fetching offline package from " + src
+	}
+	return status, ok
 }
 
 // apiUpdateNow triggers a manual, deliberate update on this node — the
@@ -442,6 +453,20 @@ func apiUpdateNow(w http.ResponseWriter, r *http.Request) {
 	channel := jsonStr(body, "channel", "")
 	if !validUpdateChannel(channel) {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, both, or check"})
+		return
+	}
+	// source: install the offline package held by that node (this one or
+	// a peer) instead of the update server's.
+	if source := jsonStr(body, "source", ""); source != "" {
+		if channel == "check" || !validOfflineSource(source) {
+			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "source must be a mesh node address, with channel software, overlay or both"})
+			return
+		}
+		if err := offlineInstall(channel, source); err != nil {
+			writeJSON(w, 409, map[string]interface{}{"ok": false, "error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]interface{}{"ok": true})
 		return
 	}
 	if err := triggerLocalUpdate(channel); err != nil {
@@ -466,7 +491,17 @@ func validUpdateChannel(channel string) bool {
 // file its SIGUSR1 handler reads, then the signal (systemctl reload is
 // already SIGHUP, the cooldown-limited periodic recheck).
 func triggerLocalUpdate(channel string) error {
-	if err := os.WriteFile(UpdateTriggerFile, []byte(channel), 0644); err != nil {
+	return triggerLocalUpdateFrom(channel, "")
+}
+
+// triggerLocalUpdateFrom is triggerLocalUpdate with node-update taking the
+// packages from the local directory source instead of update_url.
+func triggerLocalUpdateFrom(channel, source string) error {
+	data := channel
+	if source != "" {
+		data += "\nsource=" + source
+	}
+	if err := os.WriteFile(UpdateTriggerFile, []byte(data), 0644); err != nil {
 		return err
 	}
 	if _, err := runCmd(5*time.Second, "pkill", "-USR1", "-x", "node-update"); err != nil {
@@ -488,7 +523,14 @@ func apiForceUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "channel must be software, overlay, both, or check"})
 		return
 	}
-	triggeredAt, ok := broadcastUpdatePackage(channel)
+	// source: every node installs the offline package held by that node,
+	// fetched from there over the mesh, instead of the update server's.
+	source := jsonStr(body, "source", "")
+	if source != "" && (channel == "check" || !validOfflineSource(source)) {
+		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "source must be a mesh node address, with channel software, overlay or both"})
+		return
+	}
+	triggeredAt, ok := broadcastUpdatePackage(channel, source)
 	if !ok {
 		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "failed to broadcast update trigger"})
 		return
@@ -497,8 +539,16 @@ func apiForceUpdate(w http.ResponseWriter, r *http.Request) {
 	// (parseAlfredBest/ownMACs), so trigger it here directly. The ack is a
 	// second guard against acting on that copy. node-update applies a channel
 	// only when it has an update for it, so this is safe on a node that is
-	// already up to date.
-	if err := triggerLocalUpdate(channel); err != nil {
+	// already up to date. The source node of an offline push is left out:
+	// it serves the package to the others, and its update reboot would cut
+	// their downloads. It is updated on its own, once the fleet is done.
+	var err error
+	if source == "" {
+		err = triggerLocalUpdate(channel)
+	} else if !hostMatchesLocalAddr(source) {
+		err = offlineInstall(channel, source)
+	}
+	if err != nil {
 		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "broadcast sent, but this node: " + err.Error()})
 		return
 	}
@@ -512,21 +562,31 @@ func apiForceUpdate(w http.ResponseWriter, r *http.Request) {
 // every node's cert is self-signed — HTTPS + peerTLSConfig is the pattern
 // already used for peer-to-peer calls elsewhere (see peerProxyRequest).
 func getPeerUpdateStatus(peerIP string, timeout time.Duration) map[string]interface{} {
+	return getPeerJSON(peerIP, "/api/admin/update-status", timeout)
+}
+
+// getPeerJSON GETs a JSON object from a peer's API, nil on any failure.
+func getPeerJSON(peerIP, path string, timeout time.Duration) map[string]interface{} {
 	client := &http.Client{
 		Timeout:   timeout,
 		Transport: &http.Transport{TLSClientConfig: peerTLSConfig},
 	}
-	resp, err := client.Get(fmt.Sprintf("https://%s/api/admin/update-status", peerIP))
+	resp, err := client.Get(fmt.Sprintf("https://%s%s", peerIP, path))
 	if err != nil {
 		return nil
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil
 	}
 	var result map[string]interface{}
-	json.Unmarshal(body, &result)
+	if json.Unmarshal(body, &result) != nil {
+		return nil
+	}
 	return result
 }
 
@@ -543,6 +603,9 @@ func apiUpdateSummary(w http.ResponseWriter, r *http.Request) {
 		IP       string      `json:"ip"`
 		Status   interface{} `json:"status"`
 		Reached  bool        `json:"reached"`
+		// Packages is the node's offline package store (GET
+		// /api/offline-update), nil from a node too old to have one.
+		Packages interface{} `json:"packages"`
 	}
 
 	var mu sync.Mutex
@@ -559,20 +622,25 @@ func apiUpdateSummary(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			defer wg.Done()
 			var status map[string]interface{}
+			var packages interface{}
 			reached := false
 			if isMe {
-				data, err := os.ReadFile(UpdateStatusFile)
-				if err == nil && json.Unmarshal(data, &status) == nil {
+				if s, ok := localUpdateStatus(); ok {
+					status = s
 					reached = true
 				}
+				packages = readOfflineStore()
 			} else if ip != "" {
 				if s := getPeerUpdateStatus(ip, 3*time.Second); s != nil {
 					status = s
 					reached = true
+					if p := getPeerJSON(ip, "/api/offline-update", 3*time.Second); p != nil {
+						packages = p
+					}
 				}
 			}
 			mu.Lock()
-			nodes = append(nodes, nodeSummary{Hostname: hostname, IP: ip, Status: status, Reached: reached})
+			nodes = append(nodes, nodeSummary{Hostname: hostname, IP: ip, Status: status, Reached: reached, Packages: packages})
 			mu.Unlock()
 		}()
 	}
