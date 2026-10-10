@@ -397,6 +397,15 @@ func applySoftware(baseURL, board, remoteVerStr string, status *updateStatus) bo
 		return false
 	}
 
+	pkg, err := armRecovery("software", tarballPath, remoteVerStr)
+	if err != nil {
+		log.Printf("could not keep the package for recovery, not updating: %v", err)
+		os.Remove(tarballPath)
+		status.Phase = "idle"
+		writeStatus(*status)
+		return false
+	}
+
 	status.Phase = "extracting software"
 	writeStatus(*status)
 
@@ -404,15 +413,13 @@ func applySoftware(baseURL, board, remoteVerStr string, status *updateStatus) bo
 	// existing directory, least of all /. Directory modes in the tarball
 	// come from the build machine's mktemp -d stage (0700) or umask; letting
 	// tar apply that to / would lock out every non-root process.
-	out, err := exec.Command("tar", "-zxf", tarballPath, "--no-overwrite-dir", "-C", "/").CombinedOutput()
+	out, err := exec.Command("tar", "-zxf", pkg, "--no-overwrite-dir", "-C", "/").CombinedOutput()
 	if err != nil {
-		log.Printf("extract failed: %v: %s", err, strings.TrimSpace(string(out)))
-		os.Remove(tarballPath)
+		log.Printf("extract failed: %v: %s; the next boot retries it from %s", err, strings.TrimSpace(string(out)), pkg)
 		status.Phase = "idle"
 		writeStatus(*status)
 		return false
 	}
-	os.Remove(tarballPath)
 
 	// Record the already-validated remote string ourselves rather than
 	// trusting whatever the tarball's own etc/manet_release_version.txt
@@ -421,7 +428,8 @@ func applySoftware(baseURL, board, remoteVerStr string, status *updateStatus) bo
 	// fail parseSemver on the next check and read back as 0.0.0 — making
 	// the node re-detect "update available" and reboot forever, since it
 	// could never catch up. remoteVerStr already parsed successfully above.
-	if err := os.WriteFile(releaseVersionFile, []byte(remoteVerStr+"\n"), 0644); err != nil {
+	// finishRecovery flushes the unpacked files to disk before recording it.
+	if err := finishRecovery("software", remoteVerStr); err != nil {
 		log.Printf("failed to record release version: %v", err)
 	}
 	log.Printf("updated to release v%s", remoteVerStr)
@@ -468,20 +476,29 @@ func applyOverlay(baseURL, board, remoteVerStr string, status *updateStatus) boo
 		return false
 	}
 
-	status.Phase = "extracting overlay"
-	writeStatus(*status)
-
-	out, err := exec.Command("tar", "-zxf", overlayTarballPath, "--no-overwrite-dir", "-C", "/").CombinedOutput()
+	pkg, err := armRecovery("overlay", overlayTarballPath, remoteVerStr)
 	if err != nil {
-		log.Printf("overlay extract failed: %v: %s", err, strings.TrimSpace(string(out)))
+		log.Printf("could not keep the overlay for recovery, not updating: %v", err)
 		os.Remove(overlayTarballPath)
 		status.Phase = "idle"
 		writeStatus(*status)
 		return false
 	}
-	os.Remove(overlayTarballPath)
 
-	if err := os.WriteFile(overlayVersionFile, []byte(remoteVerStr+"\n"), 0644); err != nil {
+	status.Phase = "extracting overlay"
+	writeStatus(*status)
+
+	// The boot-time recovery covers a cut while modules and firmware are
+	// written, but not one that leaves /boot/firmware unbootable.
+	out, err := exec.Command("tar", "-zxf", pkg, "--no-overwrite-dir", "-C", "/").CombinedOutput()
+	if err != nil {
+		log.Printf("overlay extract failed: %v: %s; the next boot retries it from %s", err, strings.TrimSpace(string(out)), pkg)
+		status.Phase = "idle"
+		writeStatus(*status)
+		return false
+	}
+
+	if err := finishRecovery("overlay", remoteVerStr); err != nil {
 		log.Printf("failed to record overlay version: %v", err)
 	}
 	log.Printf("updated overlay to v%s", remoteVerStr)
