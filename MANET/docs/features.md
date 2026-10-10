@@ -10,6 +10,8 @@
 - **Self-healing** — batman-adv reroutes around failed links, SAE watchdog restarts stalled auth
 - **batman-enslave watchdog** — re-enslaves interfaces to bat0 if the link drops
 - **Morse SPI watchdog** — detects TX failure on the HaLow radio and performs GPIO reset recovery
+- **HaLow channel control** — channel picker limited to the legal channels for the regulatory domain and bandwidth (`halow_channel`, `halow_bw`), plus the regional duty-cycle limit (`halow_duty_cycle`)
+- **Wi-Fi mesh channel control** — static pinned 5GHz channel (`mesh_5ghz_channel`, default) or fleet-wide automatic channel election (`acs=y`), with 20/40/80 MHz width (`mesh_5ghz_bw`)
 - **Multicast mode** — configurable via UI/CLI: flood (forceflood, recommended ≤10 nodes) or optimized (IGMP snooping + querier for 10+ nodes)
 
 ## Zero-Configuration Networking
@@ -20,11 +22,13 @@
 - **Default route management** — automatic failover when gateway changes
 - **Mesh DNS** — `.mesh` TLD resolves via dnsmasq for all EUD clients (e.g. `radio.mesh`, `chat.mesh`)
 - **Hostname resolution** — mesh-wide `/etc/hosts` updated every 30s from the node registry
+- **Mesh time** — the gateway takes internet time from NTS-authenticated servers only, then serves it to the rest of the mesh
 
 ## End User Device (EUD) Support
 
 - **WiFi access point** — 5 GHz WPA2-PSK AP on a separate radio, bridged to the mesh
-- **Wired Ethernet** — plug-and-play bridge mode for wired EUDs
+- **Wired Ethernet** — plug-and-play: the Ethernet port detects whether it is an uplink, wired EUDs (bridged and served DHCP) or an existing LAN (left alone)
+- **EUD modes** — `eud=wired|wireless|both|auto|none` (`none`: pure uplink/gateway node, no AP)
 - **DHCP** — automatic IP assignment for connected clients via dnsmasq
 - **DNS for EUDs** — `.mesh` hostnames resolvable by connected devices, upstream queries forwarded
 - **Applet DNS** — applets declare hostnames (e.g. `chat.mesh`) accessible from EUDs
@@ -36,8 +40,8 @@
 - **Auto TLS** — self-signed HTTPS certificate generated on first run
 - **Dashboard** — D3.js force-directed topology graph with throughput labels, gateway route glow, and data orbs. Node list sidebar with TQ/hops/last-seen. Auto-refresh with stale node cleanup.
 - **Nodes** — sortable table of all mesh nodes with hostname, IP, DNS, TQ, hops, services, battery, uptime, last seen
-- **Config** — view/edit node configuration (hostname, SSID, keys, network, services, QoS) with stage/activate/cancel workflow
-- **Hardware** — radio interfaces (driver, channel, TX power, MCS rates), GPS status, system info, PTT hardware status
+- **Config** — view/edit node configuration (hostname, SSID, keys, network, HaLow/5GHz channels, GPS/CoT, gateway, voice, updates, access) with stage/activate/cancel workflow; per-node update buttons (Update MANET / Kernel/Drivers / Both)
+- **Hardware** — radio interfaces (driver, 802.11 interface mode, channel, TX power, MCS rates, card temperature), GPS status, system info, PTT hardware status
 - **Mesh** — batman-adv originators, neighbors, gateways with hostname resolution and last-seen timestamps, DNS records table
 - **Voice** — PTT controls (web and hardware), TX/RX indicators, OpenVLM connection status, service management
 - **Performance** — iperf3 throughput and ping latency testing with streaming results, sub-tabs for Measure/Radio/Ping
@@ -45,7 +49,7 @@
 - **Terminal** — full xterm.js PTY shell over WebSocket, SSH to peer nodes, live journalctl log viewer
 - **Applets** — install/uninstall applets with open/config/start/stop/restart/disable/logs/uninstall controls
 - **Fleet** — fleet-wide configuration management via multicast, coordinated settings distribution
-- **Docs** — built-in documentation: Overview, Configuration, API Reference, Services, MESH CLI, OpenVLM
+- **Docs** — built-in documentation: Overview, Configuration, API Reference, Services, MESH CLI
 - **Notifications** — toast notification system with browser notification API support and applet unread badges
 - **Mobile support** — responsive layout with dropdown navigation for small screens
 
@@ -81,6 +85,7 @@
 - **Multicast coordination** — fleet config distributed via multicast on br0
 - **Mesh-wide settings** — push configuration changes to all reachable nodes simultaneously
 - **Fleet UI tab** — manage fleet settings from the web interface
+- **Fleet updates** — per-node version table, Check for Updates, update selected nodes or force-update the whole fleet (software, kernel/drivers or both)
 
 ## Mesh Registry
 
@@ -92,16 +97,21 @@
 ## Situational Awareness
 
 - **GPS integration** — gpsd reads NMEA, gps-reader publishes to `/run/gps_status.json`
-- **Cursor on Target (CoT)** — broadcasts GPS position as CoT XML for ATAK/TAK blue-force tracking
+- **Static position** — `gps_source=static` reports a fixed latitude/longitude/altitude without a GPS module; `gps=n` turns GPS off on hardware without one
+- **Cursor on Target (CoT)** — broadcasts GPS position as CoT XML for ATAK/TAK blue-force tracking, with configurable callsign, type, team colour, role and icon
 - **CoT relay to EUDs** — forwards CoT data to locally connected end-user devices
 - **Position in registry** — GPS coordinates shared mesh-wide via the node registry
 
 ## OTA Updates
 
-- **Go update service** — `node-update` daemon polls for tools tarball updates every 6 hours
+- **Go update service** — `node-update` daemon checks `update_url` every 6 hours
+- **Two channels** — software (tools tarball, `auto_update`) and kernel/drivers overlay (`auto_update_overlay`, no rollback), each opt-in separately
 - **Version checking** — compares local version against upstream, applies only when newer
+- **Bandwidth gate** — automatic apply waits until the uplink reaches `auto_update_min_mbps`
+- **Manual and fleet-wide apply** — per-node and fleet-wide buttons (and `mesh update now`) bypass the flags and the gate
+- **Signed packages** — Ed25519 signatures checked against `/usr/local/share/manet/ota-keys/` before anything is unpacked
+- **Power-cut recovery** — an interrupted update is finished at the next boot from the kept, verified package, offline
 - **Cooldown** — 1-hour cooldown between update checks to avoid churn
-- **Configurable** — enabled/disabled via `auto_update` in mesh.conf
 
 ## File Synchronization
 
@@ -156,5 +166,9 @@ Read commands work for any user. Write commands (and reading secrets) need root,
 
 - **SAE (WPA3)** — mesh authentication with pre-shared key
 - **TLS** — HTTPS with auto-generated certificates for web UI
+- **Login** — `require_auth=y` (set at provisioning) puts config, control, terminal, log and update actions behind the admin password, with per-login sessions; cross-site requests are refused
+- **UI/SSH firewall** — web UI, SSH and iperf reachable from the mesh side only; `ui_uplink_access` / `ssh_uplink_access` open them to a gateway's uplink LAN
+- **DHCP isolation** — DHCP and EUD discovery traffic kept off the mesh (`bat0`)
+- **Signed OTA updates** — see OTA Updates
 - **Isolated mDNS** — prevents mDNS leaking between mesh and LAN segments
 - **ebtables/nftables** — layer-2 and layer-3 firewall rules on the bridge

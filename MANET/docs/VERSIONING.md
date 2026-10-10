@@ -24,10 +24,12 @@ Available" banner. The flags only control what happens next:
   batman-adv throughput estimate behind the topology "Real Rate" column). A
   wired/gateway uplink always passes; an unreachable `manet-ctrl` fails
   closed (no automatic apply, not an assumed-fine default).
-- **Manual**: `POST /api/admin/update-now` (per node, from the banner's
-  "Update Now" button) or `POST /api/admin/force-update` (Fleet Control's
-  "Force Update All Nodes," broadcast to every node via the same Alfred
-  gossip mechanism config-push uses — see `fleet.go`) applies unconditionally
+- **Manual**: `POST /api/admin/update-now` (per node: the Config tab's
+  Update MANET / Kernel/Drivers / Both buttons, Fleet Control's "Update
+  Selected", or `mesh update now`) or `POST /api/admin/force-update` (Fleet
+  Control's "Force Update" buttons, broadcast to every node via the same
+  Alfred gossip mechanism config-push uses — see `fleet.go`), each with
+  `{"channel": "software" | "overlay" | "both"}`, applies unconditionally
   if available, bypassing both the flag and the bandwidth gate. The UI shows
   a bandwidth/time warning before either action is confirmed.
 

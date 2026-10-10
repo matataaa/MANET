@@ -339,7 +339,7 @@ systemctl is-enabled mesh-provision 2>/dev/null || echo "done"
 script — there is no `node-update.sh`. It rechecks on its own schedule, and a
 plain `SIGHUP` re-check is gated by a 1-hour in-memory cooldown. To force an
 immediate check+apply that bypasses the cooldown and bandwidth gate (the same
-thing a UI "Update Now" click does):
+thing a UI Update MANET / Kernel/Drivers / Both click does):
 
 ```bash
 # channel is "software", "overlay", or "both"

@@ -40,10 +40,11 @@ available:
   bandwidth gate (below) to pass. If the flag is on but the gate fails, the
   update stays flagged as available and the node just waits for the next
   check.
-- **Manual apply** — the "Update Now" button (per node) or "Force Update
-  All Nodes" (Fleet Control) — applies unconditionally if available,
-  bypassing both the flag and the gate. The UI shows a bandwidth/time
-  warning before either action is confirmed.
+- **Manual apply** — the per-node update buttons (Config tab, or "Update
+  Selected" in Fleet Control), the fleet-wide "Force Update" buttons, or
+  `mesh update now` — applies unconditionally if available, bypassing both
+  the flag and the gate. The UI shows a bandwidth/time warning before any
+  of these is confirmed.
 
 Both paths funnel through the same download/extract/reboot code per
 channel — there's no separate "automatic" vs. "manual" apply logic, only a
@@ -67,7 +68,7 @@ fleet-wide via Fleet Control's Network Config.
 | `update_url` | *(empty)* | Base URL both channels fetch from. Empty disables OTA entirely — no checks happen at all, not even detection. |
 | `auto_update` | `n` | Software channel: apply automatically once detected, if the bandwidth gate passes. Off by default on every provisioning platform. |
 | `auto_update_overlay` | `n` | Overlay channel: apply automatically once detected, if the gate passes. Independent of `auto_update` — a kernel/firmware swap has no rollback, so this stays opt-in even if you trust software auto-update fleet-wide. |
-| `auto_update_min_mbps` | `10` | Minimum current uplink throughput required for *automatic* apply on either channel. Manual "Update Now" and "Force Update All Nodes" ignore this (with a warning shown first). |
+| `auto_update_min_mbps` | `10` | Minimum current uplink throughput required for *automatic* apply on either channel. Manual and fleet-wide updates ignore this (with a warning shown first). |
 | `update_allow_unsigned` | `n` | Install a package even when its signature (see [Package signing](#package-signing)) is missing or invalid, with a warning in the log. Lab use only. |
 
 Saving any of these triggers an immediate re-check on that node
@@ -93,36 +94,69 @@ This only gates automatic apply. It has no effect on detection (which
 always runs) or on manual/fleet-triggered apply (which always bypasses it,
 after showing a warning).
 
-## Manual "Update Now"
+## Manual update on one node
 
-Shown as a persistent banner on the node's Settings page whenever the
-status file reports an available update on either channel — it stays until
-acted on, not a toast that disappears. Clicking "Update Now":
+Shown as a persistent banner on the node's Config tab whenever the status
+file reports an available update on either channel — it stays until acted
+on, not a toast that disappears. It offers **Update MANET** (software),
+**Update Kernel/Drivers** (overlay) and, when both are available, **Update
+Both**. Clicking one:
 
 1. Shows the current `uplink_mbps`/`uplink_type` against
    `auto_update_min_mbps`, with a warning about expected time and a
    suggestion to use a higher-bandwidth connection if the link is below
    threshold.
-2. On confirm, calls `POST /api/admin/update-now`, which signals
-   `node-update` (`SIGUSR1`) to apply whichever channel(s) are available,
-   ignoring the `auto_update`/`auto_update_overlay` flags and the gate.
+2. On confirm, calls `POST /api/admin/update-now` with
+   `{"channel": "software" | "overlay" | "both"}`, which writes the channel
+   to node-update's trigger file and signals it (`SIGUSR1`) to apply that
+   channel, ignoring the `auto_update`/`auto_update_overlay` flags and the
+   gate. With `both`, the node reboots once, after both are installed.
 
-## Fleet-wide "Force Update All Nodes"
+`mesh update now <software|overlay|both>` does the same from the CLI.
 
-Fleet Control aggregates every node's update status (via the existing
-single-target peer proxy, `GET /api/admin/update-status` per node) into a
-banner: "N of M nodes have an update available." Clicking "Force Update All
-Nodes":
+## Fleet-wide updates
+
+Fleet Control aggregates every node's update status
+(`GET /api/admin/update-summary`, which fetches each node's
+`/api/admin/update-status` in parallel) into a banner: "N of M nodes have
+an update available", with **Force Update MANET**, **Force Update
+Kernel/Drivers** and **Force Update Both**. Clicking one:
 
 1. Shows one aggregate warning if any nodes are below the bandwidth
    threshold ("3 of 4 nodes are below the recommended bandwidth...").
-2. On confirm, calls `POST /api/admin/force-update`, which broadcasts a
-   trigger to every node via the same Alfred mesh-gossip mechanism the
-   fleet config-push already uses (a separate slot, so the two package
-   schemas never collide — see `fleet.go`'s `broadcastUpdatePackage`). Each
-   node picks it up within one poll cycle (~10s) and applies locally via
-   the same mechanism as a manual "Update Now" — same bypass semantics,
-   same warning-before-confirm.
+2. On confirm, calls `POST /api/admin/force-update` with the channel, which
+   broadcasts a trigger to every node via the same Alfred mesh-gossip
+   mechanism the fleet config-push already uses (a separate slot, so the
+   two package schemas never collide — see `fleet.go`'s
+   `broadcastUpdatePackage`). Each node picks it up within one poll cycle
+   (~10s) and applies locally via the same mechanism as a manual update —
+   same bypass semantics, same warning-before-confirm. A node with nothing
+   to install for that channel ignores it.
+
+Below the banner, a per-node version table shows each reachable node's
+installed and available versions:
+
+- **Update Selected — MANET / Kernel/Drivers / Both** applies to the ticked
+  nodes only, by calling each node's `update-now` (through
+  `/api/peer/<ip>` for every node but this one).
+- **Check for Updates** broadcasts the `check` channel: every node
+  re-checks the update server now, skipping the cooldown, and never
+  applies anything — so the table shows fresh versions.
+
+## Interrupted updates
+
+An update unpacks straight onto `/`. A power cut part-way through would
+leave a mix of old and new files, and the node might need exactly those
+files to get back on the network and download the release again. So
+`node-update` keeps the verified package in `/var/lib/manet-update/` with a
+`<channel>.pending` marker until the unpacked files have reached the disk.
+If the node boots with a marker still there, the early-boot unit
+`manet-update-recover.service` unpacks the kept package again, offline,
+records the version and reboots once so every service starts on complete
+files. A package that cannot be unpacked is left as `<channel>.failed` and
+not retried on every boot. The recovery script and unit are written by
+`node-update` itself, not shipped in the tarball, so the unpack they
+protect can't break them.
 
 ## Package signing
 
@@ -248,8 +282,8 @@ aws s3 cp cm4-tools.tar.gz          s3://your-bucket/manet-updates/
 **7. Point nodes at it** — set `update_url` to that directory's URL (e.g.
 `https://updates.example.com/manet-updates`) in Settings or fleet-wide via
 Fleet Control, with `auto_update=y` if you want it to apply automatically
-(subject to the bandwidth gate), or leave it `n` and use "Update Now"/
-"Force Update All Nodes" once you've confirmed the release is good.
+(subject to the bandwidth gate), or leave it `n` and update manually or
+fleet-wide from the UI once you've confirmed the release is good.
 
 ## Publishing an overlay update: step by step
 
@@ -278,11 +312,13 @@ it's wrong.
 - **Overlay updates have no rollback.** A bad kernel/module/firmware swap
   can leave a node needing a physical re-flash. Test on one node with
   `auto_update_overlay=y` before ever enabling it fleet-wide, and prefer
-  manual "Update Now" over blanket automatic enablement until you trust a
-  given release.
+  a manual per-node update over blanket automatic enablement until you
+  trust a given release.
 - **Reboots are jittered** (1–15 minutes) after any apply, specifically so
   a fleet-wide update doesn't reboot every node — and drop the whole mesh,
   including any gateway — within moments of each other.
-- **`update_url` has no integrity verification.** Whoever controls that
-  host controls what every subscribed node runs as root. Treat it the same
-  as any other trusted infrastructure dependency.
+- **The signing key is what's trusted, not `update_url`.** Packages are
+  verified before anything is unpacked (see [Package signing](#package-signing)),
+  so a hostile update host can withhold updates but not install its own.
+  Whoever holds the private signing key controls what every node runs as
+  root — and so does anyone who can set `update_allow_unsigned=y` on a node.
