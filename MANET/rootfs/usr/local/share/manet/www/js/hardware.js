@@ -81,6 +81,7 @@ function hwRenderRadios() {
     var rows = hwRow('Role', hwRoleLabel(r.role));
     if (r.driver) rows += hwRow('Driver', r.driver);
     rows += hwRow('Bus / Type', busType);
+    if (r.mode) rows += hwRow('Radio Mode', escHtml(r.mode));
     if (r.channel) {
       var chLabel = r.channel;
       if (r.freq_mhz) {
