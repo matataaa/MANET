@@ -167,6 +167,9 @@ fi
 
 # get the sources up to date and install packages
 echo -n "Updating system packages..."
+# A power cut during a previous run's install leaves dpkg half-configured,
+# and every apt call fails until that work is finished.
+DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold --configure -a || true
 apt update > /dev/null 2>&1 || true
 
 # Remove the question about the iperf daemon during apt install
@@ -175,8 +178,11 @@ echo "iperf3 iperf3/start_daemon boolean true" | debconf-set-selections 2>/dev/n
 # This isn't needed for the manet kernel and causes errors
 [ -x /etc/kernel/postinst.d/initramfs-tools ] && chmod -x /etc/kernel/postinst.d/initramfs-tools
 
-# Install packages for this system
-apt install -y ipcalc nmap lshw tcpdump net-tools nftables wireless-tools iperf3\
+# Install packages for this system. Non-interactive: a conffile question keeps
+# the installed file instead of waiting on a tty that is not there.
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+        ipcalc nmap lshw tcpdump net-tools nftables wireless-tools iperf3\
         radvd bridge-utils firmware-mediatek libnss-mdns networkd-dispatcher\
         libgps-dev libcap-dev screen arping bc jq git libssl-dev hostapd dnsmasq pulseaudio\
         python3-protobuf unzip chrony systemd-resolved dhcping mpg123\
