@@ -1976,7 +1976,8 @@ systemctl enable battery-reader.service
 # NTP strategy:
 #   - chrony is already installed and serves the mesh (allow fd01::/64).
 #   - With GPS: SHM 0 refclock (NMEA, ~100 ms accuracy) → stratum ~2.
-#   - Without GPS or fix: chrony falls back to pool.ntp.org or local stratum 10.
+#   - Without GPS or fix: a gateway uses NTS internet servers
+#     (manet-gateway-ntp.sh), else local stratum 10.
 #   - GPS does NOT currently change mesh election: mesh-registry publishes
 #     IS_NTP_SERVER from whether chronyd is simply running
 #     (src/mesh-registry/main.go serviceActive("chrony")), not from a
