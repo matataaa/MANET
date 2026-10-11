@@ -562,6 +562,10 @@ func main() {
 	// inside) uploads a package. The files are what other nodes fetch.
 	mux.HandleFunc("/api/offline-update", apiOfflineUpdate)
 	mux.HandleFunc("/api/offline-update/files/", apiOfflineFiles)
+	// GET is the staged rollout run from this node; POST (auth, checked
+	// inside) starts one from this node's package store.
+	mux.HandleFunc("/api/admin/rollout", apiRollout)
+	mux.HandleFunc("/api/admin/rollout/stop", requireAuth(apiRolloutStop))
 	mux.HandleFunc("/api/daemons", apiDaemons)
 	mux.HandleFunc("/api/atak-package", apiATAKPackage)
 	mux.HandleFunc("/api/mesh-ctrl.apk", apiDownloadAPK)
@@ -638,6 +642,7 @@ func main() {
 		log.Printf("mesh CLI token: %v (CLI write commands will be refused)", err)
 	}
 	voiceInitChannels()
+	resumeRollout()
 	go fleetConfigWatcher()
 	go uiFirewallLoop()
 	go fleetMcastListener()

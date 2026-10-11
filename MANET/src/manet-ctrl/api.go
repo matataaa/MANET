@@ -456,17 +456,32 @@ func apiUpdateNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// source: install the offline package held by that node (this one or
-	// a peer) instead of the update server's.
-	if source := jsonStr(body, "source", ""); source != "" {
-		if channel == "check" || !validOfflineSource(source) {
-			writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "source must be a mesh node address, with channel software, overlay or both"})
-			return
+	// a peer) instead of the update server's. sources: several candidate
+	// nodes, of which this node takes the one it reaches fastest (a staged
+	// rollout, rollout.go); the reply names it.
+	var sources []string
+	if list, ok := body["sources"].([]interface{}); ok {
+		for _, v := range list {
+			s, _ := v.(string)
+			sources = append(sources, s)
 		}
+	}
+	if source := jsonStr(body, "source", ""); source != "" {
+		sources = append(sources, source)
+	}
+	if len(sources) > 0 {
+		for _, s := range sources {
+			if channel == "check" || !validOfflineSource(s) {
+				writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "sources must be mesh node addresses, with channel software, overlay or both"})
+				return
+			}
+		}
+		source := pickOfflineSource(sources)
 		if err := offlineInstall(channel, source); err != nil {
 			writeJSON(w, 409, map[string]interface{}{"ok": false, "error": err.Error()})
 			return
 		}
-		writeJSON(w, 200, map[string]interface{}{"ok": true})
+		writeJSON(w, 200, map[string]interface{}{"ok": true, "source": source})
 		return
 	}
 	if err := triggerLocalUpdate(channel); err != nil {
@@ -606,6 +621,9 @@ func apiUpdateSummary(w http.ResponseWriter, r *http.Request) {
 		// Packages is the node's offline package store (GET
 		// /api/offline-update), nil from a node too old to have one.
 		Packages interface{} `json:"packages"`
+		// Rollout is the staged rollout run from that node, if any
+		// (GET /api/admin/rollout).
+		Rollout interface{} `json:"rollout,omitempty"`
 	}
 
 	var mu sync.Mutex
@@ -622,7 +640,7 @@ func apiUpdateSummary(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			defer wg.Done()
 			var status map[string]interface{}
-			var packages interface{}
+			var packages, rollout interface{}
 			reached := false
 			if isMe {
 				if s, ok := localUpdateStatus(); ok {
@@ -630,6 +648,9 @@ func apiUpdateSummary(w http.ResponseWriter, r *http.Request) {
 					reached = true
 				}
 				packages = readOfflineStore()
+				if rs := currentRollout(); rs != nil {
+					rollout = rs
+				}
 			} else if ip != "" {
 				if s := getPeerUpdateStatus(ip, 3*time.Second); s != nil {
 					status = s
@@ -637,10 +658,13 @@ func apiUpdateSummary(w http.ResponseWriter, r *http.Request) {
 					if p := getPeerJSON(ip, "/api/offline-update", 3*time.Second); p != nil {
 						packages = p
 					}
+					if rs := getPeerJSON(ip, "/api/admin/rollout", 3*time.Second); rs != nil && rs["id"] != nil {
+						rollout = rs
+					}
 				}
 			}
 			mu.Lock()
-			nodes = append(nodes, nodeSummary{Hostname: hostname, IP: ip, Status: status, Reached: reached, Packages: packages})
+			nodes = append(nodes, nodeSummary{Hostname: hostname, IP: ip, Status: status, Reached: reached, Packages: packages, Rollout: rollout})
 			mu.Unlock()
 		}()
 	}

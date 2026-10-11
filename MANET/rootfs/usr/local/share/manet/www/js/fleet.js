@@ -307,6 +307,53 @@ function fleetRender() {
 // The node whose package store the fleet installs from; kept across the
 // poll re-renders.
 var fleetOfflineSource = null;
+// 'staged' runs a rollout on the source node (fastest nodes first, each
+// updated node passes the package on); 'all' has every node fetch from the
+// source at once.
+var fleetOfflineMode = 'staged';
+
+// The rollout to show: a running one on any node, else the most recent.
+function fleetCurrentRollout() {
+  var best = null;
+  ((fleetUpdateSummaryData && fleetUpdateSummaryData.nodes) || []).forEach(function(n) {
+    var r = n.rollout;
+    if (!r || !r.id) return;
+    if (!best || (r.running && !best.running) || (r.running === best.running && r.id > best.id)) best = r;
+  });
+  return best;
+}
+
+function fleetRenderRollout(r) {
+  if (!r) return '';
+  var names = {};
+  ((fleetUpdateSummaryData && fleetUpdateSummaryData.nodes) || []).forEach(function(n) { names[n.ip] = n.hostname || n.ip; });
+  var count = { done: 0, updating: 0, failed: 0, pending: 0 };
+  r.nodes.forEach(function(n) { count[n.state] = (count[n.state] || 0) + 1; });
+  var versions = Object.keys(r.versions || {}).map(function(ch) { return offlineChannelLabel(ch) + ' v' + escHtml(r.versions[ch]); }).join(' + ');
+  var html = '<div class="fleet-pending" style="margin-bottom:12px">';
+  html += '<div class="fleet-pending-head"><div class="fleet-pending-title">' +
+    (r.running ? (r.stopped ? 'Rollout stopping' : 'Rolling out') : 'Last rollout') + ': ' + versions +
+    ' from ' + escHtml(names[r.source] || r.source) + '</div></div>';
+  html += '<div class="fleet-pending-meta">' + count.done + ' of ' + r.nodes.length + ' done' +
+    (count.updating ? ', ' + count.updating + ' updating' : '') + (count.pending ? ', ' + count.pending + ' waiting' : '') +
+    (count.failed ? ', <span style="color:var(--bad)">' + count.failed + ' failed</span>' : '') + '</div>';
+  html += '<table class="fleet-nodes-table">';
+  r.nodes.forEach(function(n) {
+    var state = n.state;
+    if (state === 'updating') state = 'updating from ' + escHtml(names[n.from] || n.from);
+    if (state === 'done' && !n.serves) state = 'done (holds no package, not passing it on)';
+    html += '<tr><td>' + escHtml(names[n.ip] || n.hostname || n.ip) + '</td><td' +
+      (n.state === 'failed' ? ' style="color:var(--bad)"' : n.state === 'done' ? ' class="fleet-ack-yes"' : '') + '>' + state +
+      (n.error ? ' — ' + escHtml(n.error) : '') + '</td></tr>';
+  });
+  html += '</table>';
+  if (r.running && !r.stopped) {
+    html += '<div class="fleet-actions" style="margin-top:8px"><button class="fleet-btn" id="fleet-rollout-stop-btn" data-src="' +
+      escHtml(r.source) + '">Stop Rollout</button></div>';
+  }
+  html += '</div>';
+  return html;
+}
 
 // Nodes whose store holds a package (from update-summary's per-node
 // `packages`), this node first.
@@ -341,6 +388,8 @@ function fleetRenderOfflineCard() {
   var sources = fleetOfflineSources();
   var html = '<div class="fleet-card" style="margin-top:20px">';
   html += '<div class="fleet-card-title">Offline Update <span style="font-size:10px;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0">(update the fleet from a package one node holds, no internet needed)</span></div>';
+  var rollout = fleetCurrentRollout();
+  html += fleetRenderRollout(rollout);
 
   if (!sources.length) {
     html += '<div class="fleet-pending-meta">No node holds a package yet. Upload one below; nodes also keep the last package they installed.</div>';
@@ -363,11 +412,16 @@ function fleetRenderOfflineCard() {
         (n ? n + ' other node' + (n !== 1 ? 's are' : ' is') + ' older' : 'no other node is older') + '</div>';
     });
     var swN = fleetOfflineTargets(src, 'software').length, ovN = fleetOfflineTargets(src, 'overlay').length;
-    if (swN || ovN) {
+    if ((swN || ovN) && !(rollout && rollout.running)) {
+      var verb = fleetOfflineMode === 'staged' ? 'Roll Out' : 'Push';
+      html += '<div class="fleet-actions" style="align-items:center"><span style="font-size:12px">How</span><select id="fleet-offline-mode">' +
+        '<option value="staged"' + (fleetOfflineMode === 'staged' ? ' selected' : '') + '>Staged: fastest nodes first, updated nodes pass it on</option>' +
+        '<option value="all"' + (fleetOfflineMode === 'all' ? ' selected' : '') + '>All at once from this source</option>' +
+        '</select></div>';
       html += '<div class="fleet-actions">';
-      if (swN) html += '<button class="fleet-btn fleet-btn-primary" id="fleet-offline-sw-btn">Push MANET (' + swN + ')</button>';
-      if (ovN) html += '<button class="fleet-btn fleet-btn-danger" id="fleet-offline-ov-btn">Push Kernel/Drivers (' + ovN + ')</button>';
-      if (swN && ovN) html += '<button class="fleet-btn fleet-btn-danger" id="fleet-offline-both-btn">Push Both</button>';
+      if (swN) html += '<button class="fleet-btn fleet-btn-primary" id="fleet-offline-sw-btn">' + verb + ' MANET (' + swN + ')</button>';
+      if (ovN) html += '<button class="fleet-btn fleet-btn-danger" id="fleet-offline-ov-btn">' + verb + ' Kernel/Drivers (' + ovN + ')</button>';
+      if (swN && ovN) html += '<button class="fleet-btn fleet-btn-danger" id="fleet-offline-both-btn">' + verb + ' Both</button>';
       html += '</div>';
     }
   }
@@ -393,6 +447,10 @@ function fleetWireOfflineCard() {
   });
   var sel = document.getElementById('fleet-offline-src');
   if (sel) sel.addEventListener('change', function() { fleetOfflineSource = sel.value; fleetRefreshOfflineCard(); });
+  var mode = document.getElementById('fleet-offline-mode');
+  if (mode) mode.addEventListener('change', function() { fleetOfflineMode = mode.value; fleetRefreshOfflineCard(); });
+  var stop = document.getElementById('fleet-rollout-stop-btn');
+  if (stop) stop.addEventListener('click', function() { fleetRolloutStop(stop); });
   [['fleet-offline-sw-btn', 'software'], ['fleet-offline-ov-btn', 'overlay'], ['fleet-offline-both-btn', 'both']].forEach(function(b) {
     var btn = document.getElementById(b[0]);
     if (btn) btn.addEventListener('click', function() { fleetOfflinePush(b[1], btn); });
@@ -414,25 +472,54 @@ function fleetOfflinePush(channel, btn) {
   });
   var count = Object.keys(targets).length;
   var label = fleetChannelLabel(channel);
-  var msg = 'Install ' + label + ' on ' + count + ' node' + (count !== 1 ? 's' : '') + ' from ' + escHtml(src.hostname || src.ip) +
-    '? Each fetches ' + mb.toFixed(0) + ' MB from it over the mesh, which can take a long time over HaLow, then reboots once applied.';
+  var staged = fleetOfflineMode === 'staged';
+  var srcName = escHtml(src.hostname || src.ip);
+  var msg = staged
+    ? 'Roll out ' + label + ' to ' + count + ' node' + (count !== 1 ? 's' : '') + ' from ' + srcName +
+      '? The nodes it reaches fastest go first; each updated node then passes the ' + mb.toFixed(0) +
+      ' MB package on to the next, so the fleet updates in growing waves. Each node reboots once applied. ' +
+      srcName + ' runs the rollout and is not updated itself.'
+    : 'Install ' + label + ' on ' + count + ' node' + (count !== 1 ? 's' : '') + ' from ' + srcName +
+      '? All of them fetch ' + mb.toFixed(0) + ' MB from it over the mesh at once, which can take a long time over HaLow, then reboot once applied.';
   if (channel !== 'software') {
     msg += ' The Kernel/Drivers channel updates kernel/firmware — there is no rollback if it fails to boot.';
   }
-  fleetConfirm(msg, { label: 'Push ' + label, danger: channel !== 'software' }, async function() {
+  fleetConfirm(msg, { label: (staged ? 'Roll Out ' : 'Push ') + label, danger: channel !== 'software' }, async function() {
     btn.disabled = true;
     try {
-      var r = await authFetch('/api/admin/force-update', {
+      // A rollout runs on the source node itself, reached through the
+      // peer proxy when that is another node.
+      var base = (LOCAL_DATA && src.ip === LOCAL_DATA.ip) ? '' : '/api/peer/' + src.ip;
+      var r = await authFetch(staged ? base + '/api/admin/rollout' : '/api/admin/force-update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel: channel, source: src.ip })
+        body: JSON.stringify(staged ? { channel: channel } : { channel: channel, source: src.ip })
       });
-      if (!r.ok) throw new Error('request failed');
-      fleetToast(label + ' offline update sent to the fleet', 'success');
-      setTimeout(fleetFetchUpdateSummary, 15000);
+      var resp = {};
+      try { resp = await r.json(); } catch (e) {}
+      if (!r.ok || resp.ok === false) throw new Error(resp.error || 'request failed');
+      fleetToast(staged ? label + ' rollout started from ' + (src.hostname || src.ip) : label + ' offline update sent to the fleet', 'success');
+      setTimeout(fleetFetchUpdateSummary, staged ? 3000 : 15000);
     } catch (e) {
       btn.disabled = false;
-      fleetToast('Failed to start the offline update', 'error');
+      fleetToast('Failed to start: ' + e.message, 'error');
+    }
+  });
+}
+
+function fleetRolloutStop(btn) {
+  var src = btn.getAttribute('data-src');
+  fleetConfirm('Stop the rollout? Nodes already updating finish; no new ones start.', { label: 'Stop Rollout' }, async function() {
+    btn.disabled = true;
+    var base = (LOCAL_DATA && src === LOCAL_DATA.ip) ? '' : '/api/peer/' + src;
+    try {
+      var r = await authFetch(base + '/api/admin/rollout/stop', { method: 'POST' });
+      if (!r.ok) throw new Error('request failed');
+      fleetToast('Rollout stopping', 'success');
+      fleetFetchUpdateSummary();
+    } catch (e) {
+      btn.disabled = false;
+      fleetToast('Failed to stop the rollout', 'error');
     }
   });
 }
