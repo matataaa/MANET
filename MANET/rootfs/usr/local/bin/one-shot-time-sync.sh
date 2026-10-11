@@ -44,119 +44,148 @@ while [ ! -s "$REGISTRY_STATE_FILE" ]; do
 done
 log "Mesh registry is available. Proceeding with sync..."
 
-# Find the Best NTP Server, from the POV of this mesh node
-source "$REGISTRY_STATE_FILE"
-BEST_SERVER_HOSTNAME=""
-BEST_SERVER_MAC=""
-HIGHEST_LOCAL_TQ="0" # Initialize TQ to 0 (lowest possible)
-PREFIX_PATTERN="NODE_([0-9a-fA-F]+)"
+# One attempt: pick the best mesh NTP server from the registry as it is now
+# and sync from it. Returns non-zero if there is none yet or the sync failed.
+sync_once() {
+    # Find the Best NTP Server, from the POV of this mesh node
+    source "$REGISTRY_STATE_FILE"
+    BEST_SERVER_HOSTNAME=""
+    BEST_SERVER_MAC=""
+    HIGHEST_LOCAL_TQ="0" # Initialize TQ to 0 (lowest possible)
+    PREFIX_PATTERN="NODE_([0-9a-fA-F]+)"
 
-# Get local TQ scores to all neighbors
-mapfile -t BATCTL_OUTPUT < <(batctl o)
+    # Get local TQ scores to all neighbors
+    mapfile -t BATCTL_OUTPUT < <(batctl o)
 
-# Loop through the registry to find candidate servers
-while IFS= read -r line; do
-    # Find nodes that are flagged as NTP servers in the registry
-    if [[ $line =~ ${PREFIX_PATTERN}_IS_NTP_SERVER=\'true\' ]]; then
-        MAC_SANITIZED="${BASH_REMATCH[1]}"
+    # Loop through the registry to find candidate servers
+    while IFS= read -r line; do
+        # Find nodes that are flagged as NTP servers in the registry
+        if [[ $line =~ ${PREFIX_PATTERN}_IS_NTP_SERVER=\'true\' ]]; then
+            MAC_SANITIZED="${BASH_REMATCH[1]}"
 
-        # Construct variable names for MAC and Hostname
-        MAC_VAR="NODE_${MAC_SANITIZED}_MAC_ADDRESS"
-        MACS_VAR="NODE_${MAC_SANITIZED}_MAC_ADDRESSES"
-        HOSTNAME_VAR="NODE_${MAC_SANITIZED}_HOSTNAME"
+            # Construct variable names for MAC and Hostname
+            MAC_VAR="NODE_${MAC_SANITIZED}_MAC_ADDRESS"
+            MACS_VAR="NODE_${MAC_SANITIZED}_MAC_ADDRESSES"
+            HOSTNAME_VAR="NODE_${MAC_SANITIZED}_HOSTNAME"
 
-        CANDIDATE_MAC=${!MAC_VAR}
-        CANDIDATE_HOSTNAME=${!HOSTNAME_VAR}
-        CANDIDATE_ALL_MACS=${!MACS_VAR}
+            CANDIDATE_MAC=${!MAC_VAR}
+            CANDIDATE_HOSTNAME=${!HOSTNAME_VAR}
+            CANDIDATE_ALL_MACS=${!MACS_VAR}
 
-        # Find the TQ score from this node to the candidate server. `batctl o`'s
-        # Originator column is the node's physical radio MAC, not the registry's
-        # MAC_ADDRESS — that field is bat0's own virtual MAC, and batman-adv sets
-        # the locally-administered bit on it (e.g. 9c:...:6c becomes 9e:...:6c),
-        # so it never appears in `batctl o` output. Matching only against
-        # MAC_ADDRESS meant this loop could never find a TQ score for any
-        # candidate, so a mesh NTP peer was never actually selectable — check
-        # every MAC this node advertises (MAC_ADDRESSES) instead.
-        CURRENT_LOCAL_TQ="0" # Default to 0 if not found
-        IFS=',' read -ra CANDIDATE_MAC_LIST <<< "$CANDIDATE_ALL_MACS"
-        for bat_line in "${BATCTL_OUTPUT[@]}"; do
-            MAC_MATCHED=0
-            for cmac in "${CANDIDATE_MAC_LIST[@]}"; do
-                if [[ "$bat_line" == *"$cmac"* ]]; then
-                    MAC_MATCHED=1
-                    break
+            # Find the TQ score from this node to the candidate server. `batctl o`'s
+            # Originator column is the node's physical radio MAC, not the registry's
+            # MAC_ADDRESS — that field is bat0's own virtual MAC, and batman-adv sets
+            # the locally-administered bit on it (e.g. 9c:...:6c becomes 9e:...:6c),
+            # so it never appears in `batctl o` output. Matching only against
+            # MAC_ADDRESS meant this loop could never find a TQ score for any
+            # candidate, so a mesh NTP peer was never actually selectable — check
+            # every MAC this node advertises (MAC_ADDRESSES) instead.
+            CURRENT_LOCAL_TQ="0" # Default to 0 if not found
+            IFS=',' read -ra CANDIDATE_MAC_LIST <<< "$CANDIDATE_ALL_MACS"
+            for bat_line in "${BATCTL_OUTPUT[@]}"; do
+                MAC_MATCHED=0
+                for cmac in "${CANDIDATE_MAC_LIST[@]}"; do
+                    if [[ "$bat_line" == *"$cmac"* ]]; then
+                        MAC_MATCHED=1
+                        break
+                    fi
+                done
+                if [[ "$MAC_MATCHED" == "1" ]]; then
+                    # `batctl o` prints throughput (BATMAN_V), a decimal, inside
+                    # parens with variable padding, e.g. "(        7.1)" — the "("
+                    # is its own whitespace-split field, so `awk '{print $3}'`
+                    # never actually landed on the number, and `^[0-9]+$` would
+                    # have rejected the decimal even if it had. Pull the number
+                    # out directly instead.
+                    TQ_RAW=$(echo "$bat_line" | grep -oP '\(\s*\K[0-9]+(\.[0-9]+)?' | head -1)
+                    # Validate it's a number, then truncate to an integer — bash's
+                    # (( )) arithmetic below can't compare decimals, and whole
+                    # Mbit/s is more than enough precision to pick the better link.
+                    if [[ "$TQ_RAW" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                        CURRENT_LOCAL_TQ=${TQ_RAW%%.*}
+                    fi
+                    break # Found the MAC, no need to check further lines
                 fi
             done
-            if [[ "$MAC_MATCHED" == "1" ]]; then
-                # `batctl o` prints throughput (BATMAN_V), a decimal, inside
-                # parens with variable padding, e.g. "(        7.1)" — the "("
-                # is its own whitespace-split field, so `awk '{print $3}'`
-                # never actually landed on the number, and `^[0-9]+$` would
-                # have rejected the decimal even if it had. Pull the number
-                # out directly instead.
-                TQ_RAW=$(echo "$bat_line" | grep -oP '\(\s*\K[0-9]+(\.[0-9]+)?' | head -1)
-                # Validate it's a number, then truncate to an integer — bash's
-                # (( )) arithmetic below can't compare decimals, and whole
-                # Mbit/s is more than enough precision to pick the better link.
-                if [[ "$TQ_RAW" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-                    CURRENT_LOCAL_TQ=${TQ_RAW%%.*}
-                fi
-                break # Found the MAC, no need to check further lines
+
+            # Compare LOCAL TQ scores to find the best server *from our perspective*
+            if (( CURRENT_LOCAL_TQ > HIGHEST_LOCAL_TQ )); then
+                HIGHEST_LOCAL_TQ=$CURRENT_LOCAL_TQ
+                BEST_SERVER_HOSTNAME=$CANDIDATE_HOSTNAME
+                BEST_SERVER_MAC=$CANDIDATE_MAC # Store MAC for logging/debugging
             fi
-        done
-
-        # Compare LOCAL TQ scores to find the best server *from our perspective*
-        if (( CURRENT_LOCAL_TQ > HIGHEST_LOCAL_TQ )); then
-            HIGHEST_LOCAL_TQ=$CURRENT_LOCAL_TQ
-            BEST_SERVER_HOSTNAME=$CANDIDATE_HOSTNAME
-            BEST_SERVER_MAC=$CANDIDATE_MAC # Store MAC for logging/debugging
         fi
-    fi
-done < "$REGISTRY_STATE_FILE"
+    done < "$REGISTRY_STATE_FILE"
 
-# --- Sync Time and Shut Down ---
-if [ -n "$BEST_SERVER_HOSTNAME" ]; then
-    log "Best NTP server found from this node's perspective: ${BEST_SERVER_HOSTNAME}\
-     (MAC: ${BEST_SERVER_MAC}) with local TQ ${HIGHEST_LOCAL_TQ}."
+    # --- Sync Time and Shut Down ---
+    if [ -n "$BEST_SERVER_HOSTNAME" ]; then
+        log "Best NTP server found from this node's perspective: ${BEST_SERVER_HOSTNAME}\
+         (MAC: ${BEST_SERVER_MAC}) with local TQ ${HIGHEST_LOCAL_TQ}."
 
-    # Resolve the hostname to an IPv6 address
-#	BEST_SERVER_IP=$(resolvectl query --type=AAAA "${BEST_SERVER_HOSTNAME}.local" \
-#  | awk '/^.*: .*:/ {print $2; exit}')
+        # Resolve the hostname to an IPv6 address
+    #	BEST_SERVER_IP=$(resolvectl query --type=AAAA "${BEST_SERVER_HOSTNAME}.local" \
+    #  | awk '/^.*: .*:/ {print $2; exit}')
 
-    BEST_SERVER_IP=$( /usr/local/bin/mac-to-ip.sh "$BEST_SERVER_MAC" )
+        BEST_SERVER_IP=$( /usr/local/bin/mac-to-ip.sh "$BEST_SERVER_MAC" )
 
-    if [ -n "$BEST_SERVER_IP" ]; then
-        log "Syncing time with ${BEST_SERVER_IP}..."
+        if [ -n "$BEST_SERVER_IP" ]; then
+            log "Syncing time with ${BEST_SERVER_IP}..."
 
-        # chronyc needs a live daemon, and ethernet-autodetect may already have
-        # stopped it earlier in this boot.
-        systemctl is-active --quiet chrony.service || systemctl start chrony.service
+            # chronyc needs a live daemon, and ethernet-autodetect may already have
+            # stopped it earlier in this boot.
+            systemctl is-active --quiet chrony.service || systemctl start chrony.service
 
-        # "burst" only acts on sources chronyd already knows about. This peer is
-        # discovered from the registry at runtime and appears in no config file,
-        # so it has to be added first — without this the command returned
-        # "503 No such source" and the sync silently never happened.
-        chronyc -a "add server ${BEST_SERVER_IP} iburst" >/dev/null 2>&1
-        chronyc -a "burst 1/1 ${BEST_SERVER_IP}" >/dev/null 2>&1
+            # "burst" only acts on sources chronyd already knows about. This peer is
+            # discovered from the registry at runtime and appears in no config file,
+            # so it has to be added first — without this the command returned
+            # "503 No such source" and the sync silently never happened.
+            chronyc -a "add server ${BEST_SERVER_IP} iburst" >/dev/null 2>&1
+            chronyc -a "burst 1/1 ${BEST_SERVER_IP}" >/dev/null 2>&1
 
-        # burst returns 200 as soon as the command is accepted, which says
-        # nothing about whether the clock was ever set. waitsync is what
-        # actually blocks until chronyd has disciplined it.
-        if timeout 90 chronyc waitsync 60 0 0 1 >/dev/null 2>&1; then
-            log "Time sync successful. Clock disciplined from ${BEST_SERVER_IP}."
-            touch "$STATE_FILE"
-            # Stop, but leave the unit enabled: this node may become a gateway
-            # later and need chrony running again.
-            log "Stopping chrony; this node has its time and need not keep polling."
-            systemctl stop chrony.service
+            # burst returns 200 as soon as the command is accepted, which says
+            # nothing about whether the clock was ever set. waitsync is what
+            # actually blocks until chronyd has disciplined it.
+            if timeout 90 chronyc waitsync 60 0 0 1 >/dev/null 2>&1; then
+                log "Time sync successful. Clock disciplined from ${BEST_SERVER_IP}."
+                touch "$STATE_FILE"
+                # Stop, but leave the unit enabled: this node may become a gateway
+                # later and need chrony running again.
+                log "Stopping chrony; this node has its time and need not keep polling."
+                systemctl stop chrony.service
+                return 0
+            else
+                log "Time sync did not complete against ${BEST_SERVER_IP}."
+                return 1
+            fi
         else
-            log "Time sync did not complete against ${BEST_SERVER_IP}."
+            log "Could not resolve hostname ${BEST_SERVER_HOSTNAME}.local"
+            return 1
         fi
     else
-        log "Could not resolve hostname ${BEST_SERVER_HOSTNAME}.local"
+        log "No NTP servers found on the mesh."
+        return 1
     fi
-else
-    log "No NTP servers found on the mesh."
-fi
+}
+
+# A missing server is usually just early: after a fleet-wide reboot the gateway
+# may not be advertising IS_NTP_SERVER yet when this runs. Giving up there left
+# the clock wherever boot put it (weeks off on a node without an RTC), which
+# breaks anything time-bound, e.g. fleet peer tokens (30s max skew) used by
+# the cross-node terminal and logs. Keep retrying until a sync succeeds.
+ATTEMPT=1
+until sync_once; do
+    if [ -f /var/run/mesh-ntp.state ]; then
+        log "This node became the mesh's NTP gateway; it stays synced. Exiting."
+        exit 0
+    fi
+    # Retry quickly for the first 2 minutes, then once a minute.
+    if [ "$ATTEMPT" -le 12 ]; then
+        sleep 10
+    else
+        sleep 60
+    fi
+    ((ATTEMPT++))
+    log "Retrying time sync (attempt ${ATTEMPT})..."
+done
 
 log "One-shot time sync complete."
