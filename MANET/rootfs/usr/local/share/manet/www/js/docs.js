@@ -182,6 +182,7 @@ DOCS_TABS.config = [
 '<p>An update that a power cut interrupts is finished at the next boot from the verified package kept in <code>/var/lib/manet-update</code>, without the network (<code>manet-update-recover.service</code>). See <code>docs/AUTO_UPDATE.md</code> in the repo for the full write-up.</p>',
 '<h4>Offline updates</h4>',
 '<p>Every node keeps the last package it installed on each channel, with its signature, in <code>/var/lib/manet-packages</code>. The Config tab\'s <strong>Offline Update</strong> card uploads a release into that store (the release <code>.zip</code>, or the tarball + <code>.sig</code> + version file from the release folder); the signature is checked before it is kept, and <strong>Install</strong> applies it with no internet, exactly like an online update. In Fleet Control, the <strong>Offline Update</strong> card picks any node that holds a package and <strong>Push</strong>es it: every other, older node fetches it from that node over the mesh and installs it. The source node is left out, since it serves the package; update it from its own Config tab afterwards.</p>',
+'<p>By default the push is <strong>staged</strong>: the source node runs a rollout, starting with the nodes it reaches fastest; every node that finishes holds the package and passes it on to the next, each node fetching from whichever updated node it reaches fastest, so the fleet updates in growing waves (1, 2, 4, …) instead of everyone pulling from one node at once. Fleet Control shows its progress and a <strong>Stop Rollout</strong> button. <em>All at once</em> is still available.</p>',
 
 '<h4>Security</h4>',
 '<table class="docs-table"><thead><tr><th>Key</th><th>Values</th><th>UI</th><th>Description</th></tr></thead><tbody>',
@@ -275,6 +276,9 @@ DOCS_TABS.api = [
 '<tr><td>GET</td><td><code>/api/offline-update</code></td><td></td><td>This node\'s offline package store: board, the software/overlay package held (file, version, size, signed), and the node it is fetching from, if any</td></tr>',
 '<tr><td>POST</td><td><code>/api/offline-update</code></td><td>multipart files</td><td>Auth. Upload a release <code>.zip</code> or loose release files into the store; refused unless the signature checks out (or <code>update_allow_unsigned=y</code>)</td></tr>',
 '<tr><td>GET</td><td><code>/api/offline-update/files/&lt;name&gt;</code></td><td></td><td>The store\'s package, signature and version files, which other nodes fetch</td></tr>',
+'<tr><td>GET</td><td><code>/api/admin/rollout</code></td><td></td><td>The staged rollout run from this node (running or last): versions, per-node state and source</td></tr>',
+'<tr><td>POST</td><td><code>/api/admin/rollout</code></td><td><code>{"channel":"software|overlay|both"}</code></td><td>Auth. Start a staged rollout of this node\'s stored package to every older node: fastest first, updated nodes pass it on</td></tr>',
+'<tr><td>POST</td><td><code>/api/admin/rollout/stop</code></td><td></td><td>Auth. Start no new nodes; ones already updating finish</td></tr>',
 '</tbody></table>',
 
 '<h3>Authentication</h3>',

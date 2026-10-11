@@ -417,6 +417,58 @@ func validOfflineSource(ip string) bool {
 	return isMeshPeerIP(ip, loadKVFile(MeshConfFile))
 }
 
+// pickOfflineSource chooses which of sources to install from: this node
+// when it is one of them, otherwise the one with the best mesh path from
+// here (pathScores), the first on a tie or when none is known.
+func pickOfflineSource(sources []string) string {
+	for _, s := range sources {
+		if hostMatchesLocalAddr(s) {
+			return s
+		}
+	}
+	scores := pathScores()
+	best := sources[0]
+	for _, s := range sources[1:] {
+		if scores[s] > scores[best] {
+			best = s
+		}
+	}
+	return best
+}
+
+// pathScores rates how well this node reaches each mesh node, by IP. A var
+// so tests can fake the mesh.
+var pathScores = meshPathScores
+
+// meshPathScores is batman-adv's end-to-end path throughput (Mbit/s,
+// BATMAN_V) from this node to every node in the registry, or its TQ where
+// there is no throughput (BATMAN_IV), over any of the node's interfaces.
+func meshPathScores() map[string]float64 {
+	_, origMap := runBatctlOriginators()
+	scores := map[string]float64{}
+	for _, rn := range parseRegistry() {
+		ip := rn["IPV4_ADDRESS"]
+		if ip == "" {
+			continue
+		}
+		macs := append([]string{rn["MAC_ADDRESS"]}, strings.Split(rn["MAC_ADDRESSES"], ",")...)
+		for _, m := range macs {
+			o, ok := origMap[normMAC(m)]
+			if !ok {
+				continue
+			}
+			s := o.RawTP
+			if s <= 0 {
+				s = float64(o.TQ)
+			}
+			if s > scores[ip] {
+				scores[ip] = s
+			}
+		}
+	}
+	return scores
+}
+
 // offlineInstall installs channel ("software", "overlay" or "both") from
 // the store of the node at sourceIP: straight from PackageDir when that is
 // this node, otherwise after fetching the package from there into

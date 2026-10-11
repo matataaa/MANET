@@ -211,6 +211,31 @@ left out: it serves the package to everyone else, and its own update
 reboot would cut their downloads. Update it from its Config tab once the
 rest are done.
 
+**Staged rollout** (Fleet Control → Offline Update, How: *Staged*, the
+default): pushing to every node at once has them all pull the package from
+one source simultaneously, which slows down, and over HaLow gets fragile,
+as the fleet grows. A rollout instead runs on the source node
+(`POST /api/admin/rollout {"channel": ...}`, state in
+`/var/lib/manet-rollout.json`, resumed if `manet-ctrl` restarts):
+
+- Every reachable node older than the source's package is queued, the
+  ones the source reaches fastest first (batman-adv path throughput).
+- Each free source starts the next queued node with `update-now`
+  `{"sources": [...]}` listing every free source; the node picks the one
+  *it* reaches fastest and says which. A source feeds one node at a time.
+- A node that comes back on the new version and holds the package (it
+  keeps what it installs) becomes a source too, so waves roughly double:
+  1, 2, 4, ... A node idle on the old version for 2 minutes, or not done
+  after 90, is marked failed and skipped; the rollout carries on.
+- `GET /api/admin/rollout` shows progress (also in `update-summary` per
+  node, so Fleet Control shows it from any node);
+  `POST /api/admin/rollout/stop` starts no new nodes and lets running ones
+  finish. The source node is not updated by its own rollout.
+
+Nodes on a release before staged rollouts still take part as targets (the
+request also carries `source`, which they fetch from), but they don't pick
+the fastest source themselves.
+
 Not automatic: a node's scheduled check still only looks at `update_url`.
 Pulling an update from a peer's store when the update server is
 unreachable is a possible follow-up.
