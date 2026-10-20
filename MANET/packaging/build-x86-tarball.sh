@@ -78,10 +78,9 @@ for svc in "${GO_SERVICES[@]}"; do
     install -m 0755 "$SRC/$svc/$svc" "$STAGE/usr/local/bin/$svc"
 done
 
-# mesh-voice — use pre-built binary if available
-if [ -f "$SRC/mesh-voice/bin/mesh-voice-linux-amd64" ]; then
-    install_file 0755 "$SRC/mesh-voice/bin/mesh-voice-linux-amd64" "$STAGE/usr/local/bin/mesh-voice"
-fi
+# mesh-voice needs CGO — use pre-built binary (rebuild: src/mesh-voice/build.sh amd64)
+"$SCRIPT_DIR/check-prebuilt-fresh.sh" "$SRC/mesh-voice/bin/mesh-voice-linux-amd64"
+install_file 0755 "$SRC/mesh-voice/bin/mesh-voice-linux-amd64" "$STAGE/usr/local/bin/mesh-voice"
 
 # ---------------------------------------------------------------------------
 #  Applets — copy applet binaries into their applet dirs
