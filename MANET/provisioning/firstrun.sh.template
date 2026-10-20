@@ -21,8 +21,17 @@ systemctl stop userconfig.service 2>/dev/null || true
 rm -f /etc/xdg/autostart/piwiz.desktop 2>/dev/null || true
 rm -f /usr/lib/raspberrypi-sys-mods/firstboot 2>/dev/null || true
 
-# Allow apt to function without a correct system date
-echo "APT::Check-Date "false";" >  /etc/apt/apt.conf.d/99no-time-checks.conf
+# Temporarily allow APT metadata from a system without a trusted clock.
+# The option lives in the Acquire group (apt.conf(5)); "APT::Check-Date" does
+# not exist and was silently ignored. Signatures stay on. Removed again when
+# this phase exits, so it never outlives provisioning. Same block as upstream.
+cleanup_apt_clock_override() {
+    rm -f /etc/apt/apt.conf.d/99no-time-checks.conf
+}
+trap 'cleanup_apt_clock_override || exit 1' EXIT
+trap 'exit 1' HUP INT TERM
+printf '%s\n' 'Acquire::Check-Date "false";' > /etc/apt/apt.conf.d/99no-time-checks.conf || exit 1
+# End temporary APT clock setup.
 
 # set up persistent logging: /var/log/journal must exist before journald's
 # "auto" storage mode (the default) will switch from volatile to persistent,
@@ -63,6 +72,17 @@ exec > >(tee -a /boot/firmware/provision.log) 2>&1
 set -x
 echo "=== provision-mesh-node.sh starting at $(date) ==="
 
+# Temporarily allow APT metadata from a system without a trusted clock.
+# A separate process from firstrun.sh, so it sets (and removes) its own copy.
+# Signatures stay on. Same block as upstream.
+cleanup_apt_clock_override() {
+    rm -f /etc/apt/apt.conf.d/99no-time-checks.conf
+}
+trap 'cleanup_apt_clock_override || exit 1' EXIT
+trap 'exit 1' HUP INT TERM
+printf '%s\n' 'Acquire::Check-Date "false";' > /etc/apt/apt.conf.d/99no-time-checks.conf || exit 1
+# End temporary APT clock setup.
+
 # This is where the wifi regulatory country is set
 REG="__REGULATORY_DOMAIN__"
 
@@ -82,14 +102,49 @@ fi
 ALREADY_PROVISIONED=0
 [ -f /var/lib/radio-setup.done ] && ALREADY_PROVISIONED=1
 
+# Internet is up if either ICMP or plain HTTP gets out. Some networks drop
+# ping but pass HTTP, and waiting on ping alone hung those nodes forever. The
+# HTTP probe is plain http on purpose: the clock is not set yet, so HTTPS
+# certificate checks would fail. Only an exact 204 counts — a captive portal
+# answers 200 or a redirect.
+have_internet() {
+    ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1 && return 0
+    [ "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+        --connect-timeout 5 --max-time 10 \
+        http://connectivitycheck.gstatic.com/generate_204 2>/dev/null)" = "204" ]
+}
+
+# Give up after this long rather than hang. Exit status 75 makes systemd retry
+# the whole service (Restart= in mesh-provision.service), so a cable plugged
+# in later is still picked up without a reboot. Timed on /proc/uptime, not
+# date: the wall clock can jump years once something sets it.
+uptime_secs() { cut -d. -f1 /proc/uptime; }
+INTERNET_WAIT_SECS=600
+INTERNET_WAIT_START=$(uptime_secs)
+
 while true; do
-    if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+    if have_internet; then
         echo "Internet connectivity confirmed!"
         break
     fi
     if [ $ALREADY_PROVISIONED -eq 1 ]; then
         echo "Re-run on provisioned node — no internet, continuing offline"
         break
+    fi
+    if [ $(( $(uptime_secs) - INTERNET_WAIT_START )) -ge $INTERNET_WAIT_SECS ]; then
+        echo "ERROR: no internet after ${INTERNET_WAIT_SECS}s (ping 8.8.8.8 and HTTP generate_204 both failed)"
+        echo "Provisioning NOT complete — retrying automatically; check the Ethernet uplink"
+        mkdir -p /var/lib
+        {
+            echo "STATE=incomplete"
+            echo "PHASE=first-boot (waiting for internet)"
+            echo "STARTED=$(date +%s)"
+            echo "UPDATED=$(date +%s)"
+            echo "FINISHED=$(date +%s)"
+        } > /var/lib/manet-provision.state
+        echo "no internet after ${INTERNET_WAIT_SECS}s: ping 8.8.8.8 and http://connectivitycheck.gstatic.com/generate_204 both failed" \
+            > /var/lib/manet-provision.failures
+        exit 75
     fi
     echo "Waiting for internet..."
     sleep 5
@@ -774,6 +829,11 @@ echo "require_auth=y" >> /etc/mesh.conf
 set -x
 
 
+# Restore normal APT date checks before completing this phase. The EXIT trap
+# would do it too, but the reboot below races the trap.
+cleanup_apt_clock_override || exit 1
+trap - EXIT HUP INT TERM
+
 # Disable the current script so it won't run again at next boot
 systemctl disable mesh-provision 2>/dev/null || true
 
@@ -889,6 +949,11 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/usr/local/bin/provision-mesh.sh
 RemainAfterExit=yes
+# Exit 75 = no internet within the wait deadline: try again a minute later.
+# Exit 1 is a hard error (e.g. no tools tarball) that a retry will not fix.
+Restart=on-failure
+RestartSec=60
+RestartPreventExitStatus=1
 StandardOutput=journal+console
 StandardError=journal+console
 
