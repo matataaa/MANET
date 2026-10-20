@@ -44,6 +44,9 @@ mkdir -p "$STAGE/usr/local/bin" "$STAGE/etc"
 install_tree "$ROOTFS/usr" "$STAGE/usr"
 install_tree "$ROOTFS/etc/systemd" "$STAGE/etc/systemd"
 install_tree "$ROOTFS/etc/udev" "$STAGE/etc/udev"
+# apt pin that keeps apt from replacing the overlay kernel/firmware: shipped
+# here so already-provisioned nodes get it with their next software update.
+install_tree "$ROOTFS/etc/apt" "$STAGE/etc/apt"
 # networkd-dispatcher hooks: shipped here too so an update replaces the ones
 # a node was provisioned with (they route end0 to ethernet-autodetect.sh).
 install_tree "$ROOTFS/etc/networkd-dispatcher" "$STAGE/etc/networkd-dispatcher"
