@@ -51,6 +51,10 @@ func TestConfigValueError(t *testing.T) {
 		{"ipv4_network", "", false},
 		{"ipv4_network", "10.30.2.0/31", false},
 		{"ipv4_network", "fd00::/64", false},
+		{"mesh_supplicant", "", true},
+		{"mesh_supplicant", "legacy", true},
+		{"mesh_supplicant", "manet", true},
+		{"mesh_supplicant", "/tmp/evil", false},
 	}
 	for _, c := range cases {
 		err := configValueError(c.key, c.value)

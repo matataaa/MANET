@@ -969,12 +969,21 @@ func acsHoldFault(iface string) string {
 
 // patchedWpaSupplicantPath is this project's own build of wpa_supplicant
 // with the mesh `noscan` patch (MANET/src/wpa-supplicant-mesh/,
-// docs/wpa-supplicant-mesh-noscan.md), installed alongside — never over —
-// the system wpa_supplicant. node-manager/main.go checks this exact same
-// path for its own capability gate (noscanCapable); kept in sync by
-// convention/naming, not by import (separate Go modules/binaries, no
-// shared package).
-const patchedWpaSupplicantPath = "/usr/sbin/wpa_supplicant_mesh"
+// docs/wpa-supplicant-mesh-noscan.md), and manetWpaSupplicantPath upstream's
+// 2.11 build (MANET/src/wpa-supplicant-manet/), both installed alongside —
+// never over — the system wpa_supplicant. node-manager/main.go checks these
+// exact same paths for its own drop-in and key gates (meshSupplicantMode);
+// kept in sync by convention/naming, not by import (separate Go
+// modules/binaries, no shared package).
+const (
+	patchedWpaSupplicantPath = "/usr/sbin/wpa_supplicant_mesh"
+	manetWpaSupplicantPath   = "/usr/sbin/wpa_supplicant_manet"
+)
+
+func isExecutableFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode()&0111 != 0
+}
 
 // wpaSupplicantMeshFault reports when the patched wpa_supplicant (noscan)
 // is missing on a node with a 5GHz mesh radio (freqMHz >= 5000), as an info
@@ -991,8 +1000,13 @@ func wpaSupplicantMeshFault(freqMHz string) string {
 	if err != nil || freq < 5000 {
 		return ""
 	}
-	info, statErr := os.Stat(patchedWpaSupplicantPath)
-	if statErr != nil || info.IsDir() || info.Mode()&0111 == 0 {
+	if loadKVFile(MeshConfFile)["mesh_supplicant"] == "manet" {
+		if !isExecutableFile(manetWpaSupplicantPath) {
+			return "mesh_supplicant=manet but wpa_supplicant_manet is not installed -- running the legacy build"
+		}
+		return ""
+	}
+	if !isExecutableFile(patchedWpaSupplicantPath) {
 		return "Patched wpa_supplicant (noscan) not installed -- mesh_5ghz_bw=40 unavailable, 80 not deterministic"
 	}
 	return ""

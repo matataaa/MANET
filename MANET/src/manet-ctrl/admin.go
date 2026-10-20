@@ -253,6 +253,7 @@ func assembleAdminStatus(authed bool) AdminStatus {
 		"halow_duty_cycle":        conf["halow_duty_cycle"],
 		"acs":                     confGet(conf, "acs", "n"),
 		"mesh_5ghz_bw":            confGet(conf, "mesh_5ghz_bw", "20"),
+		"mesh_supplicant":         confGet(conf, "mesh_supplicant", "legacy"),
 		"mesh_5ghz_channel":       conf["mesh_5ghz_channel"],
 		"multicast_mode":          confGet(conf, "multicast_mode", "flood"),
 		"lan_ap_channel":          conf["lan_ap_channel"],

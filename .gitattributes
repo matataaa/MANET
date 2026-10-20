@@ -38,4 +38,5 @@ MANET/binaries_arm64/chronyc binary
 MANET/binaries_arm64/wpa_cli_s1g binary
 MANET/binaries_arm64/wpa_supplicant_s1g binary
 MANET/install_packages/*.tar.gz binary
+MANET/src/wpa-supplicant-manet/bin/* binary
 *.svg text eol=lf

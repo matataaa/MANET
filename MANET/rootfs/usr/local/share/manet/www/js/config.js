@@ -147,6 +147,7 @@ function configRenderView(panel, cfg) {
       } },
       { label: '5GHz Mesh Channel Mode', key: 'acs', fmt: function(v) { return v === 'y' ? 'Automatic (ACS)' : 'Static (pinned)'; } },
       { label: '5GHz Mesh Width', key: 'mesh_5ghz_bw', fmt: function(v) { return v === '80' ? '80 MHz' : v === '40' ? '40 MHz' : '20 MHz (default)'; } },
+      { label: 'Wi-Fi Mesh Supplicant', key: 'mesh_supplicant', fmt: function(v) { return v === 'manet' ? 'Manet (2.11, Wi-Fi 6)' : 'Legacy (2.10, default)'; } },
       { label: '5GHz Pinned Channel', key: 'mesh_5ghz_channel', fmt: function(v) {
         var chLabel = v || '36 (default)';
         return cfg.acs === 'y' ? chLabel + ' — unused while Automatic (ACS) is active' : chLabel;
@@ -602,8 +603,11 @@ function configRenderEdit(panel, cfg) {
       {v:'n',l:'Static (pinned channel)'},{v:'y',l:'Automatic (ACS)'}
     ], hint: 'Static pins the 5GHz (and 2.4GHz) mesh to a fixed channel — deterministic, recommended. Automatic elects a channel via scanning/consensus across the fleet. Live — applies within one 15s tick, no restart needed.' },
     { label: '5GHz Mesh Width', key: 'mesh_5ghz_bw', type: 'select', options: [
-      {v:'20',l:'20 MHz (default)'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
-    ], hint: 'Fleet-wide — never mix widths across nodes. 40MHz requires the patched wpa_supplicant and silently falls back to 20MHz without it. 80MHz without the patch can mismatch primary channel between peers.' },
+      {v:'20',l:'20 MHz (default, recommended)'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
+    ], hint: 'Fleet-wide — never mix widths across nodes. 20MHz is recommended: best range and deterministic peering, and with the 2.11 (manet) supplicant it still reaches ~210-220 Mbit/s TCP over Wi-Fi 6. 40/80MHz trade range for throughput; 40 needs the noscan or manet supplicant and falls back to 20MHz without one, 80 without either can mismatch primary channel between peers.' },
+    { label: 'Wi-Fi Mesh Supplicant', key: 'mesh_supplicant', type: 'select', options: [
+      {v:'legacy',l:'Legacy (2.10, default)'},{v:'manet',l:'Manet (2.11, Wi-Fi 6)'}
+    ], hint: 'Legacy: 2.10 noscan build (default). Manet: upstream 2.11 build with Wi-Fi 6 (HE) rates on both bands, dead peers dropped in ~10 s instead of ~5 min, and no SAE lockout. Restarts the Wi-Fi mesh links within one 15s tick (HaLow unaffected); nodes on different builds still peer, so it can be rolled out node by node. Falls back to legacy if the binary is missing.' },
     { label: '5GHz Pinned Channel', key: 'mesh_5ghz_channel', type: 'channel-5ghz',
       hint: 'Only used when 5GHz Mesh Channel Mode above is Static. Ignored under Automatic (ACS), which elects its own channel. Legal channels depend on Regulatory Domain — narrowed via /api/mesh5ghz/channels, same as HaLow Channel above.',
       showIf: [{key:'acs', equals:'n'}] },
@@ -889,7 +893,7 @@ async function configSave() {
   }
 
   const meshFields = ['node_hostname','eud','lan_ap_ssid','lan_ap_key','lan_ap_channel','lan_ap_bw','max_euds_per_node','eud_bandwidth','mesh_ssid','mesh_key',
-    'ipv4_network','regulatory_domain','halow_bw','halow_channel','halow_duty_cycle','acs','mesh_5ghz_bw','mesh_5ghz_channel','multicast_mode','battery_monitor','admin_password','require_auth','ui_uplink_access','ssh_uplink_access',
+    'ipv4_network','regulatory_domain','halow_bw','halow_channel','halow_duty_cycle','acs','mesh_5ghz_bw','mesh_supplicant','mesh_5ghz_channel','multicast_mode','battery_monitor','admin_password','require_auth','ui_uplink_access','ssh_uplink_access',
     'gateway','gateway_nat','gateway_mss_clamp','gateway_bandwidth','dns_servers',
     'auto_update','update_url','auto_update_overlay','auto_update_min_mbps','update_allow_unsigned',
     'gps','gps_source','gps_static_lat','gps_static_lon','gps_static_alt','callsign','cot_type','cot_team','cot_role','cot_icon',

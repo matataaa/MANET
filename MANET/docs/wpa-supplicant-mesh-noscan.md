@@ -1,5 +1,11 @@
 # wpa_supplicant mesh `noscan` patch — research + build plan
 
+**2026-10-19:** an alternative build is available as `mesh_supplicant=manet`
+(`../src/wpa-supplicant-manet/README.md`): upstream's hostap 2.11 with HE,
+whose patch 0006 keeps the mesh primary without `noscan` and which still
+parses `noscan=1` (fork patch 0100). This build stays the default until the
+manet build has field time.
+
 Research session: 2026-08-27. Companion to `ACS.md`'s "Open issue: 5GHz
 primary channel doesn't reliably match between nodes" — that doc concluded
 the coex-scan bug has **no config-level fix in mainline wpa_supplicant** and

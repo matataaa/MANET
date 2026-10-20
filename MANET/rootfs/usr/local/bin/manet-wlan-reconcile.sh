@@ -74,6 +74,13 @@ MESH_5GHZ_BW="${MESH_5GHZ_BW:-20}"
 # (status=255), dropping that radio out of the mesh entirely.
 NOSCAN_CAPABLE=0
 [ -x /usr/sbin/wpa_supplicant_mesh ] && NOSCAN_CAPABLE=1
+# mesh_supplicant=manet (upstream's 2.11 build), only when installed — kept
+# consistent with radio-setup.sh and node-manager's meshSupplicantBinary.
+MANET_SUPPLICANT=0
+if [ "$(grep '^mesh_supplicant=' /etc/mesh.conf 2>/dev/null | cut -d= -f2-)" = manet ] \
+    && [ -x /usr/sbin/wpa_supplicant_manet ]; then
+    MANET_SUPPLICANT=1
+fi
 EUD=$(grep '^eud=' /etc/mesh.conf 2>/dev/null | cut -d= -f2-)
 AP_INTERFACE=""
 [ -f "$AP_IF_FILE" ] && AP_INTERFACE=$(head -1 "$AP_IF_FILE" | tr -d '\r')
@@ -336,9 +343,23 @@ for WLAN in $(cat "$MESH_IF_FILE"); do
         # (docs/wpa-supplicant-mesh-noscan.md) ONLY when NOSCAN_CAPABLE=1 —
         # without it, 40 falls back to 20MHz-only (never "40 without
         # noscan"), and 80 keeps today's existing VHT80 nondeterminism
-        # unchanged. 2.4GHz (FREQ < 5000) never gets any of these keys.
+        # unchanged. 2.4GHz (FREQ < 5000) never gets any of these keys,
+        # except the manet build's 20MHz pin (radio-setup.sh's same block).
         WIDTH_LINES=""
-        if [ "$FREQ" -ge 5000 ]; then
+        GLOBAL_LINES=""
+        if [ "$MANET_SUPPLICANT" -eq 1 ]; then
+            GLOBAL_LINES="mesh_max_inactivity=10
+"
+            case "$MESH_5GHZ_BW" in
+                40) [ "$FREQ" -ge 5000 ] && WIDTH_LINES="    max_oper_chwidth=0
+" ;;
+                80) [ "$FREQ" -ge 5000 ] && WIDTH_LINES="    max_oper_chwidth=1
+" ;;
+            esac
+            [ -z "$WIDTH_LINES" ] && WIDTH_LINES="    max_oper_chwidth=0
+    disable_ht40=1
+"
+        elif [ "$FREQ" -ge 5000 ]; then
             case "$MESH_5GHZ_BW" in
                 40)
                     if [ "$NOSCAN_CAPABLE" -eq 1 ]; then
@@ -367,7 +388,7 @@ for WLAN in $(cat "$MESH_IF_FILE"); do
         fi
 
         cat <<-EOF > "/etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf"
-		ctrl_interface=/var/run/wpa_supplicant
+		${GLOBAL_LINES}ctrl_interface=/var/run/wpa_supplicant
 		country=$CFG80211_REGDOM
 		update_config=1
 		sae_pwe=0
