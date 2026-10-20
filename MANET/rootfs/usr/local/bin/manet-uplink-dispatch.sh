@@ -448,6 +448,22 @@ reconcile() {
     demote_gateway "$current"
 }
 
+# Link events from the AP radio, mesh radios and bridges say nothing about
+# uplinks. Reconciling on them runs the internet probes (several seconds
+# on a gateway) under the lock above, and an uplink event arriving meanwhile is
+# skipped until the next periodic reconcile. A removed uplink no longer
+# exists in sysfs, so the current uplink still passes. node-manager's
+# periodic reconcile covers anything skipped here.
+case "$EVENT" in
+    reconcile|--hotplug|promote|release) ;;
+    *)
+        if [ -n "$IFACE" ] && ! is_upstream_iface "$IFACE" &&
+                [ "$IFACE" != "$(current_uplink_iface)" ]; then
+            exit 0
+        fi
+        ;;
+esac
+
 case "$EVENT" in
     carrier|routable|configured|online|add|reconcile|--hotplug)
         reconcile
