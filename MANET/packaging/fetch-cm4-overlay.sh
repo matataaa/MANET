@@ -12,6 +12,9 @@
 #  Usage: ./fetch-cm4-overlay.sh <path-to-cm4-install.tar.gz>
 #         [UPSTREAM_TAG=v0.559] ./fetch-cm4-overlay.sh --from-url
 #
+#  MORSE_FIRMWARE_DIR=<morse-firmware checkout> is required while upstream's
+#  overlay carries modified BCFs (all releases up to 0.578); see below.
+#
 #  A local tarball is the normal route — copy install_packages/ or a
 #  cm4-install.tar.gz from a machine that already has one. Downloading is
 #  opt-in via --from-url (checked against the release's .sha256) and never
@@ -97,6 +100,55 @@ mv "$WORKDIR/usr/lib/modules" "$OVERLAY_DIR/usr/lib/modules"
 mkdir -p "$OVERLAY_DIR/usr/lib/firmware"
 mv "$WORKDIR/usr/lib/firmware/morse" "$OVERLAY_DIR/usr/lib/firmware/morse"
 
+# Morse Micro licenses the BCFs for distribution complete and unmodified, and
+# requires its license to travel with them. Overlays up to upstream 0.578 ship
+# them pre-patched; swap those for the published files (the node patches them
+# at boot with manet-morse-bcf.py). Each swap is checked: the stock file,
+# patched, must equal the overlay's file, so a wrong release cannot slip in.
+BCF_TOOL="$SCRIPT_DIR/../rootfs/usr/local/bin/manet-morse-bcf.py"
+MORSE_DIR="$OVERLAY_DIR/usr/lib/firmware/morse"
+BCF_STATUS="stock as vendored"
+if [ -n "${MORSE_FIRMWARE_DIR:-}" ] && [ ! -f "$MORSE_FIRMWARE_DIR/firmware/LICENSE" ]; then
+    echo "ERROR: MORSE_FIRMWARE_DIR is not a morse-firmware checkout: $MORSE_FIRMWARE_DIR" >&2
+    exit 1
+fi
+if ! python3 -I "$BCF_TOOL" --directory "$MORSE_DIR" --check-stock 2>/dev/null; then
+    if [ -z "${MORSE_FIRMWARE_DIR:-}" ]; then
+        echo "ERROR: this overlay's Morse BCFs are modified. Point MORSE_FIRMWARE_DIR at a" >&2
+        echo "       checkout of the matching published files, e.g.:" >&2
+        echo "  git clone https://github.com/MorseMicro/morse-firmware.git" >&2
+        echo "  git -C morse-firmware checkout ea18605f53387281c1029ea9eb8e0de2bda7bae2  # 1.17.9" >&2
+        exit 1
+    fi
+    STOCK="$WORKDIR/bcf-stock" CHECK="$WORKDIR/bcf-check"
+    mkdir -p "$STOCK" "$CHECK"
+    for f in "$MORSE_DIR"/bcf_*.bin; do
+        b="$(basename "$f")"
+        s="$(find "$MORSE_FIRMWARE_DIR/bcf" -name "$b" | head -1)"
+        [ -n "$s" ] || { echo "ERROR: $b is not in $MORSE_FIRMWARE_DIR/bcf" >&2; exit 1; }
+        cp -L "$s" "$STOCK/$b"
+        cp -L "$s" "$CHECK/$b"
+    done
+    python3 -I "$BCF_TOOL" --directory "$CHECK" >/dev/null
+    for f in "$MORSE_DIR"/bcf_*.bin; do
+        b="$(basename "$f")"
+        cmp -s "$f" "$CHECK/$b" || {
+            echo "ERROR: $b from $MORSE_FIRMWARE_DIR does not patch to the overlay's file" >&2
+            exit 1
+        }
+        install -m 0644 "$STOCK/$b" "$f"
+    done
+    BCF_STATUS="restored to stock from morse-firmware $(git -C "$MORSE_FIRMWARE_DIR" rev-parse --short HEAD 2>/dev/null || echo "(unknown commit)")"
+fi
+python3 -I "$BCF_TOOL" --directory "$MORSE_DIR" --check-stock
+if [ -n "${MORSE_FIRMWARE_DIR:-}" ]; then
+    install -m 0644 "$MORSE_FIRMWARE_DIR/firmware/LICENSE" "$MORSE_DIR/LICENSE"
+fi
+[ -f "$MORSE_DIR/LICENSE" ] || {
+    echo "ERROR: the overlay has no Morse license; set MORSE_FIRMWARE_DIR to add it" >&2
+    exit 1
+}
+
 BUNDLED_VERSION="$(tr '\n' ' ' < "$WORKDIR/etc/manet_version.txt" 2>/dev/null | sed -E 's/^(\S+)\s+(\S+)\s*$/\1 (\2)/' || echo "unknown")"
 [ -z "$BUNDLED_VERSION" ] && BUNDLED_VERSION="unknown"
 TARBALL_SHA256="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
@@ -118,6 +170,7 @@ Pi OS.
 - Source: $SOURCE
 - Bundled version (from ./etc/manet_version.txt inside that tarball): $BUNDLED_VERSION
 - Tarball SHA-256: $TARBALL_SHA256
+- Morse BCFs: $BCF_STATUS
 - Vendored: $(date -u +"%Y-%m-%d %H:%M UTC")
 
 ## Re-checking for updates
