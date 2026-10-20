@@ -5,7 +5,9 @@ Wants=batman-enslave.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/mesh-voice -iface br0 -ptt openvlm
+# Interface, PTT mode and channel come from /etc/mesh.conf (voice_iface,
+# voice_ptt_mode, voice_channel); manet-ctrl edits those and restarts.
+ExecStart=/usr/local/bin/mesh-voice
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=5

@@ -1529,6 +1529,22 @@ func getVoiceStatus() VoiceStatus {
 			}
 		}
 	}
+	// The shipped unit passes no flags: mesh-voice takes these from mesh.conf
+	// (see mesh-voice/conf.go), so report the same values.
+	conf := loadKVFile(MeshConfFile)
+	ch, _ := strconv.Atoi(conf["voice_channel"])
+	if vs.McastAddr == "" {
+		vs.McastAddr = voiceChannelAddr(ch)
+	}
+	if vs.Port == "" {
+		vs.Port = strconv.Itoa(voiceChannelPort(ch))
+	}
+	if vs.PTTMode == "" {
+		vs.PTTMode = confGet(conf, "voice_ptt_mode", "openvlm")
+	}
+	if vs.Interface == "" {
+		vs.Interface = confGet(conf, "voice_iface", "br0")
+	}
 	if out, err := runCmdStdout(3*time.Second, "systemctl", "status", "mesh-voice"); err == nil {
 		if m := regexp.MustCompile(`Active:.*;\s+(.+?)\s+ago`).FindStringSubmatch(out); len(m) > 1 {
 			vs.Uptime = m[1]
@@ -1554,7 +1570,7 @@ func getVoiceStatus() VoiceStatus {
 		vs.PTTDevice = "always"
 	}
 
-	conf := loadKVFile(MeshConfFile)
+	conf = loadKVFile(MeshConfFile)
 	vs.MicVolume = confGet(conf, "voice_mic_volume", "80")
 	vs.SpeakerVolume = confGet(conf, "voice_speaker_volume", "80")
 	vs.Channel = int(voiceTxCh.Load())

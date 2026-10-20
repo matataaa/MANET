@@ -239,7 +239,7 @@ DOCS_TABS.api = [
 '<tr><td>GET</td><td><code>/api/voice</code></td><td></td><td>Mesh voice service status — active, uptime, PTT mode, multicast address, TX/RX state</td></tr>',
 '<tr><td>GET</td><td><code>/api/voice/channels</code></td><td></td><td>Voice channel state — 21 channels with tx, rx (subscribed), and active (traffic in last 500ms) flags</td></tr>',
 '<tr><td>POST</td><td><code>/api/voice</code></td><td><code>{"action":"start|stop|restart"}</code></td><td>Control the hardware PTT voice service (mesh-voice daemon)</td></tr>',
-'<tr><td>POST</td><td><code>/api/voice/channels</code></td><td><code>{"tx":4,"rx":[1,4,8]}</code></td><td>Set TX channel and/or RX channel list. TX channel always included in RX. Persisted to mesh.conf. Changing TX restarts mesh-voice.</td></tr>',
+'<tr><td>POST</td><td><code>/api/voice/channels</code></td><td><code>{"tx":4,"rx":[1,4,8]}</code></td><td>Set TX channel and/or RX channel list. TX channel always included in RX. Persisted to mesh.conf. No login needed (EUD app). Changing TX restarts mesh-voice about 3 s later; changes in that window share one restart.</td></tr>',
 '</tbody></table>',
 
 '<h3>QoS</h3>',
@@ -383,7 +383,7 @@ DOCS_TABS.services = [
 '</tbody></table>',
 
 '<h4>Multi-Channel Voice</h4>',
-'<p>21 voice channels available (1–21). Each channel maps to a separate multicast group (<code>239.69.0.{ch}:4370</code>). A node has one TX channel and one or more RX channels.</p>',
+'<p>21 voice channels available (1–21). Each channel maps to a separate multicast group and port: channel N is <code>239.69.0.N</code> on port <code>4370+N-1</code> (channel 1 = <code>239.69.0.1:4370</code>, channel 4 = <code>239.69.0.4:4373</code>). mesh-voice reads its channel, interface and PTT mode from <code>/etc/mesh.conf</code> when it starts. A node has one TX channel and one or more RX channels.</p>',
 '<table class="docs-table"><thead><tr><th>Setting</th><th>mesh.conf key</th><th>Description</th></tr></thead><tbody>',
 '<tr><td>TX Channel</td><td><code>voice_channel</code></td><td>Channel to transmit on. Default: 1. Changing TX restarts the mesh-voice daemon.</td></tr>',
 '<tr><td>RX Channels</td><td><code>voice_rx_channels</code></td><td>Comma-separated list of channels to receive. TX channel is always included. Multicast UDP listeners only run on subscribed channels.</td></tr>',

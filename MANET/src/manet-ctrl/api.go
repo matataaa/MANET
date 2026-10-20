@@ -334,10 +334,10 @@ func apiVoiceConfig(w http.ResponseWriter, r *http.Request, body map[string]inte
 		return
 	}
 
+	// The multicast group and port follow voice_channel (saved through
+	// /api/admin/save); mcast_addr/port from older clients are ignored.
 	ptt := jsonStr(body, "ptt_mode", "openvlm")
 	iface := jsonStr(body, "interface", "br0")
-	addr := jsonStr(body, "mcast_addr", "239.69.0.1")
-	port := jsonStr(body, "port", "4370")
 	micVol := jsonStr(body, "mic_volume", "")
 	spkVol := jsonStr(body, "speaker_volume", "")
 
@@ -350,18 +350,9 @@ func apiVoiceConfig(w http.ResponseWriter, r *http.Request, body map[string]inte
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "invalid interface"})
 		return
 	}
-	if net.ParseIP(addr) == nil || !strings.HasPrefix(addr, "239.") {
-		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "invalid multicast address"})
-		return
-	}
-	portNum, err := strconv.Atoi(port)
-	if err != nil || portNum < 1024 || portNum > 65535 {
-		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "invalid port"})
-		return
-	}
-
-	// Persist PTT mode and volume to mesh.conf
-	confUpdates := map[string]string{"voice_ptt_mode": ptt}
+	// Persist PTT mode, interface and volume to mesh.conf; mesh-voice reads
+	// them when it starts.
+	confUpdates := map[string]string{"voice_ptt_mode": ptt, "voice_iface": iface}
 	if micVol != "" {
 		confUpdates["voice_mic_volume"] = micVol
 	}
@@ -373,29 +364,6 @@ func apiVoiceConfig(w http.ResponseWriter, r *http.Request, body map[string]inte
 		applyVoiceVolume(loadKVFile(MeshConfFile))
 	}
 
-	execLine := fmt.Sprintf("/usr/local/bin/mesh-voice -iface %s -addr %s -port %s -ptt %s", iface, addr, port, ptt)
-
-	unit := fmt.Sprintf(`[Unit]
-Description=Mesh Voice PTT over multicast
-After=network.target
-Wants=network.target
-
-[Service]
-Type=simple
-ExecStart=%s
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-`, execLine)
-
-	if err := os.WriteFile("/etc/systemd/system/mesh-voice.service", []byte(unit), 0644); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"ok": false, "error": err.Error()})
-		return
-	}
-
-	exec.Command("systemctl", "daemon-reload").Run()
 	// mesh-voice exits cleanly on its own when voice_enabled=n, but restarting
 	// a service that's about to immediately exit again is pointless churn —
 	// the Config tab saves this same field via /api/admin/save in parallel
@@ -403,7 +371,10 @@ WantedBy=multi-user.target
 	if confGet(loadKVFile(MeshConfFile), "voice_enabled", "y") == "n" {
 		exec.Command("systemctl", "stop", "mesh-voice").Run()
 	} else {
-		exec.Command("systemctl", "restart", "mesh-voice").Run()
+		// start covers a stopped service; the (shared, delayed) restart
+		// picks up whatever the parallel admin save writes.
+		exec.Command("systemctl", "start", "mesh-voice").Run()
+		requestVoiceRestart()
 	}
 
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
@@ -1573,14 +1544,14 @@ func apiAdminSave(w http.ResponseWriter, r *http.Request) {
 		applied["cot_identity_applied"] = true
 	}
 
-	// Apply voice PTT mode / channel changes
+	// Apply voice PTT mode / channel changes. The in-memory channels (web
+	// voice client, /api/voice/channels) follow the saved ones.
+	if updates["voice_channel"] != "" || updates["voice_rx_channels"] != "" {
+		voiceInitChannels()
+	}
 	if conf["voice_enabled"] != "n" && (updates["voice_ptt_mode"] != "" || updates["voice_channel"] != "" || updates["voice_gain"] != "" ||
-		updates["voice_beep_tx_start"] != "" || updates["voice_beep_rx_end"] != "") {
-		txCh := int(voiceTxCh.Load())
-		if txCh <= 0 {
-			txCh = 1
-		}
-		voiceRestartDaemon(txCh)
+		updates["voice_iface"] != "" || updates["voice_beep_tx_start"] != "" || updates["voice_beep_rx_end"] != "") {
+		requestVoiceRestart()
 		applied["voice_restarted"] = true
 	}
 

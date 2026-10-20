@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -416,7 +415,7 @@ func voiceSetChannels(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if txChanged {
-		go voiceRestartDaemon(txCh)
+		requestVoiceRestart()
 	}
 
 	writeJSON(w, 200, map[string]interface{}{
@@ -426,34 +425,39 @@ func voiceSetChannels(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func voiceRestartDaemon(txCh int) {
-	if exec.Command("systemctl", "is-active", "--quiet", "mesh-voice").Run() != nil {
+// voiceRestartDelay coalesces channel and setting changes into one restart.
+// The TX channel picker is reachable without a login (the Android app), so a
+// burst of requests must not turn into a burst of restarts.
+// voiceRestartDelay and voiceRestartCmd are variables so tests can stand in
+// for them.
+var (
+	voiceRestartDelay = 3 * time.Second
+	voiceRestartCmd   = func() ([]byte, error) {
+		return exec.Command("systemctl", "try-restart", "mesh-voice").CombinedOutput()
+	}
+
+	voiceRestartMu    sync.Mutex
+	voiceRestartTimer *time.Timer
+)
+
+// requestVoiceRestart restarts a running mesh-voice once voiceRestartDelay
+// has passed. mesh-voice reads its channel, interface and PTT mode from
+// mesh.conf when it starts, so one pending restart covers every change saved
+// before it fires.
+func requestVoiceRestart() {
+	voiceRestartMu.Lock()
+	defer voiceRestartMu.Unlock()
+	if voiceRestartTimer != nil {
 		return
 	}
-	conf := loadKVFile(MeshConfFile)
-	iface := confGet(conf, "voice_iface", "br0")
-	port := strconv.Itoa(voiceChannelPort(txCh))
-	ptt := confGet(conf, "voice_ptt_mode", "openvlm")
-	addr := voiceChannelAddr(txCh)
-
-	execLine := fmt.Sprintf("/usr/local/bin/mesh-voice -iface %s -addr %s -port %s -ptt %s", iface, addr, port, ptt)
-	unit := fmt.Sprintf(`[Unit]
-Description=Mesh Voice PTT over multicast
-After=network.target
-Wants=network.target
-
-[Service]
-Type=simple
-ExecStart=%s
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-`, execLine)
-
-	os.WriteFile("/etc/systemd/system/mesh-voice.service", []byte(unit), 0644)
-	exec.Command("systemctl", "daemon-reload").Run()
-	exec.Command("systemctl", "restart", "mesh-voice").Run()
-	log.Printf("voice daemon restarted on ch%d (%s)", txCh, addr)
+	voiceRestartTimer = time.AfterFunc(voiceRestartDelay, func() {
+		voiceRestartMu.Lock()
+		voiceRestartTimer = nil
+		voiceRestartMu.Unlock()
+		if out, err := voiceRestartCmd(); err != nil {
+			log.Printf("voice daemon restart failed: %v: %s", err, strings.TrimSpace(string(out)))
+			return
+		}
+		log.Printf("voice daemon restarted (ch%d)", voiceTxCh.Load())
+	})
 }

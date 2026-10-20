@@ -257,12 +257,11 @@ func fleetApplyConfig(pkg map[string]interface{}) {
 			runCmd(5*time.Second, "systemctl", "restart", "mesh-voice")
 		}
 	}
+	if updates["voice_channel"] != "" {
+		voiceInitChannels()
+	}
 	if conf["voice_enabled"] != "n" && (updates["voice_ptt_mode"] != "" || updates["voice_channel"] != "") {
-		txCh := int(voiceTxCh.Load())
-		if txCh <= 0 {
-			txCh = 1
-		}
-		voiceRestartDaemon(txCh)
+		requestVoiceRestart()
 	}
 	if updates["dns_servers"] != "" {
 		applyDNSServers(updates["dns_servers"])
