@@ -191,15 +191,28 @@ func readPeers() map[string]NodeInfo {
 	if err != nil {
 		return peers
 	}
+	network := configuredMeshNetwork()
 	for _, m := range alfredRE.FindAllStringSubmatch(string(out), -1) {
 		mac := m[1]
 		payload := unescapeAlfred(m[2])
 		var info NodeInfo
-		if json.Unmarshal([]byte(payload), &info) == nil {
+		if json.Unmarshal([]byte(payload), &info) == nil && sanitizePeer(&info, network) {
 			peers[mac] = info
 		}
 	}
 	return peers
+}
+
+// configuredMeshNetwork reads ipv4_network from mesh.conf. A value that does
+// not parse leaves every peer IPv4 rejected (logged once) rather than
+// accepting addresses from anywhere.
+func configuredMeshNetwork() *net.IPNet {
+	conf := loadKV(confFile)
+	network := meshNetwork(conf)
+	if network == nil {
+		logOnce("network|"+conf["ipv4_network"], "invalid ipv4_network %q in %s; ignoring peer IPv4 addresses", conf["ipv4_network"], confFile)
+	}
+	return network
 }
 
 func unescapeAlfred(s string) string {
@@ -245,8 +258,13 @@ func loadKnownNodes() {
 	if json.Unmarshal(data, &nodes) == nil {
 		// Normalize keys so entries written by older builds (mixed case /
 		// dash-separated MACs) can't coexist with their normalized twin.
+		// The cache holds peer data persisted by older builds that did not
+		// validate it, so it gets the same checks as live alfred data.
+		network := configuredMeshNetwork()
 		for mac, n := range nodes {
-			knownNodes[normMAC(mac)] = n
+			if sanitizePeer(&n, network) {
+				knownNodes[normMAC(mac)] = n
+			}
 		}
 		log.Printf("loaded %d known nodes from disk", len(knownNodes))
 	}
@@ -358,7 +376,7 @@ func writeRegistry(self NodeInfo, peers map[string]NodeInfo) {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Mesh Node Registry - Generated %s\n", time.Now().Format(time.RFC1123))
-	fmt.Fprintln(&b, "# Sourced by other scripts to get network state.")
+	fmt.Fprintln(&b, "# Parsed (never sourced) by other scripts to get network state.")
 	fmt.Fprintln(&b)
 
 	for mac, n := range knownNodes {
@@ -402,11 +420,18 @@ func writeRegistry(self NodeInfo, peers map[string]NodeInfo) {
 }
 
 func writeNodeWithState(b *strings.Builder, n NodeInfo, isLive bool) {
-	if n.MAC == "" {
+	if !validMAC(n.MAC) {
 		return
 	}
 	prefix := "NODE_" + strings.ReplaceAll(strings.ReplaceAll(n.MAC, ":", ""), "-", "")
+	// Last line of defense: shell scripts and every Go reader parse values
+	// as '[^']*' on one line, so a quote, newline or control character would
+	// break out of the value. Such a value is written empty.
 	w := func(field, val string) {
+		if !safeValue(val) {
+			logOnce(prefix+"|"+field+"|"+val, "registry: refusing unsafe %s value for %s", field, prefix)
+			val = ""
+		}
 		fmt.Fprintf(b, "%s_%s='%s'\n", prefix, field, val)
 	}
 	w("HOSTNAME", n.Hostname)

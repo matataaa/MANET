@@ -12,6 +12,16 @@ log() {
     printf '[%(%Y-%m-%d %H:%M:%S)T] - ONE-SHOT-SYNC: %s\n' -1 "$1" >&2
 }
 
+# registry_field <MAC_SANITIZED> <FIELD>: print one value from the registry.
+# The registry carries data gossiped by every peer, so it is parsed, never
+# sourced: sourcing it ran a peer hostname like x'$(cmd)' as root.
+registry_field() {
+    local key="NODE_${1}_${2}" line
+    line=$(grep -m1 "^${key}='[^']*'\$" "$REGISTRY_STATE_FILE" 2>/dev/null) || return 0
+    line="${line#"${key}='"}"
+    printf '%s' "${line%\'}"
+}
+
 # If we've already synced on this boot, do nothing.
 if [ -f "$STATE_FILE" ]; then
     log "Initial time sync has already been performed. Exiting."
@@ -48,7 +58,6 @@ log "Mesh registry is available. Proceeding with sync..."
 # and sync from it. Returns non-zero if there is none yet or the sync failed.
 sync_once() {
     # Find the Best NTP Server, from the POV of this mesh node
-    source "$REGISTRY_STATE_FILE"
     BEST_SERVER_HOSTNAME=""
     BEST_SERVER_MAC=""
     HIGHEST_LOCAL_TQ="0" # Initialize TQ to 0 (lowest possible)
@@ -63,14 +72,9 @@ sync_once() {
         if [[ $line =~ ${PREFIX_PATTERN}_IS_NTP_SERVER=\'true\' ]]; then
             MAC_SANITIZED="${BASH_REMATCH[1]}"
 
-            # Construct variable names for MAC and Hostname
-            MAC_VAR="NODE_${MAC_SANITIZED}_MAC_ADDRESS"
-            MACS_VAR="NODE_${MAC_SANITIZED}_MAC_ADDRESSES"
-            HOSTNAME_VAR="NODE_${MAC_SANITIZED}_HOSTNAME"
-
-            CANDIDATE_MAC=${!MAC_VAR}
-            CANDIDATE_HOSTNAME=${!HOSTNAME_VAR}
-            CANDIDATE_ALL_MACS=${!MACS_VAR}
+            CANDIDATE_MAC=$(registry_field "$MAC_SANITIZED" MAC_ADDRESS)
+            CANDIDATE_HOSTNAME=$(registry_field "$MAC_SANITIZED" HOSTNAME)
+            CANDIDATE_ALL_MACS=$(registry_field "$MAC_SANITIZED" MAC_ADDRESSES)
 
             # Find the TQ score from this node to the candidate server. `batctl o`'s
             # Originator column is the node's physical radio MAC, not the registry's
