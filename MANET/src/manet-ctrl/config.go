@@ -522,7 +522,7 @@ func confGet(conf map[string]string, key, def string) string {
 
 // --- Registry parsing ---
 
-var registryRE = regexp.MustCompile(`NODE_([A-Fa-f0-9]+)_([A-Z0-9_]+)='([^']*)'`)
+var registryRE = regexp.MustCompile(`(?m)^NODE_([A-Fa-f0-9]+)_([A-Z0-9_]+)='([^'\n]*)'$`)
 
 type RegistryNode map[string]string
 

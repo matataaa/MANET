@@ -350,7 +350,7 @@ func clearNAT() {
 
 // --- Registry lookup ---
 
-var registryRE = regexp.MustCompile(`NODE_([A-Fa-f0-9]+)_([A-Z0-9_]+)='([^']*)'`)
+var registryRE = regexp.MustCompile(`(?m)^NODE_([A-Fa-f0-9]+)_([A-Z0-9_]+)='([^'\n]*)'$`)
 
 func lookupRegistryIP(mac string) string {
 	data, err := os.ReadFile(registryFile)

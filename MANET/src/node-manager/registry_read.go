@@ -14,7 +14,7 @@ const (
 
 // registryRE matches the flat NODE_<mac>_<FIELD>='value' lines mesh-registry
 // writes — same convention gateway-manager already parses this file with.
-var registryRE = regexp.MustCompile(`NODE_([A-Fa-f0-9]+)_([A-Z0-9_]+)='([^']*)'`)
+var registryRE = regexp.MustCompile(`(?m)^NODE_([A-Fa-f0-9]+)_([A-Z0-9_]+)='([^'\n]*)'$`)
 
 // readRegistry parses /var/run/mesh_node_registry into per-node field maps,
 // keyed by MAC (no separators, lowercase-as-written). node-manager has no
