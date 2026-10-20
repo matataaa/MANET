@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -102,6 +103,15 @@ func collectAppletDNS(myIP, myHostname string) []map[string]interface{} {
 		}
 	}
 	return records
+}
+
+// appletNameRE limits applet names to what every consumer handles verbatim:
+// a directory name, a systemd unit name (applet-<name>.service) and a token in
+// the web UI's markup.
+var appletNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+
+func validAppletName(name string) bool {
+	return appletNameRE.MatchString(name)
 }
 
 func loadManifest(name string) *appletManifest {
@@ -541,7 +551,7 @@ func apiAppletInstall(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "invalid applet.json"})
 		return
 	}
-	if strings.Contains(manifest.Name, "/") || strings.Contains(manifest.Name, "..") {
+	if !validAppletName(manifest.Name) {
 		writeJSON(w, 400, map[string]interface{}{"ok": false, "error": "invalid applet name"})
 		return
 	}
