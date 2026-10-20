@@ -35,12 +35,12 @@ func main() {
 	log.SetPrefix("[node-manager] ")
 	log.Printf("starting (version %s)", Version)
 
-	// Must run before any width/static-channel reconcile below, at every
-	// startup — this is what closes the OTA gap noscanCapable's own comment
-	// describes: an OTA lands the patched binary but never runs
+	// Must run before any static-channel/ACS reconcile below, at every
+	// startup — this is what closes the OTA gap meshSupplicantMode's own
+	// comment describes: an OTA lands a project supplicant but never runs
 	// radio-setup.sh (first-provision only), so nothing else regenerates
 	// the systemd drop-in wpa_supplicant@ actually needs to run it.
-	ensureNoscanDropIn()
+	reconcileMeshSupplicant()
 
 	acsEnabled := loadConf("acs") == "y"
 	if acsEnabled {
@@ -60,10 +60,7 @@ func main() {
 
 	loop := func() {
 		radioStateSync()
-		ensureNoscanDropIn()
-		if _, iface5 := meshIfaces(); iface5 != "" {
-			reconcile5GHzWidth(iface5)
-		}
+		reconcileMeshSupplicant()
 		// Re-read acs from mesh.conf every tick rather than reusing the
 		// startup snapshot above — acs is now a live-settable key (Config
 		// UI, Fleet management, `mesh` CLI), and a cached bool here would
@@ -365,6 +362,12 @@ func wpaLobbyConfPath(iface string) string {
 // override.
 const mesh5GHzWidthKey = "mesh_5ghz_bw"
 
+// meshSupplicantKey selects the Wi-Fi mesh supplicant build, fleet-wide:
+// "manet" opts into manetWpaSupplicantPath; anything else (default) keeps
+// patchedWpaSupplicantPath. HaLow runs its own S1G supplicant and is not
+// affected.
+const meshSupplicantKey = "mesh_supplicant"
+
 // patchedWpaSupplicantPath is this project's own build of wpa_supplicant
 // with the mesh `noscan` patch (MANET/src/wpa-supplicant-mesh/,
 // docs/wpa-supplicant-mesh-noscan.md), installed alongside — never over —
@@ -373,109 +376,135 @@ const mesh5GHzWidthKey = "mesh_5ghz_bw"
 // naming, not by import (separate Go modules/binaries, no shared package).
 const patchedWpaSupplicantPath = "/usr/sbin/wpa_supplicant_mesh"
 
-// noscanDropInPath is the systemd drop-in that actually points
-// wpa_supplicant@<iface> at patchedWpaSupplicantPath. ensureNoscanDropIn
-// (below) is what creates/removes it — this must stay in sync with the
-// binary's presence on every boot, not just at first provision.
+// manetWpaSupplicantPath is upstream's hostap 2.11 mesh build
+// (MANET/src/wpa-supplicant-manet/): HE, 10 s dead-peer expiry, no SAE
+// lockout, and the mesh primary kept without a config key (patch 0006).
+// It also parses the legacy noscan=1 key (fork patch 0100), so switching
+// binaries never leaves a conf it cannot load.
+const manetWpaSupplicantPath = "/usr/sbin/wpa_supplicant_manet"
+
+// noscanDropInPath is the systemd drop-in that points wpa_supplicant@<iface>
+// at whichever project build meshSupplicantBinary selects.
+// ensureMeshBinaryDropIn (below) creates/rewrites/removes it — this must stay
+// in sync on every boot, not just at first provision.
 const noscanDropInPath = "/etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf"
 
-const noscanDropInContent = "[Service]\nExecStart=\nExecStart=" + patchedWpaSupplicantPath +
-	" -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I\n"
+// manetInactivityLine is the global dead-peer deadline written for the
+// manet build, matching upstream's Wi-Fi value. Other values are left alone.
+const manetInactivityLine = "mesh_max_inactivity=10"
 
-// noscanCapable reports whether this node has the patched wpa_supplicant
-// BOTH installed and actually wired into the unit that runs it. This is the
-// ONLY signal permitted to gate writing noscan=1 (or any other patch-added
-// key) into a mesh wpa_supplicant conf file — no binary-content scanning,
-// no version parsing. The stock system wpa_supplicant fails to parse an
-// entire network={} block on an unrecognized key and exits (status=255),
-// dropping that radio out of the mesh — see
-// docs/wpa-supplicant-mesh-noscan.md for the incident this guards against.
-//
-// Checking only the binary's presence was a real, reviewed-and-caught bug:
-// radio-setup.sh (which originally generated noscanDropInPath) only runs at
-// first provision, never on an OTA software update — an existing fleet node
-// taking an update gets the binary but keeps running wpa_supplicant@ under
-// the OLD unit (still pointed at stock) until something regenerates the
-// drop-in. ensureNoscanDropIn below is that "something" (called once at
-// startup and once per loop tick, so it self-heals within one 15s tick of
-// either the binary or the drop-in changing state), but this check also
-// verifies the drop-in directly rather than trusting ensureNoscanDropIn ran
-// first — no ordering assumption, no window where a true binary-presence
-// read could gate a write before the unit is actually wired to use it.
-func noscanCapable() bool {
-	info, err := os.Stat(patchedWpaSupplicantPath)
-	if err != nil || info.IsDir() || info.Mode()&0111 == 0 {
-		return false
-	}
-	dropIn, err := os.ReadFile(noscanDropInPath)
-	if err != nil {
-		return false
-	}
-	return string(dropIn) == noscanDropInContent
+func meshBinaryDropIn(bin string) string {
+	return "[Service]\nExecStart=\nExecStart=" + bin +
+		" -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I\n"
 }
 
-// ensureNoscanDropIn keeps noscanDropInPath in sync with
-// patchedWpaSupplicantPath's presence — the fix for the OTA gap described
-// on noscanCapable above. Idempotent and cheap (a stat plus, on the common
-// no-change path, one more stat/read); safe to call every loop tick, not
-// just at startup, so it also self-heals if the binary is later removed.
-// Only ever writes/removes this one drop-in file — never touches
-// 10-mesh-prep.conf (radio-setup.sh's own drop-in in the same directory)
-// or any wpa_supplicant conf.
-func ensureNoscanDropIn() {
-	capableNow := false
-	if info, err := os.Stat(patchedWpaSupplicantPath); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
-		capableNow = true
-	}
+func isExecutable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode()&0111 != 0
+}
 
+// meshSupplicantBinary is the binary the drop-in should run: the manet build
+// when opted in and installed, else the noscan build when installed, else ""
+// (stock unit, no drop-in). Opting in without the binary falls back rather
+// than failing, so a node missing it stays in the mesh.
+func meshSupplicantBinary() string {
+	if loadConf(meshSupplicantKey) == "manet" && isExecutable(manetWpaSupplicantPath) {
+		return manetWpaSupplicantPath
+	}
+	if isExecutable(patchedWpaSupplicantPath) {
+		return patchedWpaSupplicantPath
+	}
+	return ""
+}
+
+// Supplicant modes: which key set a conf may carry.
+const (
+	supplicantStock  = "stock"
+	supplicantNoscan = "noscan"
+	supplicantManet  = "manet"
+)
+
+// meshSupplicantMode reports which build wpa_supplicant@ actually runs: the
+// binary must be installed AND wired by the drop-in. This is the ONLY signal
+// permitted to gate writing noscan=1 into a conf — the stock system
+// wpa_supplicant fails to parse an entire network={} block on an unrecognized
+// key and exits (status=255), dropping that radio out of the mesh (see
+// docs/wpa-supplicant-mesh-noscan.md).
+//
+// Checking only the binary's presence was a real, reviewed-and-caught bug:
+// radio-setup.sh only runs at first provision, never on an OTA software
+// update, so an updated node gets the binary but keeps the old unit until
+// ensureMeshBinaryDropIn rewires it. Verifying the drop-in directly avoids
+// any ordering assumption between the two.
+func meshSupplicantMode() string {
+	dropIn, err := os.ReadFile(noscanDropInPath)
+	if err != nil {
+		return supplicantStock
+	}
+	for _, bin := range []string{manetWpaSupplicantPath, patchedWpaSupplicantPath} {
+		if isExecutable(bin) && string(dropIn) == meshBinaryDropIn(bin) {
+			if bin == manetWpaSupplicantPath {
+				return supplicantManet
+			}
+			return supplicantNoscan
+		}
+	}
+	return supplicantStock
+}
+
+// ensureMeshBinaryDropIn keeps noscanDropInPath in sync with
+// meshSupplicantBinary(). Idempotent and cheap; safe to call every loop
+// tick, so it self-heals within one tick of the binary, the drop-in or
+// mesh_supplicant changing. Only ever writes/removes this one drop-in — never
+// 10-mesh-prep.conf or any wpa_supplicant conf. Returns whether it changed,
+// so the caller can restart running mesh supplicants onto the new binary.
+func ensureMeshBinaryDropIn() bool {
+	bin := meshSupplicantBinary()
 	existing, readErr := os.ReadFile(noscanDropInPath)
-	upToDate := readErr == nil && string(existing) == noscanDropInContent
-
-	if capableNow == upToDate {
-		return
+	switch {
+	case bin == "" && os.IsNotExist(readErr):
+		return false
+	case bin != "" && readErr == nil && string(existing) == meshBinaryDropIn(bin):
+		return false
 	}
 
-	if capableNow {
+	if bin != "" {
 		if err := os.MkdirAll(filepath.Dir(noscanDropInPath), 0755); err != nil {
 			log.Printf("[acs] mkdir %s: %v", filepath.Dir(noscanDropInPath), err)
-			return
+			return false
 		}
-		if err := os.WriteFile(noscanDropInPath, []byte(noscanDropInContent), 0644); err != nil {
+		if err := os.WriteFile(noscanDropInPath, []byte(meshBinaryDropIn(bin)), 0644); err != nil {
 			log.Printf("[acs] write %s: %v", noscanDropInPath, err)
-			return
+			return false
 		}
-		log.Printf("[acs] wpa_supplicant_mesh present, wired %s", noscanDropInPath)
+		log.Printf("[acs] wpa_supplicant@ now runs %s (%s)", bin, noscanDropInPath)
 	} else {
 		if err := os.Remove(noscanDropInPath); err != nil && !os.IsNotExist(err) {
 			log.Printf("[acs] remove %s: %v", noscanDropInPath, err)
-			return
+			return false
 		}
-		log.Printf("[acs] wpa_supplicant_mesh absent, removed %s", noscanDropInPath)
+		log.Printf("[acs] no project mesh supplicant installed, removed %s", noscanDropInPath)
 	}
 
 	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
-		log.Printf("[acs] daemon-reload after noscan drop-in change: %v", err)
+		log.Printf("[acs] daemon-reload after mesh binary drop-in change: %v", err)
 	}
+	return true
 }
 
 // desiredMeshWidth reads mesh_5ghz_bw from mesh.conf. Absent, empty, or
 // anything other than "40"/"80" resolves to "20" — deliberate
-// default-to-safe (deterministic, lower-throughput 20MHz link), not
-// default-to-legacy (non-deterministic VHT80). Matches the lan_ap_bw-style
-// "default read with fallback" convention used elsewhere in this
-// codebase's shell scripts.
+// default-to-safe (deterministic 20MHz link, and upstream's choice for range
+// with the manet build), not default-to-legacy (non-deterministic VHT80).
 //
-// "40" additionally requires noscanCapable() — the patched wpa_supplicant.
-// Without it, HT40 shares the identical coex-scan nondeterminism VHT80
-// has (docs/wpa-supplicant-mesh-noscan.md section 1: "40MHz does not
-// dodge the bug"), so a node lacking the fix resolves to 20, never "40
-// without noscan" — that would silently reintroduce the exact HT40
-// coex-scan nondeterminism this project already fixed, just under a new
-// config value.
-func desiredMeshWidth() string {
+// "40" additionally requires a build that keeps the mesh primary (noscan or
+// manet). Without one, HT40 shares the identical coex-scan nondeterminism
+// VHT80 has (docs/wpa-supplicant-mesh-noscan.md section 1: "40MHz does not
+// dodge the bug"), so it resolves to 20, never "40 without noscan".
+func desiredMeshWidth(mode string) string {
 	switch loadConf(mesh5GHzWidthKey) {
 	case "40":
-		if noscanCapable() {
+		if mode != supplicantStock {
 			return "40"
 		}
 		return "20"
@@ -489,30 +518,38 @@ func desiredMeshWidth() string {
 // meshWidthKeyNames enumerates every network={} block key setMeshWidthKeys
 // manages, in the fixed order they're written when added. Order only
 // affects output layout, not correctness.
-var meshWidthKeyNames = []string{"disable_ht40=1", "disable_vht=1", "noscan=1", "max_oper_chwidth=1"}
+var meshWidthKeyNames = []string{"disable_ht40=1", "disable_vht=1", "noscan=1", "max_oper_chwidth=0", "max_oper_chwidth=1"}
 
-// meshWidthKeys is the single source of truth setMeshWidthKeys reconciles
-// a conf file's network={} block against: the exact key set wanted for
-// desiredWidth ("20", "40", or "80") given whether this node has the
-// patched wpa_supplicant (capable).
+// meshWidthKeys is the single source of truth setMeshWidthKeys reconciles a
+// conf file's network={} block against: the exact key set for desiredWidth
+// ("20", "40", "80", or "" for a 2.4GHz conf) under mode.
 //
-// "40" is only ever passed in already gated by desiredMeshWidth's own
-// capability check above (it never returns "40" when !capable) — but "80"
-// without capable is a real, reachable case, and deliberately keeps
-// today's existing behavior (no disable_* keys, no noscan/
-// max_oper_chwidth either): that's the already-documented, already-UI-
-// warned-about VHT80 nondeterminism risk, not something this change needs
-// to newly protect against. "20" (default/fallback) stays byte-identical
-// to pre-mesh_5ghz_bw=40 behavior regardless of capable.
-func meshWidthKeys(desiredWidth string, capable bool) map[string]bool {
+// manet uses upstream's keys: max_oper_chwidth=0 limits operation to the HT
+// width (20/40) and disable_ht40=1 makes it 20, while HE/VHT rates stay on
+// (ht40=0 alone still produced 40MHz on upstream's bench). 2.4GHz gets the
+// same 20MHz pin. noscan/stock keep their pre-manet key sets byte-identical;
+// "80" on stock keeps the already-documented, UI-warned VHT80 risk.
+func meshWidthKeys(desiredWidth, mode string) map[string]bool {
+	if mode == supplicantManet {
+		switch desiredWidth {
+		case "40":
+			return map[string]bool{"max_oper_chwidth=0": true}
+		case "80":
+			return map[string]bool{"max_oper_chwidth=1": true}
+		default: // "20", and 2.4GHz ("")
+			return map[string]bool{"max_oper_chwidth=0": true, "disable_ht40=1": true}
+		}
+	}
 	switch desiredWidth {
+	case "":
+		return map[string]bool{}
 	case "40":
-		if capable {
+		if mode == supplicantNoscan {
 			return map[string]bool{"noscan=1": true, "disable_vht=1": true}
 		}
 		return map[string]bool{"disable_ht40=1": true, "disable_vht=1": true}
 	case "80":
-		if capable {
+		if mode == supplicantNoscan {
 			return map[string]bool{"noscan=1": true, "max_oper_chwidth=1": true}
 		}
 		return map[string]bool{}
@@ -531,13 +568,11 @@ func isMeshWidthKey(trimmed string) bool {
 }
 
 // setMeshWidthKeys makes path's network={} block match exactly the key set
-// meshWidthKeys(desiredWidth, capable) wants: adds whichever of
-// {disable_ht40, disable_vht, noscan, max_oper_chwidth} are wanted and
-// missing, removes whichever are present and not wanted. Returns whether
-// the file was actually changed. A no-op (false) if the file doesn't exist
-// or already matches — this is a plain compare-and-fix, not a template
-// rewrite.
-func setMeshWidthKeys(path, desiredWidth string, capable bool) bool {
+// meshWidthKeys(desiredWidth, mode) wants, and its global section carry
+// manetInactivityLine exactly when mode is manet. Returns whether the file
+// was actually changed. A no-op (false) if the file doesn't exist or already
+// matches — this is a plain compare-and-fix, not a template rewrite.
+func setMeshWidthKeys(path, desiredWidth, mode string) bool {
 	if !fileExists(path) {
 		return false
 	}
@@ -547,11 +582,14 @@ func setMeshWidthKeys(path, desiredWidth string, capable bool) bool {
 		return false
 	}
 
-	want := meshWidthKeys(desiredWidth, capable)
+	want := meshWidthKeys(desiredWidth, mode)
+	wantInactivity := mode == supplicantManet
 
 	lines := strings.Split(string(data), "\n")
-	out := make([]string, 0, len(lines)+len(meshWidthKeyNames))
+	out := make([]string, 0, len(lines)+len(meshWidthKeyNames)+1)
 	inNetwork := false
+	seenNetwork := false
+	hasInactivity := false
 	present := make(map[string]bool, len(meshWidthKeyNames))
 	changed := false
 
@@ -560,6 +598,7 @@ func setMeshWidthKeys(path, desiredWidth string, capable bool) bool {
 		switch {
 		case trimmed == "network={":
 			inNetwork = true
+			seenNetwork = true
 			out = append(out, line)
 			continue
 		case inNetwork && trimmed == "}":
@@ -573,6 +612,14 @@ func setMeshWidthKeys(path, desiredWidth string, capable bool) bool {
 			out = append(out, line)
 			continue
 		}
+		if !seenNetwork && strings.HasPrefix(trimmed, "mesh_max_inactivity=") {
+			hasInactivity = true
+			// Only our own value is removed; explicit tuning is kept.
+			if !wantInactivity && trimmed == manetInactivityLine {
+				changed = true
+				continue
+			}
+		}
 		if inNetwork && isMeshWidthKey(trimmed) {
 			present[trimmed] = true
 			if !want[trimmed] {
@@ -581,6 +628,12 @@ func setMeshWidthKeys(path, desiredWidth string, capable bool) bool {
 			}
 		}
 		out = append(out, line)
+	}
+
+	if wantInactivity && !hasInactivity {
+		// mesh_max_inactivity is global: it must precede network={.
+		out = append([]string{manetInactivityLine}, out...)
+		changed = true
 	}
 
 	if !changed {
@@ -595,62 +648,65 @@ func setMeshWidthKeys(path, desiredWidth string, capable bool) bool {
 	return true
 }
 
-// reconcile5GHzWidth keeps iface's 5GHz mesh wpa_supplicant config —
-// both the live conf and its -lobby.conf (mesh-boot-lobby.service
-// re-copies the lobby conf over the live one on every boot, so both need
-// the fix to survive a reboot) — in sync with the fleet-wide
-// mesh_5ghz_bw setting. Idempotent: a fast no-op read-and-compare once
-// both files already match, one wpa_supplicant restart only when
-// something actually changed. Not a rate-limited retry loop like
-// setIfaceFrequency's ACS self-heal — there's no failure mode here to
-// back off from, just "does the config match, if not fix it once."
-func reconcile5GHzWidth(iface string) {
+// reconcileMeshWidth keeps iface's Wi-Fi mesh wpa_supplicant config — both
+// the live conf and its -lobby.conf (mesh-boot-lobby.service re-copies the
+// lobby conf over the live one on every boot, so both need the fix to
+// survive a reboot) — in sync with mesh_5ghz_bw and the running supplicant
+// build. Idempotent: a fast no-op read-and-compare once both files already
+// match. Returns whether either file changed; the caller restarts.
+func reconcileMeshWidth(iface, mode string) bool {
 	if iface == "" {
-		return
+		return false
 	}
-	// meshIfaces() identifies iface purely by its position in /var/lib/mesh_if
-	// (line 0 = 2.4GHz, line 1 = 5GHz), with no band cross-check -- unlike
-	// this same reconciler's shell counterparts (radio-setup.sh,
-	// manet-wlan-reconcile.sh), which both gate their WIDTH_LINES on
-	// `FREQ -ge 5000`. Before noscan existed, a mis-ordered mesh_if writing
-	// disable_ht40/disable_vht into a 2.4GHz conf was a harmless no-op; now
-	// it would write noscan=1 (which the mesh-noscan patch's own table
-	// extends to enable 2.4GHz HT40 with the coex scan disabled on exactly
-	// the band where that scan is a real requirement, not a workaround).
-	// Cross-check the conf's actual frequency before doing anything.
-	if freq := getConfFreq(wpaConfPath(iface)); freq != "" {
-		if f, err := strconv.Atoi(freq); err != nil || f < 5000 {
-			return
-		}
+	// meshIfaces() identifies the band purely by position in /var/lib/mesh_if
+	// (line 0 = 2.4GHz, line 1 = 5GHz), with no band cross-check, so the
+	// band comes from the conf's own frequency. A 5GHz key set written into
+	// a 2.4GHz conf could enable 2.4GHz HT40 with the coex scan disabled,
+	// on exactly the band where that scan is a real requirement.
+	freq, err := strconv.Atoi(getConfFreq(wpaConfPath(iface)))
+	if err != nil {
+		return false
 	}
-	targetWidth := desiredMeshWidth()
-	capable := noscanCapable()
+	targetWidth := ""
+	if freq >= 5000 {
+		targetWidth = desiredMeshWidth(mode)
+	}
 
-	liveChanged := setMeshWidthKeys(wpaConfPath(iface), targetWidth, capable)
-	lobbyChanged := setMeshWidthKeys(wpaLobbyConfPath(iface), targetWidth, capable)
+	liveChanged := setMeshWidthKeys(wpaConfPath(iface), targetWidth, mode)
+	lobbyChanged := setMeshWidthKeys(wpaLobbyConfPath(iface), targetWidth, mode)
 	if !liveChanged && !lobbyChanged {
-		return
+		return false
 	}
+	band := "2.4GHz"
+	if targetWidth != "" {
+		band = "5GHz " + targetWidth + "MHz"
+	}
+	log.Printf("[acs] %s mesh conf now targets %s for the %s supplicant", iface, band, mode)
+	return true
+}
 
-	target := targetWidth + "MHz"
-	switch {
-	case targetWidth == "20":
-		target += " (disable_ht40+disable_vht)"
-	case targetWidth == "40" && capable:
-		target += " (HT40, noscan+disable_vht)"
-	case targetWidth == "80" && capable:
-		target += " (VHT80, noscan+max_oper_chwidth)"
-	case targetWidth == "80":
-		target += " (VHT80, no noscan — patched wpa_supplicant not present)"
-	}
-	log.Printf("[acs] %s 5GHz mesh width now targets %s, restarting wpa_supplicant", iface, target)
-
-	if !radioIfaceEnabled(iface) {
-		return
-	}
-	svc := "wpa_supplicant@" + iface + ".service"
-	if err := exec.Command("systemctl", "restart", svc).Run(); err != nil {
-		log.Printf("[acs] restart %s: %v", svc, err)
+// reconcileMeshSupplicant wires the selected supplicant build, reconciles both
+// Wi-Fi mesh confs to it, and restarts a running wpa_supplicant@ whose conf
+// or binary changed. Not a rate-limited retry loop like setIfaceFrequency's
+// ACS self-heal — there's no failure mode here to back off from, just "does
+// the config match, if not fix it once."
+func reconcileMeshSupplicant() {
+	binaryChanged := ensureMeshBinaryDropIn()
+	mode := meshSupplicantMode()
+	iface24, iface5 := meshIfaces()
+	for _, iface := range []string{iface24, iface5} {
+		if iface == "" {
+			continue
+		}
+		confChanged := reconcileMeshWidth(iface, mode)
+		if (!confChanged && !binaryChanged) || !radioIfaceEnabled(iface) {
+			continue
+		}
+		svc := "wpa_supplicant@" + iface + ".service"
+		// try-restart: an instance that is not running stays stopped.
+		if err := exec.Command("systemctl", "try-restart", svc).Run(); err != nil {
+			log.Printf("[acs] try-restart %s: %v", svc, err)
+		}
 	}
 }
 

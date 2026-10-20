@@ -434,6 +434,10 @@ func configValueError(key, value string) error {
 		return regionValueError(key, value)
 	case "halow_duty_cycle":
 		return halowOptionValueError(key, value)
+	case "mesh_supplicant":
+		if value != "" && value != "legacy" && value != "manet" {
+			return fmt.Errorf("mesh_supplicant must be legacy or manet")
+		}
 	case "ipv4_network":
 		// radio-setup and mesh-manager do prefix arithmetic on this value; a
 		// bare address (e.g. "10.30.2.0") broke radio-setup's AP section on a

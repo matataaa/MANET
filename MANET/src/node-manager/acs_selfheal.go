@@ -68,7 +68,7 @@ func readIfaceFreq(iface string) (freqMHz string, ok bool) {
 // unitActiveFor reports how long unit has been continuously in systemd's
 // "active" state, querying systemd directly rather than tracking restarts
 // in an in-process map. An in-process map only sees this process's own
-// restart paths (setIfaceFrequency, reconcile5GHzWidth) — at least six
+// restart paths (setIfaceFrequency, reconcileMeshSupplicant) — at least six
 // other things on a live node can restart wpa_supplicant@<iface>, all
 // invisible to any tracker node-manager keeps itself: sae-watchdog.sh (the
 // exact MESH-SAE-AUTH-BLOCKED symptom class this self-heal targets),
@@ -140,7 +140,7 @@ func monotonicNowUsec() (int64, error) {
 // continuously "active" before the self-heal trusts a live-frequency read
 // enough to act on it — a bit more than one 15s node-manager tick, so a
 // restart fired by literally anything (this self-heal's own prior
-// corrective restart, reconcile5GHzWidth's no-settle-delay restart,
+// corrective restart, reconcileMeshSupplicant's no-settle-delay restart,
 // sae-watchdog.sh, manet-ctrl's radio API, mesh-radio-state's applyIface in
 // the same tick) has had a full cycle to settle before this check trusts
 // what `iw` reports.

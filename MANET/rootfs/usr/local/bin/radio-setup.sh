@@ -467,6 +467,20 @@ MESH_5GHZ_BW=${MESH_5GHZ_BW:-20}
 NOSCAN_CAPABLE=0
 [[ -x /usr/sbin/wpa_supplicant_mesh ]] && NOSCAN_CAPABLE=1
 
+# mesh_supplicant=manet opts into upstream's hostap 2.11 build
+# (MANET/src/wpa-supplicant-manet/): HE, 10 s dead-peer expiry, mesh primary
+# kept without noscan. Only when installed; otherwise the noscan build (or
+# stock) runs. Kept consistent with node-manager's meshSupplicantBinary,
+# which re-applies this choice on every OTA'd node.
+MESH_SUPPLICANT_BIN=""
+[[ "$NOSCAN_CAPABLE" -eq 1 ]] && MESH_SUPPLICANT_BIN=/usr/sbin/wpa_supplicant_mesh
+MANET_SUPPLICANT=0
+if [[ "$(grep "^mesh_supplicant=" /etc/mesh.conf 2>/dev/null | cut -d'=' -f2)" == manet \
+      && -x /usr/sbin/wpa_supplicant_manet ]]; then
+    MANET_SUPPLICANT=1
+    MESH_SUPPLICANT_BIN=/usr/sbin/wpa_supplicant_manet
+fi
+
 # Point every wpa_supplicant@<iface> instance at this project's own patched
 # binary (see MANET/src/wpa-supplicant-mesh/) instead of the system-package
 # one -- generated here, gated on NOSCAN_CAPABLE, rather than shipped as a
@@ -477,11 +491,11 @@ NOSCAN_CAPABLE=0
 # wpa_supplicant instances unconditionally, a worse failure than anything
 # noscan=1 itself can cause. Binary presence is the single source of truth
 # for both this file and every noscan=1 write below -- keep it that way.
-if [[ "$NOSCAN_CAPABLE" -eq 1 ]]; then
+if [[ -n "$MESH_SUPPLICANT_BIN" ]]; then
     cat << EOF > /etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf
 [Service]
 ExecStart=
-ExecStart=/usr/sbin/wpa_supplicant_mesh -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I
+ExecStart=$MESH_SUPPLICANT_BIN -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I
 EOF
 else
     rm -f /etc/systemd/system/wpa_supplicant@.service.d/20-mesh-binary.conf
@@ -1110,9 +1124,26 @@ for WLAN in $(cat /var/lib/mesh_if); do
     # nondeterminism under a new config value), and 80 keeps today's
     # existing, already-documented, already-UI-warned-about VHT80
     # nondeterminism unchanged. 2.4GHz (FREQ < 5000) never gets any of
-    # these keys.
+    # these keys, except the manet build's 20MHz pin below.
     WIDTH_LINES=""
-    if [[ "$FREQ" -ge 5000 ]]; then
+    GLOBAL_LINES=""
+    if [[ "$MANET_SUPPLICANT" -eq 1 ]]; then
+        # Upstream's keys: max_oper_chwidth=0 caps at the HT width, and
+        # disable_ht40=1 makes that 20MHz, with HE/VHT rates kept (no
+        # disable_vht: on 5GHz, 2.11 enables HE only alongside VHT). Both
+        # bands; 5GHz follows mesh_5ghz_bw. Matches node-manager meshWidthKeys.
+        GLOBAL_LINES="mesh_max_inactivity=10
+"
+        case "$MESH_5GHZ_BW" in
+            40) [[ "$FREQ" -ge 5000 ]] && WIDTH_LINES="    max_oper_chwidth=0
+" ;;
+            80) [[ "$FREQ" -ge 5000 ]] && WIDTH_LINES="    max_oper_chwidth=1
+" ;;
+        esac
+        [[ -z "$WIDTH_LINES" ]] && WIDTH_LINES="    max_oper_chwidth=0
+    disable_ht40=1
+"
+    elif [[ "$FREQ" -ge 5000 ]]; then
         case "$MESH_5GHZ_BW" in
             40)
                 if [[ "$NOSCAN_CAPABLE" -eq 1 ]]; then
@@ -1141,7 +1172,7 @@ for WLAN in $(cat /var/lib/mesh_if); do
     fi
 
 cat <<-EOF > /etc/wpa_supplicant/wpa_supplicant-$WLAN-lobby.conf
-ctrl_interface=/var/run/wpa_supplicant
+${GLOBAL_LINES}ctrl_interface=/var/run/wpa_supplicant
 country=$CFG80211_REGDOM
 update_config=1
 sae_pwe=0

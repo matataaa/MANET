@@ -253,16 +253,13 @@ For each candidate channel with a fresh aggregated report:
   80MHz span and pick up real mesh traffic, inflating their measured
   occupancy and risking a false bad-vote against a channel that isn't
   actually a distinct, independently-usable channel from the incumbent's
-  perspective at all. **Not currently live-relevant on this fleet**: per
-  this same doc's "Decision: 20MHz-only 5GHz mesh" section and the
-  `mesh_5ghz_bw` toggle's implementation (`disable_ht40=1`+`disable_vht=1`
-  when not explicitly set to `80`), the shipped/provisioned default is
-  `20`, and going wider requires an explicit, deliberate, fleet-wide
-  config change (`mesh_5ghz_bw=80`, flagged `dangerous: true` in the
-  fleet/node UI) — this repo has no evidence any node currently overrides
-  that default. If a fleet is ever run at `mesh_5ghz_bw=80` (or a future
-  `40` value), this limitation becomes live, not hypothetical, and would
-  need addressing before occupancy scoring can be trusted at that width.
+  perspective at all. **Live on the test fleet:** the default is `20`, but
+  EUD3/EUD4 ran `mesh_5ghz_bw=40` (ch153, 40 MHz, verified 2026-10-10 and
+  2026-10-19), so the HT40 partner of the incumbent is scored with the
+  mesh's own traffic. At 20 MHz (the recommended width, see the
+  2026-10-19 update under "Decision: 20MHz-only 5GHz mesh") the
+  limitation does not apply; at 40/80 it needs addressing before
+  occupancy scoring can be trusted.
 - **Vote** (`peerChannelVotes`) — for each *other* active, fresh (within
   `staleNodeThreshold`) peer in the registry, read its self-reported
   `DATA_CHANNEL_2_4`/`DATA_CHANNEL_5_0` field and count it as a vote for
@@ -894,6 +891,17 @@ buggy code path structurally cannot run once VHT/HT40 are both off) with
 no new runtime state machine, no custom binary to build/maintain, and no
 standing correction loop — see the live-benchmark section above for why
 options 1 and 2 both carry real ongoing cost that this doesn't.
+
+**Update 2026-10-19 — 20 MHz stays the recommendation, now with Wi-Fi 6.**
+Upstream OpenMANET (very-srs 3dcb983) moved both Wi-Fi meshes to 20 MHz for
+range and DFS, using its own hostap 2.11 build with HE. That build is now
+available here as `mesh_supplicant=manet` (`src/wpa-supplicant-manet/`). It
+keeps the primary without `noscan` and writes `max_oper_chwidth=0` +
+`disable_ht40=1` for 20 MHz, keeping HE/VHT rates. Bench EUD4↔EUD3: 20 MHz
+HE 211–223 Mbit/s TCP, versus 252–274 for the legacy build at 40 MHz VHT
+and 305–338 for manet at 40 MHz. A 20 MHz manet link therefore keeps ~85%
+of today's 40 MHz throughput in half the spectrum, with the range margin
+above and correct occupancy scoring. 40/80 remain selectable.
 
 ### Implementation plan
 

@@ -94,6 +94,12 @@ install_file 0755 "$SRC/mesh-voice/bin/mesh-voice-linux-arm64" "$STAGE/usr/local
 # ships nothing else here on purpose.
 install_file 0755 "$SRC/wpa-supplicant-mesh/bin/wpa_supplicant_mesh-linux-arm64" "$STAGE/usr/sbin/wpa_supplicant_mesh"
 
+# Upstream's hostap 2.11 mesh build (src/wpa-supplicant-manet/README.md),
+# installed alongside the noscan build. Inert until mesh_supplicant=manet:
+# node-manager then points the same drop-in at it.
+install_file 0755 "$SRC/wpa-supplicant-manet/bin/wpa_supplicant_manet-linux-arm64" "$STAGE/usr/sbin/wpa_supplicant_manet"
+install_file 0755 "$SRC/wpa-supplicant-manet/bin/wpa_cli_manet-linux-arm64" "$STAGE/usr/sbin/wpa_cli_manet"
+
 # ---------------------------------------------------------------------------
 #  Applets — copy applet binaries into their applet dirs
 # ---------------------------------------------------------------------------

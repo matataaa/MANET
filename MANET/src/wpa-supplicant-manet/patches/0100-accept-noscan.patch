@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] config: accept the legacy noscan network key
+
+MANET fork only. Nodes provisioned for the 2.10 OpenWrt noscan build
+carry noscan=1 in Wi-Fi mesh blocks. Without this field 2.11 rejects the
+whole block and the radio leaves the mesh. 0006 covers the behaviour.
+
+---
+--- a/wpa_supplicant/config.c
++++ b/wpa_supplicant/config.c
+@@ -2635,6 +2635,9 @@
+ 	{ INT_RANGE(mode, 0, 5) },
+ 	{ INT_RANGE(no_auto_peer, 0, 1) },
+ 	{ INT_RANGE(mesh_fwding, 0, 1) },
++	/* Legacy OpenWrt key: parsed so old configs load; patch 0006 keeps
++	 * the mesh primary without it. */
++	{ INT_RANGE(noscan, 0, 1) },
+ 	{ INT_RANGE(mesh_rssi_threshold, -255, 1) },
+ #else /* CONFIG_MESH */
+ 	{ INT_RANGE(mode, 0, 4) },
+--- a/wpa_supplicant/config_ssid.h
++++ b/wpa_supplicant/config_ssid.h
+@@ -577,6 +577,11 @@
+ 	 */
+ 	int mesh_fwding;
+ 
++	/**
++	 * noscan - Accepted and ignored (legacy OpenWrt mesh-noscan key)
++	 */
++	int noscan;
++
+ 	int ht;
+ 	int ht40;
+ 

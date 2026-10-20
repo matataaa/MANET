@@ -55,8 +55,8 @@ git fetch upstream
 
 ## Last reviewed
 
-Upstream commit reviewed up to: `90f738b` (2026-10-09) — "rock3a tested
-successfully oct-2026" (release 0.567)
+Upstream commit reviewed up to: `24c71d9` (2026-10-19) — "Lint manual pages
+with mandoc at warning level, split a two-sentence line" (release 0.578)
 
 **Note (2026-09-26):** upstream force-pushed `main` between the 2026-09-06
 pass and this one — `git fetch upstream` showed a *forced-update* in the
@@ -438,6 +438,44 @@ timers (Go timers are monotonic); bc42934 `/etc/hosts` only on change
 HaLow bring-up can exceed 10 s here); 922de07/4ca08df voice (Python
 service, fork's is Go); systemd sandboxing (f098985), Rock 3A, version
 bumps.
+
+### 2026-10-19 pass (covers `21f7aed..24c71d9`, releases 0.568–0.578)
+
+Upstream rewrote history again (it purged `Ext2Fsd-0.69.exe`); `90f738b`
+no longer resolves, `21f7aed` is the same-content point. Hardware-tested on
+EUD1–EUD4 on 2026-10-20 and PR'd as one branch each:
+
+1. **Wi-Fi mesh supplicant 2.11** (`feat/wifi-mesh-supplicant-2.11`):
+   upstream's `wpa_supplicant_manet` (hostap 2.11 + patches 0001–0008,
+   vendored unchanged) shipped next to the noscan 2.10 build, opt-in with
+   `mesh_supplicant=manet`. Under manet the width keys follow upstream
+   (20 MHz `max_oper_chwidth=0` + `disable_ht40=1`, HE kept on) and
+   `mesh_max_inactivity=10`. Bench numbers in
+   `MANET/src/wpa-supplicant-manet/README.md`; in-app docs now recommend
+   20 MHz. Kernel needs nothing new: overlay 0.559 already advertises HE
+   mesh on both MT7916 PHYs; upstream's newer kernel patches are DFS-only.
+2. **Peer data injection** (`fix/peer-data-injection`): fork-only, found
+   while reviewing upstream's registry hardening — `one-shot-time-sync.sh`
+   `source`d the alfred-fed registry as root. Peer records are validated in
+   mesh-registry, consumers parse instead of sourcing, UI escapes quotes.
+3. **CPU policy** (`fix/cpu-governor-schedutil`): the powersave unit pinned
+   nodes at 600 MHz; now all cores online with `schedutil`, as upstream.
+   No CM4 800 MHz cap (upstream's is for its sealed enclosure).
+4. **dnsmasq DNS socket check** (`fix/dnsmasq-dns-socket-check`), **apt
+   kernel pin** (`fix/apt-pin-manet-kernel`, upstream 868c3c9's pins),
+   **firstrun apt date + internet wait** (`fix/firstrun-apt-date-and-wait`,
+   upstream 30c866e's `Acquire::Check-Date` block), **stale mesh-voice
+   binary** (`fix/mesh-voice-stale-binary`, plus a prebuilt-freshness guard).
+5. `fix/voice-qos-auth`: test only. QoS and voice admin already require
+   login; PTT/channels/`/ws/voice` stay open on purpose (e9a822d).
+
+**Open, worth porting later:** HTTP-204 uplink probe with Ethernet-first
+ranking, HaLow supplicant restart on stall, ACS stale-busy handling, CI
+`tests.yml`, `auto_initramfs=0` on CM4.
+
+**Skipped / N/A:** DFS ownership (patches 0007/0008 are vendored but inert),
+mt76 txpower channel clamp (needs an overlay bump), man pages,
+version bumps.
 
 Update this line after each review pass so `git log upstream/main --oneline
 <last-reviewed-sha>..upstream/main` shows only what's new.

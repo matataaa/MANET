@@ -19,8 +19,11 @@ const MESH_FIELDS = [
     {v:'n',l:'Static (pinned channel)'},{v:'y',l:'Automatic (ACS)'}
   ], hint: 'Must match across the fleet — nodes on different modes won\'t elect/scan together. Live — applies within one 15s tick per node, no restart needed.' },
   { key: 'mesh_5ghz_bw', label: '5GHz Mesh Width', dangerous: true, type: 'select', options: [
-    {v:'20',l:'20 MHz (default)'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
-  ], hint: 'Never mix widths across nodes. 40MHz requires the patched wpa_supplicant and silently falls back to 20MHz without it. 80MHz without the patch can mismatch primary channel between peers.' },
+    {v:'20',l:'20 MHz (default, recommended)'},{v:'40',l:'40 MHz'},{v:'80',l:'80 MHz'}
+  ], hint: 'Fleet-wide — never mix widths across nodes. 20MHz is recommended: best range and deterministic peering, and with the 2.11 (manet) supplicant it still reaches ~210-220 Mbit/s TCP over Wi-Fi 6. 40/80MHz trade range for throughput; 40 needs the noscan or manet supplicant and falls back to 20MHz without one, 80 without either can mismatch primary channel between peers.' },
+  { key: 'mesh_supplicant', label: 'Wi-Fi Mesh Supplicant', type: 'select', options: [
+    {v:'legacy',l:'Legacy (2.10, default)'},{v:'manet',l:'Manet (2.11, Wi-Fi 6)'}
+  ], hint: 'Legacy: 2.10 noscan build (default). Manet: upstream 2.11 build with Wi-Fi 6 (HE) rates on both bands, dead peers dropped in ~10 s instead of ~5 min, and no SAE lockout. Restarts the Wi-Fi mesh links within one 15s tick (HaLow unaffected); nodes on different builds still peer, so it can be rolled out node by node. Falls back to legacy if the binary is missing.' },
   // Hidden (not removed) when acs='y' — see showIf below. Still always
   // collected by fleetCollectEditState regardless of visibility, matching
   // config.js's meshFields submit list (config.js ~753-754): toggling ACS
