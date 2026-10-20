@@ -13,7 +13,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -226,7 +225,9 @@ type registryNode struct {
 	NodeState string
 }
 
-var regRE = regexp.MustCompile(`NODE_([A-Fa-f0-9]+)_([A-Z0-9_]+)='([^']*)'`)
+// One value per line: `[^']*` alone also spans newlines, so a value that
+// smuggled one in could be read as part of another field.
+var regRE = regexp.MustCompile(`(?m)^NODE_([A-Fa-f0-9]+)_([A-Z0-9_]+)='([^'\n]*)'$`)
 
 func parseRegistry() map[string]registryNode {
 	nodes := make(map[string]registryNode)
@@ -787,36 +788,31 @@ func (im *ipManager) run() {
 
 var lastHostsBlock string
 
+// publishableHosts is the validated peer name/address set shared by the
+// /etc/hosts block and the dnsmasq records (see hosts.go).
+func publishableHosts(nodes map[string]registryNode) ([]hostEntry, []string) {
+	selfName, _ := os.Hostname()
+	return meshHostEntries(nodes, meshNetworkCIDR(loadKV(meshConfFile)), myMAC(), selfName)
+}
+
 func updateHosts() {
 	nodes := parseRegistry()
 	if len(nodes) == 0 {
 		return
 	}
 
-	// Sort by id: map iteration order is randomized, and an unsorted block
+	// meshHostEntries returns entries sorted by name: an unsorted block
 	// would defeat the change-gate below by "changing" on every call even
 	// when the node set is identical.
-	ids := make([]string, 0, len(nodes))
-	for id := range nodes {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-
-	var block strings.Builder
-	block.WriteString(hostsBegin + "\n")
-	count := 0
-	for _, id := range ids {
-		n := nodes[id]
-		if n.Hostname != "" && n.IP != "" {
-			fmt.Fprintf(&block, "%s    %s %s.mesh\n", n.IP, n.Hostname, n.Hostname)
-			count++
-		}
-	}
-	block.WriteString(hostsEnd)
-
-	blockStr := block.String()
+	entries, rejected := publishableHosts(nodes)
+	blockStr := hostsBlockText(entries)
 	if blockStr == lastHostsBlock {
 		return
+	}
+	count := len(entries)
+	// Logged only when the block changes, not on every 30s tick.
+	for _, r := range rejected {
+		log.Printf("hosts: skipping %s", r)
 	}
 
 	data, err := os.ReadFile(hostsFile)
@@ -861,14 +857,9 @@ func updateMeshDNS() {
 	nodes := parseRegistry()
 	myIP := getLocalBr0IP()
 
-	// Sort by id: map iteration order is randomized, and an unsorted block
-	// would defeat the change-gate below by "changing" on every call even
-	// when the node set is identical (same fix as updateHosts above).
-	ids := make([]string, 0, len(nodes))
-	for id := range nodes {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
+	// Same validated, sorted set as updateHosts: a newline in a peer
+	// hostname would otherwise inject dnsmasq directives.
+	hosts, _ := publishableHosts(nodes)
 
 	var b strings.Builder
 	b.WriteString("# Auto-generated mesh DNS records\n")
@@ -876,11 +867,8 @@ func updateMeshDNS() {
 
 	b.WriteString(fmt.Sprintf("address=/radio.mesh/%s\n", myIP))
 
-	for _, id := range ids {
-		n := nodes[id]
-		if n.Hostname != "" && n.IP != "" {
-			b.WriteString(fmt.Sprintf("address=/%s.mesh/%s\n", n.Hostname, n.IP))
-		}
+	for _, e := range hosts {
+		b.WriteString(fmt.Sprintf("address=/%s.mesh/%s\n", e.Name, e.IP))
 	}
 
 	entries, _ := os.ReadDir(appletsDir)

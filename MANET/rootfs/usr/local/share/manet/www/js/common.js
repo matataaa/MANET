@@ -156,10 +156,14 @@ function halowPlanFor(domain) {
   return EU_HALOW_COUNTRIES.includes(domain) ? 'EU' : domain;
 }
 
+// Escapes for HTML text and quoted attribute values. innerHTML alone leaves
+// quotes as-is, which let a peer's value break out of an attribute. Not safe
+// for JavaScript inside an on* attribute: the browser decodes entities before
+// running it, so peer data goes in data-* attributes instead.
 function escHtml(str) {
   const d = document.createElement('div');
   d.textContent = str;
-  return d.innerHTML;
+  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function ts(epoch) {

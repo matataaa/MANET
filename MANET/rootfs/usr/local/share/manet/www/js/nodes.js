@@ -42,6 +42,7 @@ function nodesActivate() {
         nodesRender();
       });
     });
+    document.getElementById('nodes-tbody').addEventListener('click', nodesActionClick);
     document.getElementById('nodes-filter').addEventListener('input', (e) => {
       nodesFilter = e.target.value.toLowerCase();
       nodesRender();
@@ -133,14 +134,38 @@ function nodesRender() {
       '<td>' + escHtml(n.uptime || '--') + '</td>' +
       '<td>' + lastSeen + '</td>' +
       '<td class="col-actions">' +
-        (n.ip ? '<button class="node-act-btn" onclick="window.open(\'https://\' + \'' + escHtml(n.ip) + '\' + \'/\', \'_blank\')">Portal</button>' : '') +
-        '<button class="node-act-btn" onclick="openNodeConfig(\'' + escHtml(n.ip) + '\',\'' + escHtml(shortName) + '\')">Config</button>' +
+        nodeActBtn('portal', 'Portal', n.ip, shortName, !n.ip) +
+        nodeActBtn('config', 'Config', n.ip, shortName) +
         (n.is_me ? '' :
-        '<button class="node-act-btn" onclick="openNodeTerminal(\'' + escHtml(n.ip) + '\',\'' + escHtml(shortName) + '\',\'terminal\')">Shell</button>' +
-        '<button class="node-act-btn" onclick="openNodeTerminal(\'' + escHtml(n.ip) + '\',\'' + escHtml(shortName) + '\',\'logs\')">Logs</button>' +
-        '<button class="node-act-btn" onclick="openNodeStream(\'' + escHtml(n.ip) + '\',\'' + escHtml(shortName) + '\',\'ping\')">Ping</button>' +
-        '<button class="node-act-btn" onclick="openNodeStream(\'' + escHtml(n.ip) + '\',\'' + escHtml(shortName) + '\',\'traceroute\')">Trace</button>') +
+        nodeActBtn('terminal', 'Shell', n.ip, shortName) +
+        nodeActBtn('logs', 'Logs', n.ip, shortName) +
+        nodeActBtn('ping', 'Ping', n.ip, shortName) +
+        nodeActBtn('traceroute', 'Trace', n.ip, shortName)) +
       '</td>' +
       '</tr>';
   }).join('');
+}
+
+// Node IPs and hostnames come from peers over the mesh, so they go into
+// data-* attributes (HTML-escaped) and are read back by one delegated click
+// handler, never spliced into inline onclick JavaScript where HTML escaping
+// does not protect the JS string.
+function nodeActBtn(act, label, ip, name, hidden) {
+  if (hidden) return '';
+  return '<button class="node-act-btn" data-act="' + act + '" data-ip="' + escHtml(ip || '') +
+    '" data-name="' + escHtml(name || '') + '">' + label + '</button>';
+}
+
+function nodesActionClick(e) {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const ip = btn.dataset.ip, name = btn.dataset.name;
+  switch (btn.dataset.act) {
+    case 'portal': window.open('https://' + ip + '/', '_blank'); break;
+    case 'config': openNodeConfig(ip, name); break;
+    case 'terminal':
+    case 'logs': openNodeTerminal(ip, name, btn.dataset.act); break;
+    case 'ping':
+    case 'traceroute': openNodeStream(ip, name, btn.dataset.act); break;
+  }
 }
