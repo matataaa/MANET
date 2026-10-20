@@ -155,6 +155,10 @@ func main() {
 	flag.StringVar(&cfg.DeviceIn, "input", "", "ALSA capture device")
 	flag.StringVar(&cfg.DeviceOut, "output", "", "ALSA playback device")
 	flag.Parse()
+	set := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	applyConfDefaults(&cfg, readMeshConf(meshConfFile), set)
+	log.Printf("mesh-voice: %s:%d on %s, ptt=%s", cfg.McastAddr, cfg.McastPort, cfg.Iface, cfg.PTTSource)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

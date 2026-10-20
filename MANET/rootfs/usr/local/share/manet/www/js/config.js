@@ -691,7 +691,6 @@ function configRenderEdit(panel, cfg) {
     })() },
     { label: 'Mic Volume', key: 'voice_mic_volume', type: 'range', min: 0, max: 100 },
     { label: 'Speaker Volume', key: 'voice_speaker_volume', type: 'range', min: 0, max: 100 },
-    { label: 'Port', key: 'voice_port', type: 'text', voiceKey: 'port', fallback: '4370' },
     { label: 'Interface', key: 'voice_iface', type: 'text', voiceKey: 'interface', fallback: 'br0' },
     { label: 'Mic Gain', key: 'voice_gain', type: 'select', options: [
       {v:'1.0',l:'1x (low)'},{v:'2.0',l:'2x'},{v:'3.0',l:'3x (default)'},{v:'4.0',l:'4x'},{v:'5.0',l:'5x (loud)'}
@@ -911,13 +910,10 @@ async function configSave() {
     config[f] = el.value;
   });
 
-  var chVal = (document.getElementById('cfg-f-voice_channel') || {}).value || '1';
-  var chAddr = '239.69.0.' + chVal;
+  // The multicast group and port follow voice_channel, saved with config.
   const voiceCfg = {
     action: 'configure',
     ptt_mode: (document.getElementById('cfg-f-voice_ptt_mode') || {}).value || 'openvlm',
-    mcast_addr: chAddr,
-    port: (document.getElementById('cfg-f-voice_port') || {}).value || '4370',
     interface: (document.getElementById('cfg-f-voice_iface') || {}).value || 'br0',
     mic_volume: (document.getElementById('cfg-f-voice_mic_volume') || {}).value || '',
     speaker_volume: (document.getElementById('cfg-f-voice_speaker_volume') || {}).value || '',
