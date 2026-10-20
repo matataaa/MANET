@@ -1,0 +1,14 @@
+[Unit]
+Description=Keep all CPUs online with demand-driven frequency scaling
+# Replaces cpu-powersave.service (powersave governor, 1.0 GHz cap, two cores
+# offline), which is shipped masked. Optional frequency ceiling: see the
+# CPU_MAX_FREQ_KHZ note in manet-cpu-policy.sh.
+Before=node-manager.service mesh-voice.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/manet-cpu-policy.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -158,7 +158,7 @@ Read commands work for any user. Write commands (and reading secrets) need root,
 
 ## Power Management
 
-- **CPU powersave** — governor set to powersave, frequency capped at 1.0 GHz
+- **CPU policy** — all cores online, schedutil governor scales with demand up to the board's full clock (optional ceiling via `CPU_MAX_FREQ_KHZ`)
 - **Battery monitoring** — Waveshare UPS HAT (E) voltage/percentage via I2C (optional, disabled by default)
 - **Low-power mesh** — HaLow radio operates at sub-GHz with configurable TX power
 

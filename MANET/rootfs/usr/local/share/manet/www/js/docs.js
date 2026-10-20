@@ -439,7 +439,7 @@ DOCS_TABS.services = [
 '<tr><td>Chrony NTP</td><td><code>chronyd</code></td><td>Network time synchronization. A gateway takes internet time only from NTS-authenticated servers and serves time to the mesh once it has it; other nodes sync from the mesh.</td></tr>',
 '<tr><td>Node Update</td><td><code>node-update</code></td><td>OTA updates: checks <code>update_url</code> every 6h, verifies package signatures, applies software/overlay updates (see Configuration → Updates).</td></tr>',
 '<tr><td>Battery Reader</td><td><code>battery-reader</code></td><td>Monitors Waveshare UPS HAT (E) battery voltage/percentage via I2C. Disabled by default; enable via Config tab.</td></tr>',
-'<tr><td>CPU Powersave</td><td><code>cpu-powersave</code></td><td>Sets CPU governor to powersave and caps frequency at 1.0 GHz for battery operation.</td></tr>',
+'<tr><td>CPU Policy</td><td><code>manet-cpu-policy</code></td><td>Keeps all CPU cores online with the schedutil governor (ondemand if unavailable), up to the board\'s full clock. Replaces the old <code>cpu-powersave</code> unit, which is now masked.</td></tr>',
 '<tr><td>Button Monitor</td><td><code>button-monitor</code></td><td>Watches physical button presses on the enclosure, triggers LED info display.</td></tr>',
 '</tbody></table>',
 

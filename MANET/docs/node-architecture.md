@@ -175,7 +175,7 @@ Applets are managed through the manet-ctrl API. Each applet has an `applet.json`
 
 | Service | Type | Description |
 |---------|------|-------------|
-| `cpu-powersave` | oneshot | Sets CPU governor to powersave, caps frequency at 1.0 GHz. Reduces power draw for battery operation. |
+| `manet-cpu-policy` | oneshot | Keeps all CPU cores online with the schedutil governor (ondemand fallback), no frequency cap below the board maximum. Optional ceiling via `CPU_MAX_FREQ_KHZ` in a unit drop-in. Replaces `cpu-powersave`, which is shipped masked. |
 | `battery-reader` | Go | Reads Waveshare UPS HAT (E) battery voltage/percentage via I2C. Disabled by default (enable via config). |
 | `button-monitor` | shell | Watches for physical button presses on the enclosure and triggers LED info display. |
 | `alsa-restore` | oneshot | Restores ALSA mixer state at boot (audio levels for mesh-voice). |
