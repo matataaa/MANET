@@ -1,0 +1,21 @@
+[Unit]
+Description=Apply the TX power policy to the installed Morse BCF files
+DefaultDependencies=no
+# Not local-fs.target: /boot/firmware waits for a by-partuuid device that only
+# coldplug creates, so ordering before the trigger would deadlock the boot.
+# Not manet-update-recover.service either: it requires /boot/firmware, which
+# hung EUD3 for 90 s into emergency mode. A recovery that unpacks reboots, so
+# the next boot patches what it wrote.
+After=systemd-remount-fs.service
+RequiresMountsFor=/usr/lib/firmware /var/lib
+# Before udev coldplug loads morse (SPI overlay or USB), so the radio reads
+# the patched tables on its first probe.
+Before=systemd-udev-trigger.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/bin/manet-morse-bcf.py
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target

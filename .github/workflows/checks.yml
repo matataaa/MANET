@@ -61,6 +61,23 @@ jobs:
           shellcheck -S error "${bash_files[@]}" || fail=1
           exit $fail
 
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # The published BCFs the node patches (Morse firmware 1.17.9).
+      - name: Fetch pinned morse-firmware
+        run: |
+          git init -q "$RUNNER_TEMP/morse-firmware"
+          cd "$RUNNER_TEMP/morse-firmware"
+          git fetch -q --depth 1 https://github.com/MorseMicro/morse-firmware.git \
+            ea18605f53387281c1029ea9eb8e0de2bda7bae2
+          git checkout -q FETCH_HEAD
+      - name: unittest
+        env:
+          MORSE_FIRMWARE_DIR: ${{ runner.temp }}/morse-firmware
+        run: python3 -I -B -m unittest discover -s MANET/tests -v
+
   js:
     runs-on: ubuntu-24.04
     steps:

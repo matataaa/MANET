@@ -38,5 +38,7 @@ if [ -z "${SBC_OVERLAY_DIR:-}" ]; then
     fi
 fi
 
+[ -z "${SBC_OVERLAY_DIR:-}" ] || "$SCRIPT_DIR/check-morse-bcfs.sh" "$SBC_OVERLAY_DIR"
+
 export SBC_OVERLAY_DIR="${SBC_OVERLAY_DIR:-}"
 exec "$SCRIPT_DIR/build-rpi5-tarball.sh" "$OUT"

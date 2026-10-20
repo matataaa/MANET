@@ -17,6 +17,7 @@ OVERLAY_DIR="${1:?usage: build-overlay-tarball.sh <overlay-dir> <output.tar.gz>}
 OUT="${2:?usage: build-overlay-tarball.sh <overlay-dir> <output.tar.gz>}"
 
 [ -d "$OVERLAY_DIR" ] || { echo "Missing overlay dir: $OVERLAY_DIR" >&2; exit 1; }
+"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-morse-bcfs.sh" "$OVERLAY_DIR"
 
 STAGE="$(mktemp -d)"
 cleanup() { rm -rf "$STAGE"; }
