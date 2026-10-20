@@ -20,6 +20,7 @@ function appletsActivate() {
       document.getElementById('applet-file-input').click();
     };
     document.getElementById('applet-file-input').onchange = uploadApplet;
+    document.getElementById('applet-list').addEventListener('click', appletCardClick);
   }
   fetchApplets();
 }
@@ -64,25 +65,44 @@ function renderApplets() {
         '</div>' +
       '</div>' +
       '<div class="applet-card-actions">' +
-        (a.has_frontend ? '<button class="primary" onclick="openApplet(\'' + esc(a.name) + '\')">Open</button>' : '') +
-        (a.has_config ? '<button onclick="openAppletConfig(\'' + esc(a.name) + '\')">Config</button>' : '') +
-        (a.has_backend ? '<button onclick="appletAction(\'' + esc(a.name) + '\',\'start\')">Start</button>' : '') +
-        (a.has_backend ? '<button onclick="appletAction(\'' + esc(a.name) + '\',\'stop\')">Stop</button>' : '') +
-        (a.has_backend ? '<button onclick="appletAction(\'' + esc(a.name) + '\',\'restart\')">Restart</button>' : '') +
-        (a.has_backend ? '<button onclick="appletAction(\'' + esc(a.name) + '\',\'' + enableAction + '\')">' + enableLabel + '</button>' : '') +
-        (a.has_backend ? '<button onclick="toggleAppletLogs(\'' + esc(a.name) + '\')">Logs</button>' : '') +
-        '<button class="danger" onclick="uninstallApplet(\'' + esc(a.name) + '\')">Uninstall</button>' +
+        (a.has_frontend ? '<button class="primary" data-act="open">Open</button>' : '') +
+        (a.has_config ? '<button data-act="config">Config</button>' : '') +
+        (a.has_backend ? '<button data-act="start">Start</button>' : '') +
+        (a.has_backend ? '<button data-act="stop">Stop</button>' : '') +
+        (a.has_backend ? '<button data-act="restart">Restart</button>' : '') +
+        (a.has_backend ? '<button data-act="' + enableAction + '">' + enableLabel + '</button>' : '') +
+        (a.has_backend ? '<button data-act="logs">Logs</button>' : '') +
+        '<button class="danger" data-act="uninstall">Uninstall</button>' +
       '</div>' +
       '<pre class="applet-logs" id="logs-' + esc(a.name) + '"></pre>' +
     '</div>';
   }).join('');
 }
 
+// Escapes for element content and quoted attribute values.
 function esc(s) {
   if (!s) return '';
   var d = document.createElement('div');
   d.textContent = s;
-  return d.innerHTML;
+  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Card buttons carry only data-act; the applet name comes from the card's
+// data-applet. Applet names come from installed packages, so they are never
+// spliced into inline onclick JavaScript.
+var APPLET_SERVICE_ACTIONS = ['start', 'stop', 'restart', 'enable', 'disable'];
+
+function appletCardClick(e) {
+  var btn = e.target.closest('button[data-act]');
+  var card = btn && btn.closest('.applet-card');
+  if (!card) return;
+  var name = card.dataset.applet;
+  var act = btn.dataset.act;
+  if (act === 'open') openApplet(name);
+  else if (act === 'config') openAppletConfig(name);
+  else if (act === 'logs') toggleAppletLogs(name);
+  else if (act === 'uninstall') uninstallApplet(name);
+  else if (APPLET_SERVICE_ACTIONS.indexOf(act) !== -1) appletAction(name, act);
 }
 
 function appletDisplayName(name) {
