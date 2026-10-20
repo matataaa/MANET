@@ -1,0 +1,22 @@
+# MANET releases own the boot kernel, DTBs and initramfs on every board: the
+# SBC overlay's kernel8.img and modules (morse, mt7915e) are built together,
+# and an apt kernel/firmware upgrade replaces them and takes HaLow down.
+# Kernel changes ship as SBC overlay updates instead. Ported from upstream
+# very-srs/MANET 868c3c9 (pin only). Not shipped to x86 nodes, which run the
+# distro kernel (see build-x86-tarball.sh).
+# Keep linux-libc-dev and generic linux-base available for userland packages.
+Package: linux-image-* linux-headers-* linux-base-* linux-dtb-* linux-u-boot-*
+Pin: version *
+Pin-Priority: -1
+
+# raspi-firmware runs kernel-copy hooks on its own upgrade too.
+Package: raspi-firmware raspberrypi-kernel* raspberrypi-bootloader armbian-bsp-*
+Pin: version *
+Pin-Priority: -1
+
+# Prevent installing alternate boot writers. initramfs-tools stays installable
+# as a dependency (provisioning disables its kernel postinst hook).
+# dracut-install is a userland dependency of initramfs-tools-core: allow it.
+Package: flash-kernel u-boot-menu dracut dracut-core dracut-config-*
+Pin: version *
+Pin-Priority: -1

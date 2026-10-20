@@ -37,6 +37,9 @@ install_file() {
 # ---------------------------------------------------------------------------
 install_tree "$ROOTFS/usr" "$STAGE/usr"
 install_tree "$ROOTFS/etc" "$STAGE/etc"
+# x86 runs the distro kernel, upgraded through apt: the ARM overlay-kernel pin
+# would block its kernel security updates.
+rm -f "$STAGE/etc/apt/preferences.d/00-manet-kernel"
 
 chmod -R a+rX "$STAGE/usr/local/bin"
 find "$STAGE/usr/local/bin" -type f \
