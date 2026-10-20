@@ -81,6 +81,8 @@ for svc in "${GO_SERVICES[@]}"; do
 done
 
 # mesh-voice needs CGO — use pre-built binary
+# Refuse to ship it if it is older than its own source.
+"$SCRIPT_DIR/check-prebuilt-fresh.sh" "$SRC/mesh-voice/bin/mesh-voice-linux-arm64"
 install_file 0755 "$SRC/mesh-voice/bin/mesh-voice-linux-arm64" "$STAGE/usr/local/bin/mesh-voice"
 
 # Patched wpa_supplicant (mesh noscan fix) — this project's own build
