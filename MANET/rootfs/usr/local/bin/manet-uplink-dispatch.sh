@@ -140,7 +140,22 @@ internet_probe() {
     ping -c 1 -W 3 -I "$iface" 8.8.8.8 >/dev/null 2>&1 && ((hits++))
     ping -c 1 -W 3 -I "$iface" 9.9.9.9 >/dev/null 2>&1 && ((hits++))
 
-    [ "$hits" -ge 1 ]
+    [ "$hits" -ge 1 ] && return 0
+    https_probe "$iface"
+}
+
+# Some uplinks filter ICMP while TCP passes. gateway-manager already falls
+# back to HTTPS, so a ping-only check here demoted a gateway it kept. Both
+# resolvers serve HTTPS on their IP, so no DNS is needed before the uplink
+# is qualified.
+https_probe() {
+    local iface="$1" target
+
+    for target in 1.1.1.1 8.8.8.8; do
+        curl --interface "$iface" --connect-timeout 2 -m 3 -s -k \
+            -o /dev/null "https://$target/" 2>/dev/null && return 0
+    done
+    return 1
 }
 
 candidate_ifaces() {

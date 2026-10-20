@@ -115,7 +115,7 @@ A gateway announcing near-zero bandwidth disappears from clients' `gwl`
 (seen on 2026-10-03: EUD4 at 0.1/0.0 Mbit → EUD3 withdrew its route within
 2 s), so a measured value must never be announced below 1 Mbit/s down.
 
-**Captive portals.** A captive portal passes our ICMP probe but cannot
+**Captive portals.** A captive portal can pass our ICMP or HTTPS-by-IP probe but cannot
 complete HTTPS to the test host, so on Ethernet the download is also the
 internet check: `ethernet-autodetect.sh` only hands a port to the dispatcher
 as a gateway after it passes, and `manet-uplink-dispatch.sh`'s

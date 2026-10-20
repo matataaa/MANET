@@ -368,7 +368,10 @@ detect_and_apply() {
         # announces. Exit 2 (not an Ethernet port) means not tested. A later
         # pass of the dispatcher's reconcile retries a failure.
         local speed_rc=1
-        if ping -c 3 -W 2 -I "$ETH_IFACE" 8.8.8.8 >/dev/null 2>&1; then
+        # The HTTPS fallback lets an ICMP-filtered LAN reach the speed test.
+        if ping -c 3 -W 2 -I "$ETH_IFACE" 8.8.8.8 >/dev/null 2>&1 ||
+                curl --interface "$ETH_IFACE" --connect-timeout 2 -m 3 -s -k \
+                    -o /dev/null https://1.1.1.1/ 2>/dev/null; then
             speed_rc=0
             "$UPLINK_SPEED" measure "$ETH_IFACE" >/dev/null || speed_rc=$?
         fi
