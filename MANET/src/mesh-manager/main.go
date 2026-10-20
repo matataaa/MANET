@@ -282,6 +282,7 @@ type ipManager struct {
 
 	startupDone bool
 	stop        <-chan struct{}
+	dnsWatch    dnsSocketWatch
 }
 
 func newIPManager() *ipManager {
@@ -775,6 +776,8 @@ func (im *ipManager) run() {
 				if err != nil || string(data) != dnsmasqConfText(c) {
 					log.Printf("DHCP config changed, reconfiguring")
 					im.configureDnsmasq(c)
+				} else {
+					im.ensureDnsmasqServesDNS(c.Secondary, time.Now())
 				}
 			}
 		}
